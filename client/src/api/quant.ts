@@ -231,6 +231,69 @@ export interface MonteCarloResult extends RunContext {
   hist_mdd: { edges: number[]; counts: number[] }
 }
 
+export type RebalanceMode = 'monthly' | 'quarterly' | 'yearly' | 'drift'
+
+export interface PortfolioAsset {
+  symbol: string
+  name?: string
+  role: 'offensive' | 'defensive'
+  weight: number
+}
+
+export interface PortfolioModelMeta {
+  id: string
+  name: string
+  theory: string
+  summary: string
+  description: string
+  uses_roles: boolean
+  uses_weights: boolean
+  default_rebalance: RebalanceMode
+  params: StrategyParam[]
+  presets: Record<Market, PortfolioAsset[]>
+}
+
+export interface PortfolioRebalanceEntry {
+  time: number
+  date: string
+  reason: string
+  trades: number
+  turnover_pct: number
+  weights: Record<string, number>
+}
+
+export interface PortfolioBacktestRequest {
+  market: Market
+  model: string
+  assets: PortfolioAsset[]
+  params: Record<string, number>
+  rebalance: RebalanceMode
+  drift_pct: number
+  period: Period
+  capital: number
+  commission_pct: number
+  tax_pct: number
+  slippage_pct: number
+}
+
+export interface PortfolioBacktestResult {
+  market: Market
+  model: string
+  assets: PortfolioAsset[]
+  params: Record<string, number>
+  rebalance: RebalanceMode
+  drift_pct: number
+  capital: number
+  currency: string
+  period: { start: number; end: number }
+  warnings: string[]
+  equity: EquityPoint[]
+  metrics: Metrics & { rebalances: number }
+  benchmark: Metrics
+  rebalances: PortfolioRebalanceEntry[]
+  current_weights: Record<string, number>
+}
+
 export const quantApi = {
   strategies: () => api<{ items: StrategyMeta[]; objectives: Record<string, string> }>('/quant/strategies'),
   optimize: (req: GridRequest) => api<OptimizeResult>('/quant/optimize', { method: 'POST', json: req }),
@@ -238,4 +301,6 @@ export const quantApi = {
   montecarlo: (req: MonteCarloRequest) => api<MonteCarloResult>('/quant/montecarlo', { method: 'POST', json: req }),
   defaults: (market: Market) => api<CostDefaults>(`/quant/defaults?market=${market}`),
   backtest: (req: BacktestRequest) => api<BacktestResult>('/quant/backtest', { method: 'POST', json: req }),
+  portfolioModels: () => api<{ items: PortfolioModelMeta[]; rebalance_modes: Record<RebalanceMode, string> }>('/quant/portfolio/models'),
+  portfolioBacktest: (req: PortfolioBacktestRequest) => api<PortfolioBacktestResult>('/quant/portfolio/backtest', { method: 'POST', json: req }),
 }

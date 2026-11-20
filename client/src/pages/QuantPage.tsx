@@ -9,6 +9,10 @@ import {
   type MonteCarloResult,
   type OptimizeResult,
   type Period,
+  type PortfolioAsset,
+  type PortfolioBacktestResult,
+  type PortfolioModelMeta,
+  type RebalanceMode,
   type StrategyMeta,
   type StrategyParam,
   type WalkForwardResult,
@@ -18,15 +22,17 @@ import { MOBILE, useMediaQuery } from '../hooks/useMediaQuery'
 import BacktestView from '../components/quant/BacktestView'
 import MonteCarloView from '../components/quant/MonteCarloView'
 import OptimizeView from '../components/quant/OptimizeView'
+import PortfolioView from '../components/quant/PortfolioView'
 import WalkForwardView from '../components/quant/WalkForwardView'
 
-type Mode = 'backtest' | 'optimize' | 'walkforward' | 'montecarlo'
+type Mode = 'backtest' | 'optimize' | 'walkforward' | 'montecarlo' | 'portfolio'
 
 const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: 'backtest', label: '백테스트', hint: '설정 하나로 과거 성과 확인' },
   { id: 'optimize', label: '최적화', hint: '파라미터 조합을 격자로 비교' },
   { id: 'walkforward', label: '워크포워드', hint: '처음 보는 기간에도 통하는지 검증' },
   { id: 'montecarlo', label: '몬테카를로', hint: '매매 순서·구성의 운을 제거' },
+  { id: 'portfolio', label: '포트폴리오', hint: '다중 ETF 자산배분·리밸런싱 검증' },
 ]
 const PERIODS: { id: Period; label: string }[] = [
   { id: '1y', label: '1년' },
@@ -54,6 +60,11 @@ interface Form {
   wfMode: 'rolling' | 'anchored'
   runs: number
   mcMethod: 'bootstrap' | 'shuffle'
+  portfolioModel: string
+  portfolioRebalance: RebalanceMode
+  portfolioDriftPct: number
+  portfolioParams: Record<string, Record<string, number>>
+  portfolioAssets: Record<string, PortfolioAsset[]>
 }
 
 const DEFAULT_FORM: Form = {
@@ -73,6 +84,11 @@ const DEFAULT_FORM: Form = {
   wfMode: 'rolling',
   runs: 1000,
   mcMethod: 'bootstrap',
+  portfolioModel: 'all_weather',
+  portfolioRebalance: 'quarterly',
+  portfolioDriftPct: 5,
+  portfolioParams: {},
+  portfolioAssets: {},
 }
 
 const loadForm = (): Form => {
@@ -97,6 +113,10 @@ function defaultRange(p: StrategyParam): AxisRange {
 export default function QuantPage() {
   const [form, setForm] = useState<Form>(loadForm)
   const [strategies, setStrategies] = useState<StrategyMeta[]>([])
+  const [portfolioModels, setPortfolioModels] = useState<PortfolioModelMeta[]>([])
+  const [rebalModes, setRebalModes] = useState<Record<RebalanceMode, string>>({
+    monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈 시',
+  })
   const [objectives, setObjectives] = useState<Record<string, string>>({})
   const [watchlist, setWatchlist] = useState<WatchItem[]>([])
   const [costs, setCosts] = useState<CostDefaults | null>(null)
@@ -109,6 +129,7 @@ export default function QuantPage() {
     optimize?: OptimizeResult
     walkforward?: WalkForwardResult
     montecarlo?: MonteCarloResult
+    portfolio?: PortfolioBacktestResult
   }>({})
 
   useEffect(() => {
@@ -119,6 +140,13 @@ export default function QuantPage() {
         setObjectives(objectives)
       })
       .catch((e) => setError(e.message))
+    quantApi
+      .portfolioModels()
+      .then(({ items, rebalance_modes }) => {
+        setPortfolioModels(items)
+        setRebalModes(rebalance_modes)
+      })
+      .catch(() => undefined)
     marketApi.watchlist().then(({ items }) => setWatchlist(items)).catch(() => undefined)
   }, [])
 
@@ -141,6 +169,20 @@ export default function QuantPage() {
   const xKey = form.xKey[sid] ?? meta?.params[0]?.key ?? ''
   const yKey = form.yKey[sid] ?? meta?.params[1]?.key ?? ''
   const gridMode = form.mode === 'optimize' || form.mode === 'walkforward'
+  const isPortfolio = form.mode === 'portfolio'
+
+  const pModel = portfolioModels.find((m) => m.id === form.portfolioModel) ?? portfolioModels[0]
+  const pMid = pModel?.id ?? ''
+  const pKey = `${pMid}:${form.market}`
+  const pAssets: PortfolioAsset[] = form.portfolioAssets[pKey] ?? pModel?.presets[form.market] ?? []
+  const pParams = useMemo(() => {
+    const saved = form.portfolioParams[pMid] ?? {}
+    return Object.fromEntries((pModel?.params ?? []).map((p) => [p.key, saved[p.key] ?? p.default]))
+  }, [pModel, pMid, form.portfolioParams])
+  const setPAssets = (next: PortfolioAsset[]) =>
+    setForm((f) => ({ ...f, portfolioAssets: { ...f.portfolioAssets, [pKey]: next } }))
+  const setPParam = (key: string, v: number) =>
+    setForm((f) => ({ ...f, portfolioParams: { ...f.portfolioParams, [pMid]: { ...pParams, [key]: v } } }))
 
   const setParam = (key: string, v: number) =>
     setForm((f) => ({ ...f, params: { ...f.params, [sid]: { ...params, [key]: v } } }))
@@ -163,6 +205,33 @@ export default function QuantPage() {
       : null
 
   const execute = async (mode: Mode, overrideParams?: Record<string, number>) => {
+    if (mode === 'portfolio') {
+      if (!pModel || !costs) return
+      setRunning(true)
+      setError('')
+      try {
+        const r = await quantApi.portfolioBacktest({
+          market: form.market,
+          model: pModel.id,
+          assets: pAssets,
+          params: pParams,
+          rebalance: form.portfolioRebalance,
+          drift_pct: form.portfolioDriftPct,
+          period: form.period,
+          capital: costs.capital,
+          commission_pct: costs.commission_pct,
+          tax_pct: costs.tax_pct,
+          slippage_pct: costs.slippage_pct,
+        })
+        setResults((s) => ({ ...s, portfolio: r }))
+        if (isMobile) setFormOpen(false)
+      } catch (err) {
+        setError((err as Error).message)
+      } finally {
+        setRunning(false)
+      }
+      return
+    }
     const req = base(overrideParams)
     if (!req || !meta) return
     setRunning(true)
@@ -250,40 +319,105 @@ export default function QuantPage() {
           ))}
         </div>
 
-        <label>
-          <span>종목</span>
-          <input list="quant-watchlist" value={form.symbol} onChange={(e) => set('symbol', e.target.value.toUpperCase())} />
-          <datalist id="quant-watchlist">
-            {items.map((w) => (
-              <option key={w.symbol} value={w.symbol}>{w.name}</option>
-            ))}
-          </datalist>
-          <span className="muted small">{items.find((w) => w.symbol === form.symbol)?.name ?? '관심종목에서 고르거나 코드를 입력'}</span>
-        </label>
+        {!isPortfolio && (
+          <>
+            <label>
+              <span>종목</span>
+              <input list="quant-watchlist" value={form.symbol} onChange={(e) => set('symbol', e.target.value.toUpperCase())} />
+              <datalist id="quant-watchlist">
+                {items.map((w) => (
+                  <option key={w.symbol} value={w.symbol}>{w.name}</option>
+                ))}
+              </datalist>
+              <span className="muted small">{items.find((w) => w.symbol === form.symbol)?.name ?? '관심종목에서 고르거나 코드를 입력'}</span>
+            </label>
 
-        <label>
-          <span>전략</span>
-          <select value={sid} onChange={(e) => set('strategy', e.target.value)}>
-            <optgroup label="스윙 전략 (일봉 · 추세/평균회귀/모멘텀)">
-              {strategies.filter((s) => s.category !== 'daytrade').map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </optgroup>
-            <optgroup label="단타 전략 (장중·분봉 · 당일 청산)">
-              {strategies.filter((s) => s.category === 'daytrade').map((s) => (
-                <option key={s.id} value={s.id}>{s.name} ({s.timeframe})</option>
-              ))}
-            </optgroup>
-          </select>
-        </label>
-        {meta && (
-          <p className="muted small strategy-desc">
-            {meta.theory && <><b>[{meta.category === 'daytrade' ? '단타' : '스윙'} · {meta.timeframe}]</b> {meta.theory}<br /></>}
-            {meta.description}
-          </p>
+            <label>
+              <span>전략</span>
+              <select value={sid} onChange={(e) => set('strategy', e.target.value)}>
+                <optgroup label="스윙 전략 (일봉 · 추세/평균회귀/모멘텀)">
+                  {strategies.filter((s) => s.category !== 'daytrade').map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="단타 전략 (장중·분봉 · 당일 청산)">
+                  {strategies.filter((s) => s.category === 'daytrade').map((s) => (
+                    <option key={s.id} value={s.id}>{s.name} ({s.timeframe})</option>
+                  ))}
+                </optgroup>
+              </select>
+            </label>
+            {meta && (
+              <p className="muted small strategy-desc">
+                {meta.theory && <><b>[{meta.category === 'daytrade' ? '단타' : '스윙'} · {meta.timeframe}]</b> {meta.theory}<br /></>}
+                {meta.description}
+              </p>
+            )}
+          </>
         )}
 
-        {meta && !gridMode && (
+        {isPortfolio && pModel && (
+          <>
+            <label>
+              <span>자산배분 이론</span>
+              <select value={pMid} onChange={(e) => {
+                const next = portfolioModels.find((m) => m.id === e.target.value)
+                setForm((f) => ({ ...f, portfolioModel: e.target.value, portfolioRebalance: next?.default_rebalance ?? f.portfolioRebalance }))
+              }}>
+                {portfolioModels.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </label>
+            <p className="muted small strategy-desc">
+              <b>[리밸런싱]</b> {pModel.theory}<br />{pModel.description}
+            </p>
+            <fieldset className="costs">
+              <legend>리밸런싱 규칙</legend>
+              <label>
+                <span>주기 / 조건</span>
+                <select value={form.portfolioRebalance} onChange={(e) => set('portfolioRebalance', e.target.value as RebalanceMode)}>
+                  {Object.entries(rebalModes).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </label>
+              {form.portfolioRebalance === 'drift' && num('허용 편차 (%)', form.portfolioDriftPct, (v) => set('portfolioDriftPct', v), 0.5)}
+              {pModel.params.map((p) => (
+                <label className="param" key={p.key}>
+                  <span>{p.label}</span>
+                  <input type="number" min={p.min} max={p.max} step={p.step} value={pParams[p.key]} onChange={(e) => setPParam(p.key, Number(e.target.value))} />
+                </label>
+              ))}
+            </fieldset>
+            <fieldset className="costs">
+              <legend>편입 자산 ({pAssets.length})</legend>
+              <div className="asset-editor">
+                {pAssets.map((a, idx) => (
+                  <div key={idx} className="asset-row">
+                    <input value={a.symbol} placeholder={form.market === 'KR' ? '069500' : 'SPY'}
+                           onChange={(e) => setPAssets(pAssets.map((x, i) => (i === idx ? { ...x, symbol: e.target.value.toUpperCase() } : x)))} />
+                    {pModel.uses_roles && (
+                      <select value={a.role} onChange={(e) => setPAssets(pAssets.map((x, i) => (i === idx ? { ...x, role: e.target.value as 'offensive' | 'defensive' } : x)))}>
+                        <option value="offensive">공격</option>
+                        <option value="defensive">방어</option>
+                      </select>
+                    )}
+                    {pModel.uses_weights && (
+                      <input type="number" min={0} max={100} step={0.5} value={a.weight} title="비중 (%)"
+                             onChange={(e) => setPAssets(pAssets.map((x, i) => (i === idx ? { ...x, weight: Number(e.target.value) } : x)))} />
+                    )}
+                    <button type="button" className="link danger-link" disabled={pAssets.length <= 2}
+                            onClick={() => setPAssets(pAssets.filter((_, i) => i !== idx))}>×</button>
+                  </div>
+                ))}
+                <div className="tabs">
+                  <button type="button" disabled={pAssets.length >= 12}
+                          onClick={() => setPAssets([...pAssets, { symbol: '', role: 'offensive', weight: 10 }])}>+ 종목 추가</button>
+                  <button type="button" onClick={() => setPAssets(pModel.presets[form.market] ?? [])}>기본 프리셋</button>
+                </div>
+              </div>
+            </fieldset>
+          </>
+        )}
+
+        {meta && !gridMode && !isPortfolio && (
           <div className="params">
             {meta.params.map((p) => (
               <label className="param" key={p.key}>
@@ -396,7 +530,7 @@ export default function QuantPage() {
           </fieldset>
         )}
 
-        <button type="submit" disabled={running || !meta || !costs || !form.symbol.trim()}>
+        <button type="submit" disabled={running || !costs || (isPortfolio ? (!pModel || pAssets.length < 2) : (!meta || !form.symbol.trim()))}>
           {running ? '계산 중…' : `${MODES.find((m) => m.id === form.mode)?.label} 실행`}
         </button>
         {error && <p className="error">{error}</p>}
@@ -417,6 +551,9 @@ export default function QuantPage() {
                            objectiveLabel={objectives[results.walkforward.objective] ?? results.walkforward.objective} />
         )}
         {form.mode === 'montecarlo' && results.montecarlo && <MonteCarloView result={results.montecarlo} title={titleOf(results.montecarlo)} />}
+        {form.mode === 'portfolio' && results.portfolio && (
+          <PortfolioView result={results.portfolio} model={portfolioModels.find((m) => m.id === results.portfolio?.model)} />
+        )}
       </section>
     </div>
   )

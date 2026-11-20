@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from flask import current_app
 
-from . import montecarlo
+from . import montecarlo, portfolio
 from .engine import Backtester, Bars, Costs
 from .optimize import Axis, combos, run_grid
 from .strategies import STRATEGIES
@@ -55,6 +55,15 @@ def _exec_montecarlo(
     years = (bars.time[-1] - bars.time[start]) / 86400 / 365.25
     result = montecarlo.simulate(impacts, runs=runs, method=method, years=years)
     return {"backtest_metrics": r["metrics"], **result}
+
+
+def _exec_portfolio(
+    bars_by_symbol: dict[str, Bars], model_id: str, assets: list[dict], params: dict,
+    rebalance: str, drift_pct: float, capital: float, costs: Costs, start_ts: int,
+) -> dict[str, Any]:
+    return portfolio.run_portfolio_backtest(
+        bars_by_symbol, model_id, assets, params, rebalance, drift_pct, capital, costs, start_ts
+    )
 
 
 # ------------------------------------------------------------------ pool management
@@ -128,3 +137,13 @@ def run_montecarlo(
     start: int, runs: int, method: str,
 ) -> dict[str, Any]:
     return _submit(_exec_montecarlo, bars, strategy_id, params, capital, costs, start, runs, method)
+
+
+def run_portfolio(
+    bars_by_symbol: dict[str, Bars], model_id: str, assets: list[dict], params: dict,
+    rebalance: str, drift_pct: float, capital: float, costs: Costs, start_ts: int,
+) -> dict[str, Any]:
+    return _submit(
+        _exec_portfolio, bars_by_symbol, model_id, assets, params,
+        rebalance, drift_pct, capital, costs, start_ts,
+    )

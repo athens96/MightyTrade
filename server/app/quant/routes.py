@@ -11,7 +11,7 @@ from ..auth.decorators import login_required
 from ..errors import ApiError
 from ..market.models import Interval, Market
 from ..market.registry import get_provider
-from . import worker
+from . import portfolio, worker
 from .data import cost_defaults
 from .engine import Backtester, Bars, Costs, buy_and_hold
 from .metrics import performance
@@ -254,4 +254,72 @@ def monte_carlo():
         params=strategy.p,
         warnings=[WARNINGS.get(c, c) for c in warn],
         **result,
+    )
+
+
+# ------------------------------------------------------------------ portfolio (Phase 3)
+@bp.get("/portfolio/models")
+@login_required
+def portfolio_models():
+    return jsonify(
+        items=[m.meta() for m in portfolio.PORTFOLIO_MODELS.values()],
+        rebalance_modes=portfolio.REBALANCE_MODES,
+    )
+
+
+@bp.post("/portfolio/backtest")
+@login_required
+def portfolio_backtest():
+    """Multi-asset ETF / portfolio allocation backtest across classic financial theories."""
+    body = request.get_json(silent=True) or {}
+    try:
+        market = Market(str(body.get("market", "")).upper())
+    except ValueError:
+        raise ApiError(400, "invalid_market")
+    model = portfolio.PORTFOLIO_MODELS.get(body.get("model"))
+    if model is None:
+        raise ApiError(400, "unknown_model", "알 수 없는 포트폴리오 이론입니다")
+    try:
+        params = model.resolve(body.get("params"))
+    except StrategyParamError as e:
+        raise ApiError(400, "invalid_params", str(e))
+    assets = portfolio.validate_assets(market.value, body.get("assets") or model.presets.get(market.value), model)
+    rebalance = str(body.get("rebalance") or model.default_rebalance)
+    if rebalance not in portfolio.REBALANCE_MODES:
+        raise ApiError(400, "invalid_rebalance")
+    drift_pct = _num(body, "drift_pct", 5.0, 0.5, 50.0)
+    period = body.get("period", "5y")
+    if period not in PERIOD_DAYS:
+        raise ApiError(400, "invalid_period")
+    d = cost_defaults(market) if "commission_pct" not in body else {}
+    capital = _num(body, "capital", d.get("capital", 0), 1, 1e13)
+    costs = Costs(
+        commission_pct=_num(body, "commission_pct", d.get("commission_pct", 0), 0, 5),
+        tax_pct=_num(body, "tax_pct", d.get("tax_pct", 0), 0, 5),
+        slippage_pct=_num(body, "slippage_pct", d.get("slippage_pct", 0), 0, 5),
+    )
+
+    days = PERIOD_DAYS[period]
+    start_ts = 0 if days is None else int(time.time() - days * 86400)
+    warm = model.warmup(params)
+    fetch_from = 0 if days is None else int(start_ts - (warm * 1.6 + 20) * 86400)
+    provider = get_provider(market)
+    bars_by_sym = {
+        a["symbol"]: Bars.from_candles(provider.get_history(market, a["symbol"], Interval.D1, fetch_from))
+        for a in assets
+    }
+    res = worker.run_portfolio(bars_by_sym, model.id, assets, params, rebalance, drift_pct, capital, costs, start_ts)
+    warn_codes = res.pop("warnings", [])
+    return jsonify(
+        market=market.value,
+        model=model.id,
+        assets=assets,
+        params=params,
+        rebalance=rebalance,
+        drift_pct=drift_pct,
+        capital=capital,
+        currency="KRW" if market == Market.KR else "USD",
+        costs=costs.__dict__,
+        warnings=[WARNINGS.get(c, c) for c in warn_codes],
+        **res,
     )
