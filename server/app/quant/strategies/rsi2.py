@@ -7,6 +7,9 @@ from .base import Bars, Context, Order, Param, Strategy
 class Rsi2MeanReversion(Strategy):
     id = "rsi2"
     name = "RSI(2) 평균회귀 (래리 코너스)"
+    category = "swing"
+    timeframe = "1d"
+    theory = "래리 코너스 · 장기 추세 내 단기 과매도 평균회귀"
     summary = "장기 상승 추세 속 단기 급락(RSI(2) 과매도)에 매수, 단기 이평 회복 시 매도"
     description = (
         "래리 코너스의 단기 평균회귀 전략. 종가가 장기 이평(기본 200일) 위인 상승 추세에서만, 초단기 RSI(2)가 "

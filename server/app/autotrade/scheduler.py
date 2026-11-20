@@ -93,6 +93,12 @@ def _step(bot: dict, date: str, start: datetime, end: datetime, now: datetime) -
         if bot["mode"] == "live" and st["pending"] and not _recent(st.get("last_reconcile"), RECONCILE_EVERY, now):
             executor.reconcile_live(bot, date)
             bots.save(bot)
+        if executor.is_intraday(bot):
+            if now < start + OPEN_DELAY or _recent((st.get("last_error") or {}).get("at"), ERROR_BACKOFF, now):
+                return
+            executor.run_intraday(bot, date, now, end)
+            st.pop("last_error", None)
+            return
         if st["last_run_date"] == date or now < start + OPEN_DELAY:
             return
         if _recent((st.get("last_error") or {}).get("at"), ERROR_BACKOFF, now):

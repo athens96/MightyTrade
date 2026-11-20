@@ -264,12 +264,24 @@ export default function QuantPage() {
         <label>
           <span>전략</span>
           <select value={sid} onChange={(e) => set('strategy', e.target.value)}>
-            {strategies.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
+            <optgroup label="스윙 전략 (일봉 · 추세/평균회귀/모멘텀)">
+              {strategies.filter((s) => s.category !== 'daytrade').map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </optgroup>
+            <optgroup label="단타 전략 (장중·분봉 · 당일 청산)">
+              {strategies.filter((s) => s.category === 'daytrade').map((s) => (
+                <option key={s.id} value={s.id}>{s.name} ({s.timeframe})</option>
+              ))}
+            </optgroup>
           </select>
         </label>
-        {meta && <p className="muted small strategy-desc">{meta.description}</p>}
+        {meta && (
+          <p className="muted small strategy-desc">
+            {meta.theory && <><b>[{meta.category === 'daytrade' ? '단타' : '스윙'} · {meta.timeframe}]</b> {meta.theory}<br /></>}
+            {meta.description}
+          </p>
+        )}
 
         {meta && !gridMode && (
           <div className="params">

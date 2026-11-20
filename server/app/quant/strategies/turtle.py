@@ -9,6 +9,9 @@ from .base import Bars, Context, Order, Param, Strategy, StrategyParamError
 class Turtle(Strategy):
     id = "turtle"
     name = "터틀 트레이딩"
+    category = "swing"
+    timeframe = "1d"
+    theory = "리처드 데니스 · 돈치안 채널 돌파 & ATR 리스크 사이징"
     summary = "n일 신고가 돌파 시 매수, m일 신저가 또는 2N 손절 시 매도. ATR로 비중 조절"
     description = (
         "리처드 데니스의 터틀 시스템(시스템 1 기반, 롱 전용·추가매수 없음). 장중 최근 진입 기간(기본 20일) 최고가를 "

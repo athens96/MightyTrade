@@ -15,7 +15,7 @@ import bisect
 import hashlib
 import math
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from ..account.toss_account import _account, normalize
@@ -35,6 +35,12 @@ TERMINAL = {"FILLED", "CANCELED", "REJECTED", "REPLACED"}
 LIVE_BUY_HEADROOM = 0.005
 SELL_SETTLE_POLLS = 5
 SELL_SETTLE_INTERVAL = 0.5
+EOD_FLATTEN = timedelta(minutes=10)  # flatten intraday daytrade positions before regular close
+
+
+def is_intraday(bot: dict) -> bool:
+    cls = STRATEGIES.get(bot.get("strategy", ""))
+    return cls is not None and getattr(cls, "timeframe", "1d") != "1d"
 
 
 def day_of(t: int) -> str:
@@ -103,20 +109,53 @@ def describe(o: Order, today_open: Optional[float]) -> str:
     side = "매수" if o.side == "buy" else "매도"
     if o.kind == "market":
         return f"{side} (시장가) — {o.reason}"
+    if o.kind == "limit" and o.limit is not None:
+        return f"{side} 지정가: {'≤' if o.side == 'buy' else '≥'} {o.limit:,.2f} — {o.reason}"
     if o.stop is not None:
         return f"{side} 조건: {'≥' if o.side == 'buy' else '≤'} {o.stop:,.2f} — {o.reason}"
     level = f"{today_open + (o.stop_from_open or 0):,.2f}" if today_open else f"시가 + {o.stop_from_open:,.2f}"
     return f"{side} 조건: ≥ {level} (시가 + {o.stop_from_open:,.2f}) — {o.reason}"
 
 
+def load_intraday(bot: dict) -> tuple:
+    cls = STRATEGIES[bot["strategy"]]
+    strat = cls(bot["params"])
+    market = Market(bot["market"])
+    interval = Interval(cls.timeframe)
+    candles = get_provider(market).get_candles(market, bot["symbol"], interval, limit=200)
+    if len(candles) < strat.warmup() + 2:
+        raise ApiError(400, "not_enough_data", "분봉 전략 계산에 필요한 과거 데이터가 부족합니다")
+    return candles, Bars.from_candles(candles[:-1]), candles[-1], strat
+
+
+def decide_intraday(bot: dict, today: str, loaded: Optional[tuple] = None) -> dict:
+    candles, bars, latest_bar, strat = loaded or load_intraday(bot)
+    st = bots.state(bot)
+    pos = st["position"]
+    entry_index = -1
+    if pos["qty"] > 0:
+        entry_t = st.get("entry_bar_time")
+        if entry_t is not None and entry_t >= bars.time[0]:
+            entry_index = bisect.bisect_left(bars.time, entry_t)
+    position = Position(pos["qty"], pos["entry_price"], entry_index, entry_atr=st.get("entry_atr"))
+    last = latest_bar.close
+    cash = st["cash"] if bot["mode"] == "paper" else max(bot["capital"] - pos["qty"] * pos["entry_price"], 0.0)
+    strat.prepare(bars)
+    planned = strat.on_bar(len(bars) - 1, Context(position, cash, cash + pos["qty"] * last)) or []
+    return {"date": today, "bar_date": datetime.fromtimestamp(bars.time[-1], timezone.utc).strftime("%Y-%m-%d %H:%M"),
+            "bar_time": bars.time[-1], "orders": planned, "today_bar": latest_bar, "candles": candles,
+            "position": pos, "cash": cash, "last": last, "entry_atr": _strategy_atr(strat)}
+
+
 def preview(bot: dict, today: str) -> dict:
-    d = decide(bot, today)
+    d = decide_intraday(bot, today) if is_intraday(bot) else decide(bot, today)
     tb = d["today_bar"]
     return {
         "date": today, "bar_date": d["bar_date"], "position": d["position"], "cash": d["cash"],
         "today_open": tb.open if tb else None, "last": d["last"],
-        "orders": [{"side": o.side, "kind": o.kind, "stop": o.stop, "stop_from_open": o.stop_from_open, "qty": o.qty,
-                    "reason": o.reason, "text": describe(o, tb.open if tb else None)} for o in d["orders"]],
+        "orders": [{"side": o.side, "kind": o.kind, "stop": o.stop, "stop_from_open": o.stop_from_open,
+                    "limit": o.limit, "qty": o.qty, "reason": o.reason, "text": describe(o, tb.open if tb else None)}
+                   for o in d["orders"]],
     }
 
 
@@ -175,7 +214,19 @@ def settle_paper(bot: dict, candles: list, today: str, c: Costs) -> None:
         if bar is None:
             continue
         level, holding = p["level"], st["position"]["qty"] > 0
-        if p["side"] == "buy" and not holding and bar.high >= level:
+        kind = p.get("kind", "stop")
+        if kind == "limit":
+            if p["side"] == "buy" and not holding and bar.low <= level:
+                fill = min(bar.open, level)
+                qty = _paper_qty(st, Order("buy", qty=p.get("qty")), fill, c)
+                if qty > 0:
+                    _paper_buy(st, qty, fill, c, p["active_date"], p["reason"], entry_atr=p.get("entry_atr"))
+                    bots.log(bot, "fill", f"[모의] 지정가 매수 체결 {qty}주 @ {fill:,.2f} ({p['active_date']})")
+            elif p["side"] == "sell" and holding and bar.high >= level:
+                fill = max(bar.open, level)
+                _paper_sell(st, fill, c, p["active_date"], p["reason"])
+                bots.log(bot, "fill", f"[모의] 지정가 매도 체결 @ {fill:,.2f} ({p['active_date']})")
+        elif p["side"] == "buy" and not holding and bar.high >= level:
             fill = max(bar.open, level)
             qty = _paper_qty(st, Order("buy", qty=p.get("qty")), fill, c)
             if qty > 0:
@@ -216,6 +267,24 @@ def run_paper(bot: dict, today: str) -> dict:
             else:
                 _paper_sell(st, o_open, c, today, o.reason)
                 bots.log(bot, "fill", f"[모의] 매도 체결 @ 시가 {o_open:,.2f} — {o.reason}")
+        elif o.kind == "limit" and o.limit is not None:
+            level = o.limit
+            gapped = (o.side == "buy" and o_open <= level) or (o.side == "sell" and o_open >= level)
+            if gapped:
+                if o.side == "buy":
+                    qty = _paper_qty(st, o, o_open, c)
+                    if qty > 0:
+                        _paper_buy(st, qty, o_open, c, today, o.reason, entry_atr=d["entry_atr"])
+                        bots.log(bot, "fill", f"[모의] 시가가 지정가 이하라 시가 {o_open:,.2f}에 매수 {qty}주 — {o.reason}")
+                else:
+                    _paper_sell(st, o_open, c, today, o.reason)
+                    bots.log(bot, "fill", f"[모의] 시가가 지정가 이상이라 시가 {o_open:,.2f}에 매도 — {o.reason}")
+            else:
+                st["pending"].append({
+                    "active_date": today, "kind": "limit", "side": o.side, "level": level, "qty": o.qty, "reason": o.reason,
+                    **({"entry_atr": d["entry_atr"]} if o.side == "buy" and d["entry_atr"] is not None else {}),
+                })
+                bots.log(bot, "order", f"[모의] {describe(o, o_open)} (오늘 하루 유효)")
         else:
             level = _level(o, o_open)
             gapped = (o.side == "buy" and o_open >= level) or (o.side == "sell" and o_open <= level)
@@ -327,6 +396,15 @@ def _send_market(bot: dict, side: str, qty: int, est_price: float, cid: str) -> 
     return trading.submit(built, bot["user_id"], source=f"bot:{bot['id']}")
 
 
+def _send_limit(bot: dict, side: str, qty: int, limit_price: float, cid: str) -> dict:
+    m = bot["market"]
+    px = round_price(m, limit_price, "down" if side == "BUY" else "up")
+    payload = {"clientOrderId": cid, "symbol": bot["symbol"], "side": side, "orderType": "LIMIT",
+               "timeInForce": "DAY", "quantity": str(qty), "price": fmt_price(m, px)}
+    built = {"market": m, "payload": payload, "checks": {"estimated_value": qty * px}}
+    return trading.submit(built, bot["user_id"], source=f"bot:{bot['id']}")
+
+
 def _send_conditional(bot: dict, side: str, qty: int, level: float, today: str, cid: str) -> dict:
     m = bot["market"]
     trading.check_limits(bot["user_id"], Market(m), qty * level)
@@ -389,9 +467,11 @@ def run_live(bot: dict, today: str) -> dict:
             continue
         side = "BUY" if o.side == "buy" else "SELL"
         try:
-            level = _level(o, today_bar.open) if o.kind == "stop" else None
-            crossed = level is not None and ((side == "BUY" and max(today_bar.open, current) >= level)
-                                             or (side == "SELL" and min(today_bar.open, current) <= level))
+            level = o.limit if o.kind == "limit" else (_level(o, today_bar.open) if o.kind == "stop" else None)
+            crossed = o.kind == "stop" and level is not None and (
+                (side == "BUY" and max(today_bar.open, current) >= level)
+                or (side == "SELL" and min(today_bar.open, current) <= level)
+            )
             immediate = o.kind == "market" or crossed
             if side == "BUY":
                 bp = normalize(client.request("GET", "/api/v1/buying-power", params={"currency": currency}, account_seq=seq) or {})
@@ -401,7 +481,7 @@ def run_live(bot: dict, today: str) -> dict:
                 bot_budget = max(bot["capital"] - eff_qty * pos["entry_price"], 0.0)
                 cash_bp = bp.get("cashBuyingPower") or 0.0
                 if not immediate and unsynced_sell > 0:
-                    # Conditional buys trigger later intraday, after the open market sell settles.
+                    # Conditional / limit buys fill later intraday, after the open market sell settles.
                     cash_bp += unsynced_sell * current * (1 - (c.commission_pct + c.tax_pct) / 100)
                 budget = min(bot_budget, cash_bp)
                 est = level or current
@@ -429,6 +509,11 @@ def run_live(bot: dict, today: str) -> dict:
                     expect_holding = pos["qty"] > 0 and not sell_in_flight
                 else:
                     expect_holding = side == "BUY"
+            elif o.kind == "limit" and level is not None:
+                r = _send_limit(bot, side, qty, level, _client_order_id(bot, today, n, "lmt"))
+                st["pending"].append({"kind": "order", "id": r["orderId"], "side": side, "qty": qty,
+                                      "date": today, "synced": 0.0, **extra})
+                bots.log(bot, "order", f"{describe(o, today_bar.open)} → 지정가 {qty}주 (오늘 하루 유효)")
             else:
                 r = _send_conditional(bot, side, qty, level, today, _client_order_id(bot, today, n, "cond"))
                 st["pending"].append({"kind": "conditional", "id": r["conditionalOrderId"], "side": side, "qty": qty,
@@ -446,6 +531,184 @@ def run_live(bot: dict, today: str) -> dict:
 
 def run(bot: dict, today: str) -> dict:
     return run_paper(bot, today) if bot["mode"] == "paper" else run_live(bot, today)
+
+
+# ------------------------------------------------------------------ intraday daytrade
+def _record_day_equity(st: dict, today: str, value: float) -> None:
+    if st["equity"] and st["equity"][-1]["date"] == today:
+        st["equity"][-1]["value"] = value
+    else:
+        st["equity"].append({"date": today, "value": value})
+
+
+def run_intraday(bot: dict, today: str, now: datetime, session_end: datetime) -> dict:
+    """Bar-by-bar intraday execution (5m/15m daytrade bots) with mandatory pre-close flattening."""
+    st = bots.state(bot)
+    if st.get("intraday_closed_date") == today:
+        return {"skipped": "closed_for_day"}
+    market = Market(bot["market"])
+    c = _costs(market)
+
+    # Mandatory end-of-day flatten: cancel open entries and liquidate any open intraday position.
+    if now >= session_end - EOD_FLATTEN:
+        if bot["mode"] == "paper":
+            st["pending"] = []
+            if st["position"]["qty"] > 0:
+                candles = get_provider(market).get_candles(market, bot["symbol"], Interval(STRATEGIES[bot["strategy"]].timeframe), limit=5)
+                px = candles[-1].close if candles else (st.get("last_price") or st["position"]["entry_price"])
+                _paper_sell(st, px, c, today, "장 마감 전 당일 강제 청산")
+                st.pop("entry_bar_time", None)
+                st["last_price"] = px
+                bots.log(bot, "fill", f"[모의] 장 마감 전 당일 강제 청산 @ {px:,.2f}")
+            _record_day_equity(st, today, st["cash"] + st["position"]["qty"] * (st.get("last_price") or 0.0))
+        else:
+            reconcile_live(bot, today)
+            if st["pending"]:
+                cancel_live_pending(bot)
+                st["pending"] = []
+            pos = st["position"]
+            if pos["qty"] > 0:
+                client, seq = _account()
+                sellable = float((client.request("GET", "/api/v1/sellable-quantity", params={"symbol": bot["symbol"]},
+                                                 account_seq=seq) or {}).get("sellableQuantity") or 0)
+                qty = int(min(pos["qty"], sellable))
+                if qty > 0:
+                    cur = float((client.request("GET", "/api/v1/prices", params={"symbols": bot["symbol"]}) or [{}])[0].get("lastPrice") or pos["entry_price"])
+                    r = _send_market(bot, "SELL", qty, cur, _client_order_id(bot, today, 999, "eod"))
+                    st["pending"].append({"kind": "order", "id": r["orderId"], "side": "SELL", "qty": qty, "date": today, "synced": 0.0})
+                    bots.log(bot, "order", f"장 마감 전 당일 강제 청산 시장가 {qty}주")
+        st["intraday_closed_date"] = today
+        st["last_run_date"] = today
+        bots.save(bot)
+        return {"flattened": today}
+
+    loaded = load_intraday(bot)
+    candles, bars, latest_bar, _ = loaded
+    bar_time = bars.time[-1]
+    if st.get("last_bar_time") == bar_time:
+        return {"skipped": "already_ran_bar"}
+
+    if bot["mode"] == "paper":
+        # Settle prior-bar pending stop/limit orders against the just-completed bar.
+        last_done = candles[-2]
+        for p in list(st["pending"]):
+            lvl, holding = p["level"], st["position"]["qty"] > 0
+            if p.get("kind", "stop") == "limit":
+                if p["side"] == "buy" and not holding and last_done.low <= lvl:
+                    qty = _paper_qty(st, Order("buy", qty=p.get("qty")), min(last_done.open, lvl), c)
+                    if qty > 0:
+                        _paper_buy(st, qty, min(last_done.open, lvl), c, today, p["reason"])
+                        st["entry_bar_time"] = bar_time
+                        bots.log(bot, "fill", f"[모의/분봉] 지정가 매수 {qty}주 @ {min(last_done.open, lvl):,.2f}")
+                elif p["side"] == "sell" and holding and last_done.high >= lvl:
+                    _paper_sell(st, max(last_done.open, lvl), c, today, p["reason"])
+                    st.pop("entry_bar_time", None)
+                    bots.log(bot, "fill", f"[모의/분봉] 지정가 매도 @ {max(last_done.open, lvl):,.2f}")
+            elif p["side"] == "buy" and not holding and last_done.high >= lvl:
+                qty = _paper_qty(st, Order("buy", qty=p.get("qty")), max(last_done.open, lvl), c)
+                if qty > 0:
+                    _paper_buy(st, qty, max(last_done.open, lvl), c, today, p["reason"])
+                    st["entry_bar_time"] = bar_time
+                    bots.log(bot, "fill", f"[모의/분봉] 돌파 매수 {qty}주 @ {max(last_done.open, lvl):,.2f}")
+            elif p["side"] == "sell" and holding and last_done.low <= lvl:
+                _paper_sell(st, min(last_done.open, lvl), c, today, p["reason"])
+                st.pop("entry_bar_time", None)
+                bots.log(bot, "fill", f"[모의/분봉] 스톱 매도 @ {min(last_done.open, lvl):,.2f}")
+        st["pending"] = []
+        d = decide_intraday(bot, today, loaded)
+        px = latest_bar.open
+        for o in d["orders"]:
+            holding = st["position"]["qty"] > 0
+            if (o.side == "buy" and holding) or (o.side == "sell" and not holding):
+                continue
+            if o.kind == "market":
+                if o.side == "buy":
+                    qty = _paper_qty(st, o, px, c)
+                    if qty > 0:
+                        _paper_buy(st, qty, px, c, today, o.reason)
+                        st["entry_bar_time"] = bar_time
+                        bots.log(bot, "fill", f"[모의/분봉] 매수 {qty}주 @ {px:,.2f} — {o.reason}")
+                else:
+                    _paper_sell(st, px, c, today, o.reason)
+                    st.pop("entry_bar_time", None)
+                    bots.log(bot, "fill", f"[모의/분봉] 매도 @ {px:,.2f} — {o.reason}")
+            else:
+                lvl = o.limit if o.kind == "limit" else _level(o, px)
+                st["pending"].append({"active_date": today, "kind": o.kind, "side": o.side, "level": lvl, "qty": o.qty, "reason": o.reason})
+        st["last_bar_time"] = bar_time
+        st["last_run_date"] = today
+        st["last_price"] = latest_bar.close
+        _record_day_equity(st, today, st["cash"] + st["position"]["qty"] * latest_bar.close)
+        bots.save(bot)
+        return {"ran_bar": bar_time}
+
+    # Live intraday execution: mark bar_time before sending to prevent duplicate bar orders.
+    reconcile_live(bot, today)
+    d = decide_intraday(bot, today, loaded)
+    st["last_bar_time"] = bar_time
+    st["last_run_date"] = today
+    bots.save(bot)
+
+    client, seq = _account()
+    m = bot["market"]
+    currency = "KRW" if m == "KR" else "USD"
+    current = float((client.request("GET", "/api/v1/prices", params={"symbols": bot["symbol"]}) or [{}])[0].get("lastPrice") or latest_bar.close)
+    pos = st["position"]
+    # Replace stale intraday conditional orders before placing fresh bar orders.
+    if d["orders"] and any(p["kind"] == "conditional" for p in st["pending"]):
+        keep = []
+        for p in st["pending"]:
+            if p["kind"] == "conditional":
+                try:
+                    client.request("DELETE", f"/api/v1/conditional-orders/{p['id']}", account_seq=seq)
+                except ApiError:
+                    keep.append(p)
+            else:
+                keep.append(p)
+        st["pending"] = keep
+
+    for n, o in enumerate(d["orders"]):
+        holding = pos["qty"] > 0
+        if (o.side == "buy" and holding) or (o.side == "sell" and not holding):
+            continue
+        side = "BUY" if o.side == "buy" else "SELL"
+        try:
+            level = o.limit if o.kind == "limit" else (_level(o, latest_bar.open) if o.kind == "stop" else None)
+            crossed = o.kind == "stop" and level is not None and (
+                (side == "BUY" and current >= level) or (side == "SELL" and current <= level)
+            )
+            if side == "BUY":
+                bp = normalize(client.request("GET", "/api/v1/buying-power", params={"currency": currency}, account_seq=seq) or {})
+                budget = min(max(bot["capital"] - pos["qty"] * pos["entry_price"], 0.0), bp.get("cashBuyingPower") or 0.0)
+                headroom = max((c.slippage_pct + c.commission_pct) / 100, LIVE_BUY_HEADROOM)
+                qty = math.floor(budget / ((level or current) * (1 + headroom)))
+                if o.qty is not None:
+                    qty = min(qty, int(o.qty))
+            else:
+                sellable = float((client.request("GET", "/api/v1/sellable-quantity", params={"symbol": bot["symbol"]},
+                                                 account_seq=seq) or {}).get("sellableQuantity") or 0)
+                qty = int(min(pos["qty"], sellable))
+            if qty <= 0:
+                continue
+            tag_id = f"{today}:{bar_time}"
+            if o.kind == "market" or crossed:
+                r = _send_market(bot, side, qty, current, _client_order_id(bot, tag_id, n, "imkt"))
+                st["pending"].append({"kind": "order", "id": r["orderId"], "side": side, "qty": qty, "date": today, "synced": 0.0})
+                bots.log(bot, "order", f"[분봉] {'매수' if side == 'BUY' else '매도'} 시장가 {qty}주 — {o.reason}")
+            elif o.kind == "limit" and level is not None:
+                r = _send_limit(bot, side, qty, level, _client_order_id(bot, tag_id, n, "ilmt"))
+                st["pending"].append({"kind": "order", "id": r["orderId"], "side": side, "qty": qty, "date": today, "synced": 0.0})
+                bots.log(bot, "order", f"[분봉] {describe(o, latest_bar.open)} → 지정가 {qty}주")
+            else:
+                r = _send_conditional(bot, side, qty, level, today, _client_order_id(bot, tag_id, n, "icond"))
+                st["pending"].append({"kind": "conditional", "id": r["conditionalOrderId"], "side": side, "qty": qty, "date": today, "synced": 0.0})
+                bots.log(bot, "order", f"[분봉] {describe(o, latest_bar.open)} → 조건주문 {qty}주")
+        except ApiError as e:
+            bots.log(bot, "error", f"[분봉] 주문 실패: {e.message}", "error", {"code": e.code})
+    st["last_price"] = current
+    _record_day_equity(st, today, bot["capital"] + st.get("realized", 0.0) + pos["qty"] * (current - pos["entry_price"]))
+    bots.save(bot)
+    return {"ran_bar": bar_time}
 
 
 def cancel_live_pending(bot: dict) -> int:

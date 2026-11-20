@@ -33,6 +33,9 @@ class StrategyParamError(ValueError):
 class Strategy(ABC):
     id: ClassVar[str]
     name: ClassVar[str]
+    category: ClassVar[str] = "swing"   # "swing" | "daytrade"
+    timeframe: ClassVar[str] = "1d"     # "1d" | "5m" | "15m"
+    theory: ClassVar[str] = ""          # financial theory citation
     summary: ClassVar[str]  # one line
     description: ClassVar[str]  # rules + how to read results
     params: ClassVar[list]  # list[Param]
@@ -77,6 +80,9 @@ class Strategy(ABC):
         return {
             "id": cls.id,
             "name": cls.name,
+            "category": cls.category,
+            "timeframe": cls.timeframe,
+            "theory": cls.theory,
             "summary": cls.summary,
             "description": cls.description,
             "params": [asdict(p) for p in cls.params],

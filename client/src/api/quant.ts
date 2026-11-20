@@ -1,6 +1,8 @@
 import { api } from './client'
-import type { Candle, Market } from './types'
+import type { Candle, Interval, Market } from './types'
 import type { IndicatorConfig } from '../indicators/registry'
+
+export type StrategyCategory = 'swing' | 'daytrade'
 
 export interface StrategyParam {
   key: string
@@ -15,6 +17,9 @@ export interface StrategyParam {
 export interface StrategyMeta {
   id: string
   name: string
+  category: StrategyCategory
+  timeframe: Interval
+  theory: string
   summary: string
   description: string
   params: StrategyParam[]
@@ -93,6 +98,7 @@ export interface BacktestResult {
   market: Market
   symbol: string
   strategy: string
+  interval?: Interval
   params: Record<string, number>
   capital: number
   currency: string

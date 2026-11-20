@@ -7,6 +7,9 @@ from .base import Bars, Context, Order, Param, Strategy
 class VolatilityBreakout(Strategy):
     id = "vol_breakout"
     name = "변동성 돌파 (래리 윌리엄스)"
+    category = "daytrade"
+    timeframe = "1d"
+    theory = "래리 윌리엄스 · 장중 변동성 확장 돌파 (당일/익일 시가 청산)"
     summary = "오늘 가격이 시가 + 전일 변동폭×K를 넘으면 매수, 다음 날 시가에 매도"
     description = (
         "래리 윌리엄스의 단기 돌파 전략. 매수 기준가 = 당일 시가 + (전일 고가 − 전일 저가) × K. 장중에 기준가를 "

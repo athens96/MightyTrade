@@ -20,9 +20,23 @@ def drawdown_series(equity: Sequence[float]) -> list:
     return out
 
 
+def _periods_per_year(times: Sequence[int]) -> float:
+    if len(times) < 2:
+        return float(PERIODS_PER_YEAR)
+    diffs = sorted(times[i] - times[i - 1] for i in range(1, len(times)) if times[i] > times[i - 1])
+    if not diffs:
+        return float(PERIODS_PER_YEAR)
+    step = diffs[len(diffs) // 2]
+    if step >= 43200:  # daily or coarser
+        return float(PERIODS_PER_YEAR)
+    # Intraday bars: ~6.5 regular trading hours per day x 252 trading days
+    return PERIODS_PER_YEAR * (6.5 * 3600 / step)
+
+
 def performance(times: Sequence[int], equity: Sequence[float]) -> dict[str, Any]:
     start, end = equity[0], equity[-1]
     years = (times[-1] - times[0]) / 86400 / 365.25
+    ppy = _periods_per_year(times)
     rets = [equity[i] / equity[i - 1] - 1 for i in range(1, len(equity)) if equity[i - 1] > 0]
     mean = sum(rets) / len(rets) if rets else 0.0
     sd = math.sqrt(sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)) if len(rets) > 1 else 0.0
@@ -43,7 +57,7 @@ def performance(times: Sequence[int], equity: Sequence[float]) -> dict[str, Any]
             underwater = True
             longest = max(longest, t - peak_t)
 
-    cagr = (end / start) ** (1 / years) - 1 if years > 0 and start > 0 and end > 0 else None
+    cagr = (end / start) ** (1 / years) - 1 if years > 0.05 and start > 0 and end > 0 else None
     return {
         "start_equity": start,
         "final_equity": end,
@@ -51,9 +65,9 @@ def performance(times: Sequence[int], equity: Sequence[float]) -> dict[str, Any]
         "cagr_pct": _clean(cagr * 100) if cagr is not None else None,
         "mdd_pct": mdd * 100,
         "max_dd_days": round(longest / 86400),
-        "volatility_pct": _clean(sd * math.sqrt(PERIODS_PER_YEAR) * 100),
-        "sharpe": _clean(mean / sd * math.sqrt(PERIODS_PER_YEAR)) if sd > 0 else None,
-        "sortino": _clean(mean / downside * math.sqrt(PERIODS_PER_YEAR)) if downside > 0 else None,
+        "volatility_pct": _clean(sd * math.sqrt(ppy) * 100),
+        "sharpe": _clean(mean / sd * math.sqrt(ppy)) if sd > 0 else None,
+        "sortino": _clean(mean / downside * math.sqrt(ppy)) if downside > 0 else None,
         "calmar": _clean(cagr / abs(mdd)) if cagr is not None and mdd < 0 else None,
     }
 

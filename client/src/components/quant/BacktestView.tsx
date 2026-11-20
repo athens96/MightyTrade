@@ -59,7 +59,7 @@ export default function BacktestView({ result, title }: { result: BacktestResult
         <TradingChart
           candles={result.candles}
           market={result.market}
-          interval="1d"
+          interval={result.interval ?? '1d'}
           indicators={indicators}
           viewKey={`${result.symbol}:${result.strategy}:${result.period.start}:${JSON.stringify(result.params)}`}
           markers={markers}

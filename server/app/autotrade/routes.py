@@ -163,7 +163,8 @@ def run_now(bot_id: str):
     sess = active_session(bot["market"], datetime.now(timezone.utc))
     if not sess:
         raise ApiError(409, "market_closed", "정규장 시간에만 실행할 수 있습니다")
-    result = executor.run(bot, sess[0])
+    now = datetime.now(timezone.utc)
+    result = executor.run_intraday(bot, sess[0], now, sess[2]) if executor.is_intraday(bot) else executor.run(bot, sess[0])
     bot = bots.get(g.user["id"], bot_id)
     return jsonify(result=result, bot=bots.public(bot))
 

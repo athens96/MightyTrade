@@ -7,6 +7,9 @@ from .base import Bars, Context, Order, Param, Strategy
 class BollingerReversion(Strategy):
     id = "bollinger"
     name = "볼린저 밴드 회귀"
+    category = "swing"
+    timeframe = "1d"
+    theory = "존 볼린저 · 통계적 평균회귀 (Mean Reversion)"
     summary = "종가가 하단 밴드 아래로 내려가면 매수, 중심선 위로 회복하면 매도"
     description = (
         "통계적으로 가격은 대부분 밴드 안에 머문다는 가정의 평균회귀 전략. 종가가 하단 밴드(이평 − 표준편차×배수) "

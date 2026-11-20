@@ -45,9 +45,10 @@ class Bars:
 @dataclass
 class Order:
     side: str  # "buy" | "sell"
-    kind: str = "market"  # "market" | "stop"
+    kind: str = "market"  # "market" | "stop" | "limit"
     stop: Optional[float] = None  # absolute stop level
     stop_from_open: Optional[float] = None  # level = next bar's open + this (volatility breakout)
+    limit: Optional[float] = None  # absolute limit price (gap reversion / limit entries)
     qty: Optional[float] = None  # buy: shares (None = use all cash). sell: always closes the position
     reason: str = ""
 
@@ -134,6 +135,17 @@ class Backtester:
                 if b.low[j] > level:
                     return None
                 raw = min(b.open[j], level)
+        elif o.kind == "limit":
+            if o.limit is None:
+                raise ValueError("limit order requires limit price")
+            if o.side == "buy":
+                if b.low[j] > o.limit:
+                    return None
+                raw = min(b.open[j], o.limit)
+            else:
+                if b.high[j] < o.limit:
+                    return None
+                raw = max(b.open[j], o.limit)
         else:
             raise ValueError(f"unknown order kind {o.kind}")
         return raw * (1 + slip) if o.side == "buy" else raw * (1 - slip)

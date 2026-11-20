@@ -292,6 +292,46 @@ def test_live_rejected_sell_blocks_followup_rebuy(toss):
     assert reload(bot)["state"]["live"]["position"]["qty"] == 100
 
 
+def test_live_limit_order_sent_for_gap_reversion(toss):
+    Scripted.script = {"2026-11-17": [Order("buy", kind="limit", limit=98.4, reason="갭 회귀")]}
+    bot = make_bot("live")
+    executor.run(bot, "2026-11-18")
+    posts = order_posts(toss)
+    assert len(posts) == 1
+    p = posts[0][3]
+    assert p["side"] == "BUY" and p["orderType"] == "LIMIT" and p["price"] == "98"  # KR tick rounded down
+
+
+def test_intraday_daytrade_bot_runs_and_flattens_before_close(env):
+    """Intraday (5m) daytrade bot executes on completed bars and force-flattens before market close."""
+    # Create 20 5-minute bars with a sudden dip below VWAP band on bar 18
+    t0 = int(datetime(2026, 11, 20, 0, 0, tzinfo=timezone.utc).timestamp())
+    bars_5m = []
+    for i in range(20):
+        px = 100.0 if i < 18 else (92.0 if i == 18 else 93.0)
+        bars_5m.append(Candle(t0 + i * 300, px, px + 0.5, px - 0.5, px, 1000))
+
+    class IntradayProvider:
+        def get_candles(self, market, symbol, interval, limit=200):
+            return bars_5m
+
+    env["provider"] = IntradayProvider()
+    bot = bots.create("u1", {"market": "KR", "symbol": "005930", "strategy": "vwap_reversion",
+                             "params": {"band_k": 1.0, "min_bars": 4, "stop_pct": 2.0}, "capital": 10_000})
+    now = datetime(2026, 11, 20, 2, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 11, 20, 6, 30, tzinfo=timezone.utc)
+    r = executor.run_intraday(reload(bot), "2026-11-20", now, end)
+    assert "ran_bar" in r
+    st = reload(bot)["state"]["paper"]
+    assert st["position"]["qty"] > 0  # bought on VWAP oversold dip
+    # Duplicate tick on same bar is skipped
+    assert executor.run_intraday(reload(bot), "2026-11-20", now + timedelta(seconds=30), end) == {"skipped": "already_ran_bar"}
+    # Within 10 min of close -> mandatory intraday flatten
+    r_eod = executor.run_intraday(reload(bot), "2026-11-20", end - timedelta(minutes=5), end)
+    assert r_eod == {"flattened": "2026-11-20"}
+    assert reload(bot)["state"]["paper"]["position"]["qty"] == 0
+
+
 def test_reconcile_applies_fills_and_follows_triggered_conditionals(toss):
     bot = make_bot("live")
     bot["state"]["live"]["pending"] = [

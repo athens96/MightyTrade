@@ -119,3 +119,74 @@ def bollinger(close: Sequence[float], n: int, k: float) -> dict:
 
 def donchian(high: Sequence[float], low: Sequence[float], upper_n: int, lower_n: int) -> dict:
     return {"upper": highest(high, upper_n), "lower": lowest(low, lower_n)}
+
+
+def macd(close: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict:
+    """MACD matching client/src/indicators/calc.ts (EMA fast - EMA slow, EMA signal)."""
+    line = zip_with(ema(close, fast), ema(close, slow), lambda f, s: f - s)
+    sig = ema(line, signal)
+    hist = zip_with(line, sig, lambda m, s: m - s)
+    return {"macd": line, "signal": sig, "hist": hist}
+
+
+def session_buckets(times: Sequence[int]) -> list[int]:
+    """Assign an integer session id to each bar (resets on overnight gaps or synthetic session length).
+
+    Works identically on KR/US real intraday bars (gap > max(4*step, 1h)), continuous mock intraday
+    bars (~6.5h session chunks), and daily bars (10-bar chunks for smoke testing).
+    """
+    n = len(times)
+    if n == 0:
+        return []
+    if n == 1:
+        return [0]
+    diffs = sorted(times[i] - times[i - 1] for i in range(1, n) if times[i] > times[i - 1])
+    step = diffs[len(diffs) // 2] if diffs else 86400
+    if step >= 43200:
+        # Daily or coarser fallback (e.g. generic strategy tests on daily bars)
+        return [i // 10 for i in range(n)]
+    gap_thresh = max(step * 4, 3600)
+    max_bars = max(int(round(6.5 * 3600 / step)), 12)
+    out = [0]
+    sid = 0
+    in_sess = 1
+    for i in range(1, n):
+        if times[i] - times[i - 1] > gap_thresh or in_sess >= max_bars:
+            sid += 1
+            in_sess = 1
+        else:
+            in_sess += 1
+        out.append(sid)
+    return out
+
+
+def intraday_vwap(
+    times: Sequence[int], high: Sequence[float], low: Sequence[float],
+    close: Sequence[float], volume: Sequence[float],
+) -> dict:
+    """Session-cumulative VWAP and volume-weighted standard deviation per bar."""
+    sessions = session_buckets(times)
+    vwap_out: Series = []
+    sd_out: Series = []
+    cum_pv = 0.0
+    cum_p2v = 0.0
+    cum_v = 0.0
+    prev_s: Optional[int] = None
+    for s, h, l, c, v in zip(sessions, high, low, close, volume):
+        if s != prev_s:
+            cum_pv = cum_p2v = cum_v = 0.0
+            prev_s = s
+        tp = (h + l + c) / 3.0
+        vol = max(float(v), 0.0)
+        cum_pv += tp * vol
+        cum_p2v += tp * tp * vol
+        cum_v += vol
+        if cum_v > 0:
+            mean = cum_pv / cum_v
+            var = max(cum_p2v / cum_v - mean * mean, 0.0)
+            vwap_out.append(mean)
+            sd_out.append(math.sqrt(var))
+        else:
+            vwap_out.append(tp)
+            sd_out.append(0.0)
+    return {"vwap": vwap_out, "sd": sd_out, "session": sessions}

@@ -7,6 +7,9 @@ from .base import Bars, Context, Order, Param, Strategy, StrategyParamError
 class MovingAverageCross(Strategy):
     id = "ma_cross"
     name = "이동평균 크로스"
+    category = "swing"
+    timeframe = "1d"
+    theory = "다우 이론 · 추세추종 (Trend Following)"
     summary = "단기 이평이 장기 이평을 상향 돌파하면 매수, 하향 돌파하면 매도"
     description = (
         "가장 기본적인 추세추종 전략. 단기 이동평균이 장기 이동평균을 위로 뚫으면(골든크로스) 다음 날 시가에 매수하고, "

@@ -72,6 +72,18 @@ def test_stop_from_open_breakout_level():
     assert r["trades"][0]["entry_price"] == 105  # next open 100 + 5
 
 
+def test_limit_order_fills_at_limit_or_better_gap():
+    # bar1 low=96 > limit 95 (no fill); bar2 low=94 <= 95 (fill at 95); bar3 sells at open=100; bar4 gaps down to 90 (fill at 90)
+    b = make_bars([100, 100, 100, 100, 90], highs=[101, 101, 101, 101, 95], lows=[99, 96, 94, 99, 89])
+    s = Scripted({0: [Order("buy", kind="limit", limit=95)], 1: [Order("buy", kind="limit", limit=95)],
+                  2: [Order("sell")], 3: [Order("buy", kind="limit", limit=95)]})
+    r = Backtester(b, s, 1000, NO_COST, 0).run()
+    assert r["trades"][0]["entry_time"] == b.time[2] and r["trades"][0]["entry_price"] == 95
+    assert r["trades"][0]["exit_price"] == 100
+    assert r["trades"][1]["entry_time"] == b.time[4] and r["trades"][1]["entry_price"] == 90
+
+
+
 def test_costs_are_applied():
     b = make_bars([100, 100, 100, 100])
     costs = Costs(commission_pct=1, tax_pct=0.5, slippage_pct=1)
@@ -96,8 +108,8 @@ def test_metrics_drawdown_and_cagr():
 def wave(n=800):
     closes = [100 + 20 * math.sin(i / 15) + 0.05 * i + 3 * math.sin(i / 2.3) for i in range(n)]
     opens = [closes[0]] + closes[:-1]
-    highs = [max(o, c) + 1.5 for o, c in zip(opens, closes)]
-    lows = [min(o, c) - 1.5 for o, c in zip(opens, closes)]
+    highs = [max(o, c) + 0.2 + abs(math.sin(i * 1.7)) * 1.5 for i, (o, c) in enumerate(zip(opens, closes))]
+    lows = [min(o, c) - 0.2 - abs(math.cos(i * 1.7)) * 1.5 for i, (o, c) in enumerate(zip(opens, closes))]
     return make_bars(opens, highs, lows, closes)
 
 
@@ -179,6 +191,8 @@ def test_api_requires_login(client):
 def test_api_backtest_with_mock_data(session):
     items = session.get("/api/quant/strategies").json["items"]
     assert [i["id"] for i in items] == list(STRATEGIES)
+    assert all({"category", "timeframe", "theory"} <= set(i) for i in items)
+    assert {i["category"] for i in items} == {"swing", "daytrade"}
     d = session.get("/api/quant/defaults?market=KR").json
     assert d["currency"] == "KRW" and d["commission_source"] == "default"
 
@@ -186,10 +200,16 @@ def test_api_backtest_with_mock_data(session):
                                                   "params": {"fast": 5, "slow": 20}, "period": "3y"})
     assert r.status_code == 200, r.json
     body = r.json
-    assert body["params"] == {"fast": 5, "slow": 20}
+    assert body["params"] == {"fast": 5, "slow": 20} and body["interval"] == "1d"
     assert body["chart_indicators"][0]["id"] == "ma"
     assert len(body["equity"]) == len(body["candles"]) - body["start_index"]
     assert {"cagr_pct", "mdd_pct", "sharpe", "trades"} <= body["metrics"].keys()
+
+    # Intraday daytrade strategy backtest uses 15m / 5m bars
+    r_orb = session.post("/api/quant/backtest", json={"market": "KR", "symbol": "005930", "strategy": "orb_breakout"})
+    assert r_orb.status_code == 200 and r_orb.json["interval"] == "15m" and r_orb.json["candles"]
+    r_vwap = session.post("/api/quant/backtest", json={"market": "US", "symbol": "AAPL", "strategy": "vwap_reversion"})
+    assert r_vwap.status_code == 200 and r_vwap.json["interval"] == "5m" and r_vwap.json["candles"]
 
 
 def test_api_rejects_bad_input(session):

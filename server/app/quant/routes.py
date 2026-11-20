@@ -85,7 +85,16 @@ def _strategy(cls: type, params: dict) -> Strategy:
 
 
 def _load(s: Setup, warmup: int) -> tuple:
-    """Fetch daily bars covering the period + warm-up. Returns (candles, bars, start_index, warnings)."""
+    """Fetch bars covering the period + warm-up. Supports 1d history and intraday (5m/15m) candles."""
+    tf = getattr(s.cls, "timeframe", "1d")
+    if tf != "1d":
+        interval = Interval(tf)
+        candles = get_provider(s.market).get_candles(s.market, s.symbol, interval, limit=400)
+        bars = Bars.from_candles(candles)
+        start = warmup
+        if start >= len(bars) - 1:
+            raise ApiError(400, "not_enough_data", "분봉 백테스트에 필요한 데이터가 부족합니다")
+        return candles, bars, start, []
     days = PERIOD_DAYS[s.period]
     start_ts = 0 if days is None else int(time.time() - days * 86400)
     # extra calendar days so indicators are warmed up at the start date (~1.5 calendar days per trading day)
@@ -105,6 +114,7 @@ def _context(s: Setup, bars: Bars, start: int) -> dict:
         "market": s.market.value,
         "symbol": s.symbol,
         "strategy": s.cls.id,
+        "interval": getattr(s.cls, "timeframe", "1d"),
         "costs": s.costs.__dict__,
         "capital": s.capital,
         "currency": "KRW" if s.market == Market.KR else "USD",
