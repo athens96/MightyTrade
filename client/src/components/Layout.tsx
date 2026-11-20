@@ -9,6 +9,7 @@ export default function Layout() {
         <strong>MightyTrade</strong>
         <nav>
           <NavLink to="/" end>시세/차트</NavLink>
+          <NavLink to="/quant">퀀트 랩</NavLink>
           <NavLink to="/orders">주문</NavLink>
           <NavLink to="/auto">자동주문</NavLink>
           <NavLink to="/settings">설정</NavLink>

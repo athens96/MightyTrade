@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -8,6 +9,9 @@ import OrdersPage from './pages/OrdersPage'
 import AutoTradePage from './pages/AutoTradePage'
 import SettingsPage from './pages/SettingsPage'
 
+// Loaded on demand to keep the main bundle small.
+const QuantPage = lazy(() => import('./pages/QuantPage'))
+
 export default function App() {
   return (
     <Routes>
@@ -16,6 +20,7 @@ export default function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<Layout />}>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/quant" element={<Suspense fallback={<div className="placeholder muted">불러오는 중…</div>}><QuantPage /></Suspense>} />
           <Route path="/orders" element={<OrdersPage />} />
           <Route path="/auto" element={<AutoTradePage />} />
           <Route path="/settings" element={<SettingsPage />} />

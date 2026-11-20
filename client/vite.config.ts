@@ -5,6 +5,8 @@ import react from '@vitejs/plugin-react'
 // Prod: nginx does the same (see deploy/nginx.conf).
 export default defineConfig({
   plugins: [react()],
+  // Main chunk is dominated by lightweight-charts (~160 kB gzip total); quant page is split out.
+  build: { chunkSizeWarningLimit: 600 },
   server: {
     port: 5173,
     proxy: { '/api': 'http://127.0.0.1:5001' },
