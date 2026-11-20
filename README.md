@@ -160,10 +160,19 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 
 ## 배포 (Oracle Cloud)
 
-1. VM에 `/opt/mighty-trade`로 배포, `server/.env` 작성 (`FLASK_ENV=production`, `SECRET_KEY`, `ENCRYPTION_KEY`, `COOKIE_SECURE=true`)
-2. `client`에서 `npm run build` → `client/dist`
-3. `deploy/mighty-trade-api.service` → systemd, `deploy/nginx.conf` → nginx
-4. VCN Security List / OS 방화벽에서 80/443 개방, certbot으로 HTTPS
+처음 한 번 (Ubuntu VM):
+
+1. VCN Security List와 OS 방화벽(`iptables` + `netfilter-persistent save`)에서 80/443 개방
+2. `apt install nginx python3-venv certbot python3-certbot-nginx git rsync`, 시간대 `Asia/Seoul`
+3. `/opt/mighty-trade`에 git clone, `server/.venv` 생성 후 `pip install -r requirements.txt`
+4. `server/.env` 작성: `FLASK_ENV=production`, 새 `SECRET_KEY`·`ENCRYPTION_KEY`, `COOKIE_SECURE=true`, `DATA_DIR`, `GOOGLE_CLIENT_ID`, `ADMIN_EMAILS` (권한 600)
+5. `deploy/mighty-trade-api.service` → systemd, `deploy/nginx.conf` → `/etc/nginx/sites-available/` (`server_name` 수정)
+6. 도메인(예: DuckDNS)을 VM 공인 IP로 지정 → `certbot --nginx -d <도메인> --redirect` (자동 갱신 타이머 포함)
+7. 외부 설정: Google OAuth 클라이언트의 승인된 JavaScript 원본에 `https://<도메인>`, 토스 WTS 허용 IP에 VM 공인 IP
+
+업데이트: main에 푸시한 뒤 `./scripts/deploy.sh`. 클라이언트를 로컬에서 빌드해 올리고, 서버는 git pull, 의존성 설치, 재시작까지 한다. 접속 정보는 `deploy/.env.deploy`(git 제외)에 `DEPLOY_HOST`, `DEPLOY_KEY`, `DEPLOY_URL`로 둔다.
+
+서버의 `server/.env`와 `server/data/`는 서버에만 있다. `ENCRYPTION_KEY`를 잃으면 저장된 토스 키와 OTP를 복구할 수 없으니 따로 백업한다.
 
 ## TODO
 
