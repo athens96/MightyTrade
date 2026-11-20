@@ -41,3 +41,5 @@ export interface Instrument {
   exchange: string
   english_name: string
 }
+
+export type WatchQuote = { symbol: string; error?: string } & Partial<Omit<Quote, 'symbol'>>

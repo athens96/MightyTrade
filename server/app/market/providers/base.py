@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 
+from ...errors import ApiError
 from ..models import Candle, Instrument, Interval, Market, Quote
 
 
@@ -20,6 +21,16 @@ class MarketDataProvider(ABC):
 
     @abstractmethod
     def get_quote(self, market: Market, symbol: str) -> Quote: ...
+
+    def get_quotes(self, market: Market, symbols: list[str]) -> dict:
+        """symbol -> Quote, or the ApiError for that symbol (one bad symbol must not fail the list)."""
+        out: dict = {}
+        for sym in symbols:
+            try:
+                out[sym] = self.get_quote(market, sym)
+            except ApiError as e:
+                out[sym] = e
+        return out
 
     def get_history(self, market: Market, symbol: str, interval: Interval, start: int) -> list[Candle]:
         """Candles from `start` (unix seconds, 0 = as far back as available) to now, ascending."""

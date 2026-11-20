@@ -199,3 +199,23 @@ def test_search_ranks_symbol_then_name(app, provider, monkeypatch):
         assert [i.symbol for i in p.search(Market.KR, "hynix")] == ["000660"]
         # full list fetched once (3 KR markets), then served from cache
         assert len([c for c in s.calls if c[1] == "/api/v1/stocks/all"]) == 3
+
+
+def test_batch_quotes_one_price_call_and_per_symbol_errors(app, provider):
+    with app.app_context():
+        p, s = provider({
+            ("GET", "/api/v1/prices"): [ok([
+                {"symbol": "005930", "lastPrice": "182400", "timestamp": "2026-11-20T14:59:21.000+09:00", "currency": "KRW"},
+                {"symbol": "000660", "lastPrice": "600000", "timestamp": "2026-11-20T14:59:21.000+09:00", "currency": "KRW"},
+            ])],
+            ("GET", "/api/v1/candles"): [ok({"candles": [
+                candle("2026-11-20T00:00:00.000+09:00", 1, 1, 1, 182400),
+                candle("2026-11-19T00:00:00.000+09:00", 1, 1, 1, 197300),
+            ], "nextBefore": "x"})],
+        })
+        out = p.get_quotes(Market.KR, ["005930", "000660", "999999", "AAPL"])
+        price_calls = [c for c in s.calls if c[1] == "/api/v1/prices"]
+        assert len(price_calls) == 1 and price_calls[0][2]["symbols"] == "005930,000660,999999"
+        assert out["005930"].price == 182400 and out["005930"].change == -14900
+        assert isinstance(out["999999"], ApiError) and out["999999"].status == 404  # not returned by Toss
+        assert out["AAPL"].code == "symbol_market_mismatch"  # never sent to Toss

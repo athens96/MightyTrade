@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { marketApi } from '../api/market'
-import type { Candle, Instrument, Interval, Market, Quote, WatchItem } from '../api/types'
+import type { Candle, Instrument, Interval, Market, Quote, WatchItem, WatchQuote } from '../api/types'
+import { priceFormatter } from '../components/chart/format'
 import { settingsApi, type Settings } from '../api/settings'
 import IndicatorPanel from '../components/chart/IndicatorPanel'
 import TradingChart from '../components/chart/TradingChart'
@@ -58,6 +59,25 @@ export default function DashboardPage() {
   }, [])
 
   const items = watchlist.filter((w) => w.market === market)
+  const [quotes, setQuotes] = useState<Record<string, WatchQuote>>({})
+  const symbolsKey = items.map((w) => w.symbol).join(',')
+
+  // Prices for every watchlist row in one request, refreshed while the tab is visible.
+  useEffect(() => {
+    if (!symbolsKey) return
+    let cancelled = false
+    const load = () =>
+      marketApi
+        .quotes(market, symbolsKey.split(','))
+        .then(({ items }) => !cancelled && setQuotes((prev) => ({ ...prev, ...Object.fromEntries(items.map((q) => [q.symbol, q])) })))
+        .catch(() => undefined) // the row just keeps its last price; the chart area shows real errors
+    load()
+    const timer = window.setInterval(() => document.visibilityState === 'visible' && load(), REFRESH_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [market, symbolsKey])
 
   useEffect(() => {
     if (!selected || selected.market !== market) setSelected(items[0] ?? null)
@@ -176,10 +196,11 @@ export default function DashboardPage() {
               className={selected?.symbol === w.symbol ? 'active' : ''}
               onClick={() => setSelected(w)}
             >
-              <span>{w.name}</span>
-              <span className="muted">
-                {w.symbol}
-                <button
+              <div className="wl-left">
+                <span className="wl-name">{w.name}</span>
+                <span className="muted small">
+                  {w.symbol}
+                  <button
                   className="remove"
                   title="관심종목에서 삭제"
                   onClick={(e) => {
@@ -189,7 +210,9 @@ export default function DashboardPage() {
                 >
                   ×
                 </button>
-              </span>
+                </span>
+              </div>
+              <WatchPrice q={quotes[w.symbol]} market={market} />
             </li>
           ))}
         </ul>
@@ -231,6 +254,25 @@ export default function DashboardPage() {
         />
         <p className="muted small">data: {provider}</p>
       </section>
+    </div>
+  )
+}
+
+function WatchPrice({ q, market }: { q?: WatchQuote; market: Market }) {
+  if (!q) return <div className="wl-right muted small">…</div>
+  if (q.error || q.price === undefined) return <div className="wl-right muted small" title={q.error}>-</div>
+  const fmt = priceFormatter(market)
+  const ch = q.change ?? 0
+  const cls = ch > 0 ? 'up' : ch < 0 ? 'down' : 'muted'
+  const sign = ch > 0 ? '+' : ''
+  return (
+    <div className="wl-right">
+      <span className="wl-price">{fmt(q.price)}</span>
+      <span className={`small ${cls}`}>
+        {sign}
+        {fmt(ch)} {sign}
+        {(q.change_pct ?? 0).toFixed(2)}%
+      </span>
     </div>
   )
 }

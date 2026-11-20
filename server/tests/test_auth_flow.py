@@ -50,3 +50,15 @@ def test_unimplemented_order_returns_501(client, monkeypatch):
     secret = client.post("/api/auth/otp/setup").json["secret"]
     client.post("/api/auth/otp/verify", json={"code": pyotp.TOTP(secret).now()})
     assert client.post("/api/trading/orders", json={}).status_code == 501
+
+
+def test_batch_quotes_endpoint(client, monkeypatch):
+    _login(client, monkeypatch)
+    secret = client.post("/api/auth/otp/setup").json["secret"]
+    client.post("/api/auth/otp/verify", json={"code": pyotp.TOTP(secret).now()})
+    r = client.get("/api/market/quotes?market=US&symbols=AAPL,nvda,AAPL")
+    assert r.status_code == 200
+    items = r.json["items"]
+    assert [i["symbol"] for i in items] == ["AAPL", "NVDA"]  # upper-cased, de-duplicated, order kept
+    assert {"price", "change", "change_pct", "currency"} <= items[0].keys()
+    assert client.get("/api/market/quotes?market=US&symbols=").status_code == 400

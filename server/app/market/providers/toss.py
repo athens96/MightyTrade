@@ -145,7 +145,33 @@ class TossProvider(MarketDataProvider):
         prices = get_toss_client().request("GET", "/api/v1/prices", params={"symbols": symbol}) or []
         if not prices:
             raise ApiError(404, "stock_not_found", symbol)
-        p = prices[0]
+        return self._quote(market, symbol, prices[0])
+
+    def get_quotes(self, market: Market, symbols: list[str]) -> dict:
+        """Watchlist prices: one /prices call (up to 200 symbols) + cached daily bars for the previous close."""
+        out: dict = {}
+        valid = []
+        for sym in symbols:
+            try:
+                self._check(market, sym)
+                valid.append(sym)
+            except ApiError as e:
+                out[sym] = e
+        if valid:
+            rows = get_toss_client().request("GET", "/api/v1/prices", params={"symbols": ",".join(valid)}) or []
+            by_symbol = {r.get("symbol"): r for r in rows}
+            for sym in valid:
+                row = by_symbol.get(sym)
+                if row is None or row.get("lastPrice") is None:
+                    out[sym] = ApiError(404, "stock_not_found", sym)
+                    continue
+                try:
+                    out[sym] = self._quote(market, sym, row)
+                except ApiError as e:
+                    out[sym] = e
+        return out
+
+    def _quote(self, market: Market, symbol: str, p: dict) -> Quote:
         price = float(p["lastPrice"])
         daily = self._fetch_base(symbol, "1d", 2)
         # Latest daily bar is the current/last session; change is vs the session before it.

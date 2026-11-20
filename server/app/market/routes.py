@@ -48,6 +48,27 @@ def quote():
     return jsonify(quote=get_provider(market).get_quote(market, symbol).to_dict())
 
 
+@bp.get("/quotes")
+@login_required
+def quotes():
+    """Batch quotes for the watchlist: ?market=KR&symbols=005930,000660 (max 50)."""
+    market = _market()
+    symbols = list(dict.fromkeys(s.strip().upper() for s in request.args.get("symbols", "").split(",") if s.strip()))
+    if not symbols or len(symbols) > 50 or any(len(s) > 20 for s in symbols):
+        raise ApiError(400, "invalid_symbols", "symbols: 1~50 comma-separated codes")
+    result = get_provider(market).get_quotes(market, symbols)
+    items = []
+    for sym in symbols:
+        r = result.get(sym)
+        if r is None:
+            items.append({"symbol": sym, "error": "not_found"})
+        elif isinstance(r, ApiError):
+            items.append({"symbol": sym, "error": r.code})
+        else:
+            items.append({"symbol": sym, **r.to_dict()})
+    return jsonify(items=items)
+
+
 @bp.get("/search")
 @login_required
 def search():
@@ -56,3 +77,4 @@ def search():
     if not q:
         return jsonify(items=[])
     return jsonify(items=[i.to_dict() for i in get_provider(market).search(market, q)])
+
