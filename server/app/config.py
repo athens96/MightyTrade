@@ -41,6 +41,12 @@ class Config:
     # Toss keys are per account (registered in the app, stored encrypted), not in env.
     TOSS_TIMEOUT_SEC = float(os.getenv("TOSS_TIMEOUT_SEC", "10"))
 
+    # Trading safety limits (per user)
+    TRADING_UNLOCK_MIN = int(os.getenv("TRADING_UNLOCK_MIN", "30"))  # OTP unlock lasts this long
+    TRADING_MAX_ORDERS_PER_DAY = int(os.getenv("TRADING_MAX_ORDERS_PER_DAY", "50"))
+    TRADING_MAX_ORDER_KRW = float(os.getenv("TRADING_MAX_ORDER_KRW", "50000000"))  # per order
+    TRADING_MAX_ORDER_USD = float(os.getenv("TRADING_MAX_ORDER_USD", "50000"))
+
 
 class DevelopmentConfig(Config):
     DEBUG = True

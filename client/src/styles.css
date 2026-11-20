@@ -208,3 +208,24 @@ input[type=checkbox] { width: auto; letter-spacing: normal; }
 .account h4 { margin: 4px 0 0; }
 .trades.left-first td:first-child, .trades.left-first th:first-child { text-align: left; }
 .trades.left-first td:nth-child(2), .trades.left-first th:nth-child(2) { text-align: left; }
+.ob-row { cursor: pointer; }
+.ob-row:hover { outline: 1px solid #30363d; }
+.ticket { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid #21262d; padding-top: 8px; }
+.ticket label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #8b949e; }
+.ticket input[type=number] { width: 100%; font-size: 14px; letter-spacing: normal; padding: 6px 8px; }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; }
+.seg button.active { background: #30363d; border-color: #6e7681; }
+.seg button.buy.active { background: #e5484d; border-color: #e5484d; }
+.seg button.sell.active { background: #3e63dd; border-color: #3e63dd; }
+.seg.pct button { padding: 3px 0; font-size: 12px; }
+.small-seg button { padding: 4px 0; font-size: 12px; }
+.ticket-sum { display: flex; justify-content: space-between; }
+.ticket-preview { border: 1px solid #30363d; border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+.warn-text { color: #f0b429; }
+.ticket-go { padding: 9px; font-weight: 600; }
+.ticket-go.buy:not(:disabled) { background: #e5484d; border-color: #e5484d; }
+.ticket-go.sell:not(:disabled) { background: #3e63dd; border-color: #3e63dd; }
+.unlock-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; padding: 6px 8px; border: 1px solid #30363d; border-radius: 6px; }
+.unlock-bar.on { border-color: #2ea043; }
+.unlock-bar .otp-input { width: 80px; padding: 3px 6px; font-size: 13px; }
+.unlock-bar button { padding: 3px 8px; font-size: 12px; }

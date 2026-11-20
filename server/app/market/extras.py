@@ -118,14 +118,30 @@ def overview() -> dict:
                         "change_pct": (price / prev - 1) * 100 if prev else 0.0})
         return out
 
-    def load_calendar(m: str):
-        return get_toss_client().request("GET", f"/api/v1/market-calendar/{m}") or {}
-
     now = datetime.now(timezone.utc)
     indices = _cached((uid, "indices"), 15, load_indices)
-    status = {m: session_status(m, _cached((uid, "calendar", m, now.date().isoformat()), 600, lambda m=m: load_calendar(m)), now)
-              for m in ("KR", "US")}
-    return {"indices": indices, "status": status}
+    return {"indices": indices, "status": {m: market_status(m, now) for m in ("KR", "US")}}
+
+
+def calendar(market: str) -> dict:
+    """Toss market calendar for the logged-in user (cached 10 min)."""
+    now = datetime.now(timezone.utc)
+    return _cached((g.user["id"], "calendar", market, now.date().isoformat()), 600,
+                   lambda: get_toss_client().request("GET", f"/api/v1/market-calendar/{market}") or {})
+
+
+def market_status(market: str, now: datetime | None = None) -> dict:
+    return session_status(market, calendar(market), now or datetime.now(timezone.utc))
+
+
+def regular_session(market: str) -> tuple | None:
+    """(trading date, regular start, regular end) for today's regular session, or None on holidays."""
+    cal = calendar(market).get("today") or {}
+    block = cal.get("integrated") if market == "KR" else cal
+    reg = (block or {}).get("regularMarket") if isinstance(block, dict) else None
+    if not isinstance(reg, dict):
+        return None
+    return cal.get("date"), _ts(reg["startTime"]), _ts(reg["endTime"])
 
 
 def warnings(market: Market, symbol: str) -> list:

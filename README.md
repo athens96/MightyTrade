@@ -44,7 +44,7 @@ server/app/
 │   ├── montecarlo.py      매매 부트스트랩/셔플 → 수익률·MDD 분포, 손실 확률
 │   ├── strategies/        전략 (백테스트·실전 공용 인터페이스): 이평 크로스, 변동성 돌파, RSI(2), 볼린저, 터틀
 │   └── routes.py          /api/quant/strategies, /defaults, /backtest, /optimize, /walkforward, /montecarlo
-└── trading/             주문·자동주문 (스텁, 501 응답)
+└── trading/             주문: 미리보기→OTP 잠금 해제(30분)→전송, 호가단위·상하한가·잔고 검증, 일일/건당 한도, 감사 기록
     ├── models.py          Order, OrderRequest, Position
     ├── brokers/           Broker 인터페이스, TossBroker(TODO)
     └── automation/        Strategy / Signal 인터페이스
@@ -125,6 +125,13 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 - 체결 규칙: 바 i 종가에 판단한 주문은 바 i+1에서만 체결(미래 정보 차단). 롱 전용, 한 번에 한 포지션, 정수 주식.
 - 지표를 바꾸면 `cd server && .venv/bin/python -m app.quant.fixtures`로 fixture 재생성 → 서버·클라이언트 테스트가 두 구현의 일치를 검증.
 
+## 거래
+
+**수동 주문** (대시보드 오른쪽 패널 → 주문, 계좌 → 주문 내역)
+- 주문 확인 = 서버 미리보기(전송 안 함): 호가 단위 맞춤, 상·하한가, 매수 가능 금액/매도 가능 수량, 장 운영 상태 경고.
+- 전송은 **거래 잠금 해제**(OTP, 기본 30분) 상태에서만. 취소는 잠금 없이 가능, 정정은 잠금 필요.
+- 한도: 하루 주문 수, 주문 1건 금액(`.env`의 `TRADING_*`). 모든 주문은 `orders` 컬렉션에 기록.
+
 ## 저장소 교체 (파일 DB → Supabase 등)
 
 비즈니스 코드는 `get_store()`만 사용. `storage/base.py`의 `Store`를 구현한 클래스를 추가하고 `STORAGE_BACKEND`로 선택하면 됨. 컬렉션: `users`, `watchlists`, `settings`, `orders`, `strategies`.
@@ -140,7 +147,7 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 
 - [x] 토스 시세·차트·종목검색 (`TossProvider`)
 - [x] 토스 계좌 조회 (보유종목·매수가능금액), 조건주문 OCO 익절/손절
-- [ ] 일반 주문 (`TossBroker`)
+- [x] 일반 주문 (지정가/시장가, 정정·취소, 실시간 체결 알림)
 - [ ] 미국 종목 영문명 검색 (`/stocks/all`에 englishName 없음 → `/stocks` 배치 조회 필요)
 - [ ] investing.com 데이터 수집 방식 결정 (공식 API 없음 — 이용약관 확인 필요)
 - [ ] 주문 API (검증 → 리스크 체크 → 브로커 → 저장)

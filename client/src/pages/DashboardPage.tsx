@@ -279,7 +279,7 @@ export default function DashboardPage() {
         <p className="muted small">data: {provider}</p>
       </section>
       {selected && (
-        <SidePanel market={selected.market} symbol={selected.symbol} book={live.book} ticks={live.ticks} state={live.state} prevClose={prevClose} />
+        <SidePanel market={selected.market} symbol={selected.symbol} name={selected.name} lastPrice={shown?.price ?? null} book={live.book} ticks={live.ticks} state={live.state} prevClose={prevClose} />
       )}
     </div>
   )

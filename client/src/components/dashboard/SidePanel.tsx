@@ -3,21 +3,22 @@ import { marketApi, type FlowRecord, type OrderBook, type Tick } from '../../api
 import type { Market } from '../../api/types'
 import type { StreamState } from '../../hooks/useRealtime'
 import { compact, priceFormatter } from '../chart/format'
+import OrderTicket from '../trading/OrderTicket'
 
 const STATE_LABEL: Record<StreamState, string> = {
   connecting: '연결 중', connected: '실시간', reconnecting: '재연결 중', unavailable: '실시간 미제공',
 }
 
-function Book({ book, prevClose, market }: { book: OrderBook; prevClose: number | null; market: Market }) {
+function Book({ book, prevClose, market, onPick, levels = 10 }: { book: OrderBook; prevClose: number | null; market: Market; onPick: (p: number) => void; levels?: number }) {
   const fmt = priceFormatter(market)
-  const asks = [...book.asks.slice(0, 10)].reverse() // highest ask on top, best ask just above the spread
-  const bids = book.bids.slice(0, 10)
+  const asks = [...book.asks.slice(0, levels)].reverse() // highest ask on top, best ask just above the spread
+  const bids = book.bids.slice(0, levels)
   const max = Math.max(1, ...asks.map((l) => l.volume), ...bids.map((l) => l.volume))
   const rel = (p: number) => (prevClose ? ((p / prevClose - 1) * 100) : null)
   const row = (l: { price: number; volume: number }, side: 'ask' | 'bid', i: number) => {
     const r = rel(l.price)
     return (
-      <div key={`${side}${i}`} className={`ob-row ${side}`}>
+      <div key={`${side}${i}`} className={`ob-row ${side}`} onClick={() => onPick(l.price)} title="클릭하면 주문 가격으로 입력">
         <span className="ob-vol">
           {side === 'ask' && <i style={{ width: `${(l.volume / max) * 100}%` }} />}
           {side === 'ask' ? l.volume.toLocaleString() : ''}
@@ -119,6 +120,8 @@ function Flow({ symbol }: { symbol: string }) {
 interface Props {
   market: Market
   symbol: string
+  name?: string
+  lastPrice: number | null
   book: OrderBook | null
   ticks: Tick[]
   state: StreamState
@@ -126,20 +129,33 @@ interface Props {
 }
 
 /** Right column: live orderbook + ticks, and investor flows (KR). */
-export default function SidePanel({ market, symbol, book, ticks, state, prevClose }: Props) {
-  const [tab, setTab] = useState<'book' | 'flow'>('book')
+export default function SidePanel({ market, symbol, name, lastPrice, book, ticks, state, prevClose }: Props) {
+  const [tab, setTab] = useState<'book' | 'order' | 'flow'>('book')
+  const [picked, setPicked] = useState<number | null>(null)
+  useEffect(() => setPicked(null), [symbol])
+  const pick = (p: number) => {
+    setPicked(p)
+    setTab('order')
+  }
   return (
     <aside className="side-panel">
       <div className="tabs">
         <button className={tab === 'book' ? 'active' : ''} onClick={() => setTab('book')}>호가·체결</button>
-        <button className={tab === 'flow' ? 'active' : ''} onClick={() => setTab('flow')}>투자자 수급</button>
+        <button className={tab === 'order' ? 'active' : ''} onClick={() => setTab('order')}>주문</button>
+        <button className={tab === 'flow' ? 'active' : ''} onClick={() => setTab('flow')}>수급</button>
         <div className="spacer" />
         {tab === 'book' && <span className={`stream-state ${state}`}><i className="dot" aria-hidden />{STATE_LABEL[state]}</span>}
       </div>
       {tab === 'book' && (
         <>
-          {book ? <Book book={book} prevClose={prevClose} market={market} /> : <p className="muted small">{state === 'unavailable' ? '토스증권 연동 시 제공됩니다' : '불러오는 중…'}</p>}
+          {book ? <Book book={book} prevClose={prevClose} market={market} onPick={pick} /> : <p className="muted small">{state === 'unavailable' ? '토스증권 연동 시 제공됩니다' : '불러오는 중…'}</p>}
           {ticks.length > 0 && <Ticks ticks={ticks} market={market} />}
+        </>
+      )}
+      {tab === 'order' && (
+        <>
+          {book && <Book book={book} prevClose={prevClose} market={market} onPick={pick} levels={5} />}
+          <OrderTicket market={market} symbol={symbol} name={name} lastPrice={lastPrice} pickedPrice={picked} />
         </>
       )}
       {tab === 'flow' && (market === 'KR' ? <Flow symbol={symbol} /> : <p className="muted small">투자자별 수급은 국내 종목만 제공됩니다.</p>)}

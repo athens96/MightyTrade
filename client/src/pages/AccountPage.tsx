@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { accountApi, type AccountSummary, type ConditionalLeg, type ConditionalOrder, type Holding } from '../api/account'
 import { ApiError } from '../api/client'
 import OcoDialog from '../components/account/OcoDialog'
+import OrdersSection from '../components/trading/OrdersSection'
 import { priceFormatter } from '../components/chart/format'
 
 const krw = priceFormatter('KR')
@@ -154,6 +155,8 @@ export default function AccountPage() {
           </tbody>
         </table>
       </div>
+
+      <OrdersSection nameOf={nameOf} />
 
       <div className="account-head">
         <h4>조건 주문</h4>

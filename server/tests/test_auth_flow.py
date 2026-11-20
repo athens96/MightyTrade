@@ -45,11 +45,12 @@ def test_otp_lockout(client, monkeypatch):
     assert codes[-1] == 429
 
 
-def test_unimplemented_order_returns_501(client, monkeypatch):
+def test_order_endpoint_validates_input(client, monkeypatch):
     _login(client, monkeypatch)
     secret = client.post("/api/auth/otp/setup").json["secret"]
     client.post("/api/auth/otp/verify", json={"code": pyotp.TOTP(secret).now()})
-    assert client.post("/api/trading/orders", json={}).status_code == 501
+    r = client.post("/api/trading/orders", json={})
+    assert r.status_code == 400 and r.json["error"] == "invalid_market"
 
 
 def test_batch_quotes_endpoint(client, monkeypatch):
