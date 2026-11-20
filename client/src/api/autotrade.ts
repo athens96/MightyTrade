@@ -1,5 +1,9 @@
 import { api } from './client'
-import type { Market } from './types'
+import type { PortfolioAsset, RebalanceMode } from './quant'
+import type { Interval, Market } from './types'
+
+export type BotKind = 'single' | 'rebalance'
+export type BotCategory = 'swing' | 'daytrade' | 'rebalance'
 
 export interface BotTrade {
   entry_date: string
@@ -13,12 +17,26 @@ export interface BotTrade {
   return_pct: number | null
 }
 
+export interface BotRebalanceLog {
+  date: string
+  reason: string
+  trades: number
+  weights: Record<string, number>
+}
+
 export interface Bot {
   id: string
+  kind: BotKind
+  category: BotCategory
+  timeframe: Interval
   name: string
   market: Market
   symbol: string
-  strategy: string
+  strategy?: string
+  model?: string
+  assets?: PortfolioAsset[]
+  rebalance?: RebalanceMode
+  drift_pct?: number
   params: Record<string, number>
   capital: number
   mode: 'paper' | 'live'
@@ -27,7 +45,12 @@ export interface Bot {
   updated_at: string
   state: {
     position: { qty: number; entry_price: number; entry_date: string | null }
-    pending: { side: string; kind?: string; level?: number; active_date?: string; date?: string }[]
+    positions?: Record<string, { qty: number; entry_price: number }>
+    target_weights?: Record<string, number>
+    last_prices?: Record<string, number>
+    last_rebalance_date?: string | null
+    rebalances?: BotRebalanceLog[]
+    pending: { side: string; symbol?: string; kind?: string; level?: number; active_date?: string; date?: string }[]
     last_run_date: string | null
     last_price: number | null
     trades: BotTrade[]
@@ -49,19 +72,29 @@ export interface BotEvent {
 export interface Evaluation {
   date: string
   bar_date: string
+  due?: boolean
+  reason?: string | null
   position: { qty: number; entry_price: number }
   cash: number
   today_open: number | null
   last: number
-  orders: { side: string; kind: string; text: string }[]
+  current_weights?: Record<string, number>
+  target_weights?: Record<string, number>
+  orders: { side: string; kind: string; symbol?: string; text: string }[]
+  planned_orders?: { side: string; kind: string; symbol?: string; text: string }[]
 }
 
 export interface BotInput {
+  kind?: BotKind
   name?: string
   market: Market
-  symbol: string
-  strategy: string
-  params: Record<string, number>
+  symbol?: string
+  strategy?: string
+  model?: string
+  assets?: PortfolioAsset[]
+  rebalance?: RebalanceMode
+  drift_pct?: number
+  params?: Record<string, number>
   capital: number
 }
 

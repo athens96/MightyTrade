@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { autotradeApi, PREFILL_KEY, type Bot, type BotEvent, type BotInput, type Evaluation } from '../api/autotrade'
+import { autotradeApi, PREFILL_KEY, type Bot, type BotCategory, type BotEvent, type BotInput, type Evaluation } from '../api/autotrade'
 import { ApiError } from '../api/client'
-import { quantApi, type StrategyMeta } from '../api/quant'
+import { quantApi, type PortfolioModelMeta, type StrategyMeta } from '../api/quant'
 import { priceFormatter } from '../components/chart/format'
 import BotForm from '../components/autotrade/BotForm'
+import { investingUrl } from '../lib/externalLinks'
+
+const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱' }
+const REBAL_LABEL: Record<string, string> = { monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈' }
 
 const money = (b: Bot, v: number | null | undefined) =>
   v == null ? '-' : `${priceFormatter(b.market)(v)}${b.market === 'KR' ? '원' : ' USD'}`
@@ -46,8 +50,8 @@ function Sparkline({ points, bot }: { points: { date: string; value: number }[];
   )
 }
 
-function BotDetail({ bot, strategies, onChanged, onDeleted }: {
-  bot: Bot; strategies: StrategyMeta[]; onChanged: (b: Bot) => void; onDeleted: () => void
+function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
+  bot: Bot; strategies: StrategyMeta[]; portfolioModels: PortfolioModelMeta[]; onChanged: (b: Bot) => void; onDeleted: () => void
 }) {
   const [events, setEvents] = useState<BotEvent[]>([])
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null)
@@ -56,7 +60,9 @@ function BotDetail({ bot, strategies, onChanged, onDeleted }: {
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const meta = strategies.find((s) => s.id === bot.strategy)
+  const isRebal = bot.kind === 'rebalance'
+  const meta = !isRebal ? strategies.find((s) => s.id === bot.strategy) : undefined
+  const pModel = isRebal ? portfolioModels.find((m) => m.id === bot.model) : undefined
 
   const loadEvents = useCallback(() => {
     autotradeApi.bot(bot.id).then((r) => setEvents(r.events)).catch(() => undefined)
@@ -85,14 +91,28 @@ function BotDetail({ bot, strategies, onChanged, onDeleted }: {
 
   const s = bot.state
   const pos = s.position
-  const unreal = pos.qty && s.last_price ? (s.last_price / pos.entry_price - 1) * 100 : null
+  const unreal = !isRebal && pos.qty && s.last_price ? (s.last_price / pos.entry_price - 1) * 100 : null
+  const positions = s.positions ?? {}
+  const heldSymbols = Object.values(positions).filter((p) => p.qty > 0).length
+  const totalRebalVal = isRebal
+    ? (bot.mode === 'paper' ? (s.equity_now ?? bot.capital) : Math.max(bot.capital, s.last_price ?? 0))
+    : 0
+  const scheduleNote = isRebal
+    ? `리밸런싱: ${REBAL_LABEL[bot.rebalance ?? 'monthly'] ?? bot.rebalance}${bot.rebalance === 'drift' ? ` (±${bot.drift_pct}%)` : ''} · 정규장 시작 1분 뒤`
+    : bot.timeframe !== '1d'
+      ? `장중 ${bot.timeframe} 봉 마감마다 실행 · 장 마감 10분 전 당일 강제 청산`
+      : '매일 정규장 시작 1분 뒤 전날 종가 기준으로 판단·실행'
 
   return (
     <section className="bot-detail">
       <div className="account-head">
         <h3>{bot.name}</h3>
+        <span className={`cat-badge ${bot.category}`}>{CAT_LABEL[bot.category]}{bot.timeframe !== '1d' ? ` · ${bot.timeframe}` : ''}</span>
         <span className={`mode-badge ${bot.mode}`}>{bot.mode === 'paper' ? '모의' : '실거래'}</span>
         <span className={`state-badge ${bot.enabled ? 'on' : ''}`}>{bot.enabled ? '켜짐' : '꺼짐'}</span>
+        {!isRebal && (
+          <a className="ext-link" href={investingUrl(bot.market, bot.symbol)} target="_blank" rel="noopener noreferrer">Investing ↗</a>
+        )}
         <div className="spacer" />
         <button onClick={() => act('toggle', () => (bot.enabled ? autotradeApi.disable(bot.id) : autotradeApi.enable(bot.id)))} disabled={!!busy}
                 className={bot.enabled ? '' : bot.mode === 'live' ? 'danger' : 'primary'}>
@@ -100,16 +120,33 @@ function BotDetail({ bot, strategies, onChanged, onDeleted }: {
         </button>
       </div>
       <p className="muted small">
-        {bot.symbol} · {meta?.name ?? bot.strategy} ({Object.entries(bot.params).map(([k, v]) => `${k}=${v}`).join(', ')}) · 운용 자금 {money(bot, bot.capital)}
-        {' · '}매일 정규장 시작 1분 뒤 전날 종가 기준으로 판단·실행
+        {isRebal ? (
+          <>
+            <b>{pModel?.name ?? bot.model}</b> ({pModel?.theory}) · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
+          </>
+        ) : (
+          <>
+            {bot.symbol} · <b>{meta?.name ?? bot.strategy}</b>{meta?.theory ? ` (${meta.theory})` : ''} ·{' '}
+            {Object.entries(bot.params).map(([k, v]) => `${k}=${v}`).join(', ')} · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
+          </>
+        )}
       </p>
       {error && <p className="error">{error}</p>}
 
       <div className="stat-tiles">
         <div className="stat-tile">
           <span className="muted small">보유</span>
-          <b>{pos.qty ? `${pos.qty.toLocaleString()}주` : '없음'}</b>
-          {pos.qty > 0 && <span className="small">평균 {money(bot, pos.entry_price)} · <span className={cls(unreal)}>{pct(unreal)}</span></span>}
+          {isRebal ? (
+            <>
+              <b>{heldSymbols ? `${heldSymbols}/${bot.assets?.length ?? 0} 종목` : '미구성'}</b>
+              <span className="small muted">최근 리밸런싱 {s.last_rebalance_date ?? '-'}</span>
+            </>
+          ) : (
+            <>
+              <b>{pos.qty ? `${pos.qty.toLocaleString()}주` : '없음'}</b>
+              {pos.qty > 0 && <span className="small">평균 {money(bot, pos.entry_price)} · <span className={cls(unreal)}>{pct(unreal)}</span></span>}
+            </>
+          )}
         </div>
         <div className="stat-tile">
           <span className="muted small">{bot.mode === 'paper' ? '모의 평가자산' : '봇 손익 (자금 대비)'}</span>
@@ -122,9 +159,18 @@ function BotDetail({ bot, strategies, onChanged, onDeleted }: {
           <span className="small muted">대기 주문 {s.pending.length}건</span>
         </div>
         <div className="stat-tile">
-          <span className="muted small">매매</span>
-          <b>{s.trades.filter((t) => t.exit_date).length}회</b>
-          <span className="small muted">승 {s.trades.filter((t) => (t.pnl ?? 0) > 0).length}</span>
+          <span className="muted small">{isRebal ? '리밸런싱' : '매매'}</span>
+          {isRebal ? (
+            <>
+              <b>{(s.rebalances ?? []).length}회</b>
+              <span className="small muted">{REBAL_LABEL[bot.rebalance ?? 'monthly']}</span>
+            </>
+          ) : (
+            <>
+              <b>{s.trades.filter((t) => t.exit_date).length}회</b>
+              <span className="small muted">승 {s.trades.filter((t) => (t.pnl ?? 0) > 0).length}</span>
+            </>
+          )}
         </div>
       </div>
 
@@ -145,12 +191,55 @@ function BotDetail({ bot, strategies, onChanged, onDeleted }: {
 
       {evaluation && (
         <div className="panel">
-          <h4>점검 결과 · {evaluation.date} 실행 예정 ({evaluation.bar_date} 종가 기준)</h4>
+          <h4>점검 결과 · {evaluation.date} 실행 예정 ({evaluation.bar_date} 기준)</h4>
+          {isRebal && (
+            <p className="small">
+              {evaluation.due ? <><b>리밸런싱 예정:</b> {evaluation.reason}</> : <span className="muted">오늘은 리밸런싱 조건에 해당하지 않습니다.</span>}
+            </p>
+          )}
           {evaluation.orders.length ? (
             <ul>{evaluation.orders.map((o, i) => <li key={i} className={o.side === 'buy' ? 'up' : 'down'}>{o.text}</li>)}</ul>
           ) : <p className="muted">신호 없음 — 다음 실행 때 주문하지 않습니다.</p>}
-          <p className="muted small">현재 보유 {evaluation.position.qty}주 · 최근가 {money(bot, evaluation.last)}{evaluation.today_open ? ` · 오늘 시가 ${money(bot, evaluation.today_open)}` : ''}</p>
+          {!isRebal && (
+            <p className="muted small">현재 보유 {evaluation.position.qty}주 · 최근가 {money(bot, evaluation.last)}{evaluation.today_open ? ` · 오늘 시가 ${money(bot, evaluation.today_open)}` : ''}</p>
+          )}
         </div>
+      )}
+
+      {isRebal && bot.assets && (
+        <>
+          <h4>포트폴리오 보유 · 목표 비중</h4>
+          <div className="trades-wrap">
+            <table className="trades left-first">
+              <thead>
+                <tr><th>종목</th><th>역할</th><th>보유</th><th>평균단가</th><th>현재가</th><th>현재 비중</th><th>목표 비중</th></tr>
+              </thead>
+              <tbody>
+                {bot.assets.map((a) => {
+                  const p = positions[a.symbol]
+                  const qty = p?.qty ?? 0
+                  const px = s.last_prices?.[a.symbol] ?? p?.entry_price
+                  const curW = totalRebalVal > 0 && px ? (qty * px / totalRebalVal) * 100 : 0
+                  const tgtW = s.target_weights?.[a.symbol] ?? (pModel?.uses_weights ? a.weight : null)
+                  return (
+                    <tr key={a.symbol}>
+                      <td>
+                        <b>{a.symbol}</b> {a.name && a.name !== a.symbol && <span className="muted small">{a.name}</span>}{' '}
+                        <a className="ext-link" href={investingUrl(bot.market, a.symbol)} target="_blank" rel="noopener noreferrer">↗</a>
+                      </td>
+                      <td className="small muted">{a.role === 'defensive' ? '방어' : '공격'}</td>
+                      <td>{qty ? `${qty.toLocaleString()}주` : '-'}</td>
+                      <td>{qty && p?.entry_price ? money(bot, p.entry_price) : '-'}</td>
+                      <td>{px ? money(bot, px) : '-'}</td>
+                      <td>{curW.toFixed(1)}%</td>
+                      <td><b>{tgtW != null ? `${tgtW.toFixed(1)}%` : '-'}</b></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       <div className="panel live-panel">
@@ -177,23 +266,47 @@ function BotDetail({ bot, strategies, onChanged, onDeleted }: {
 
       <Sparkline points={s.equity} bot={bot} />
 
-      <h4>매매 ({bot.mode === 'paper' ? '모의' : '실거래'})</h4>
-      <div className="trades-wrap">
-        <table className="trades">
-          <thead><tr><th>진입</th><th>진입가</th><th>수량</th><th>청산</th><th>청산가</th><th>손익</th><th>수익률</th><th>사유</th></tr></thead>
-          <tbody>
-            {[...s.trades].reverse().map((t, i) => (
-              <tr key={i}>
-                <td>{t.entry_date}</td><td>{money(bot, t.entry_price)}</td><td>{t.qty.toLocaleString()}</td>
-                <td>{t.exit_date ?? <span className="muted">보유 중</span>}</td><td>{t.exit_price != null ? money(bot, t.exit_price) : '-'}</td>
-                <td className={cls(t.pnl)}>{t.pnl != null ? money(bot, t.pnl) : '-'}</td><td className={cls(t.return_pct)}>{pct(t.return_pct)}</td>
-                <td className="muted small">{t.entry_reason}{t.exit_reason && ` → ${t.exit_reason}`}</td>
-              </tr>
-            ))}
-            {!s.trades.length && <tr><td colSpan={8} className="muted">아직 매매가 없습니다.</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      {isRebal ? (
+        <>
+          <h4>리밸런싱 기록 ({bot.mode === 'paper' ? '모의' : '실거래'})</h4>
+          <div className="trades-wrap">
+            <table className="trades left-first">
+              <thead><tr><th>날짜</th><th>사유</th><th>목표 비중</th><th>주문</th></tr></thead>
+              <tbody>
+                {[...(s.rebalances ?? [])].reverse().map((r, i) => (
+                  <tr key={i}>
+                    <td>{r.date}</td>
+                    <td className="small">{r.reason}</td>
+                    <td className="small muted">{Object.entries(r.weights).filter(([, w]) => w > 0).map(([k, w]) => `${k} ${w.toFixed(0)}%`).join(' · ')}</td>
+                    <td>{r.trades}건</td>
+                  </tr>
+                ))}
+                {!(s.rebalances ?? []).length && <tr><td colSpan={4} className="muted">아직 리밸런싱 기록이 없습니다.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <>
+          <h4>매매 ({bot.mode === 'paper' ? '모의' : '실거래'})</h4>
+          <div className="trades-wrap">
+            <table className="trades">
+              <thead><tr><th>진입</th><th>진입가</th><th>수량</th><th>청산</th><th>청산가</th><th>손익</th><th>수익률</th><th>사유</th></tr></thead>
+              <tbody>
+                {[...s.trades].reverse().map((t, i) => (
+                  <tr key={i}>
+                    <td>{t.entry_date}</td><td>{money(bot, t.entry_price)}</td><td>{t.qty.toLocaleString()}</td>
+                    <td>{t.exit_date ?? <span className="muted">보유 중</span>}</td><td>{t.exit_price != null ? money(bot, t.exit_price) : '-'}</td>
+                    <td className={cls(t.pnl)}>{t.pnl != null ? money(bot, t.pnl) : '-'}</td><td className={cls(t.return_pct)}>{pct(t.return_pct)}</td>
+                    <td className="muted small">{t.entry_reason}{t.exit_reason && ` → ${t.exit_reason}`}</td>
+                  </tr>
+                ))}
+                {!s.trades.length && <tr><td colSpan={8} className="muted">아직 매매가 없습니다.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       <h4>실행 로그</h4>
       <div className="bot-log">
@@ -208,7 +321,7 @@ function BotDetail({ bot, strategies, onChanged, onDeleted }: {
       </div>
 
       {editing && (
-        <BotForm strategies={strategies} bot={bot} initial={bot} onClose={() => setEditing(false)}
+        <BotForm strategies={strategies} portfolioModels={portfolioModels} bot={bot} initial={bot} onClose={() => setEditing(false)}
                  onSubmit={async (b) => onChanged((await autotradeApi.update(bot.id, b)).bot)} />
       )}
     </section>
@@ -217,10 +330,12 @@ function BotDetail({ bot, strategies, onChanged, onDeleted }: {
 
 export default function AutoTradePage() {
   const [bots, setBots] = useState<Bot[]>([])
+  const [filter, setFilter] = useState<'all' | BotCategory>('all')
   const [selected, setSelected] = useState<string | null>(null)
   const [strategies, setStrategies] = useState<StrategyMeta[]>([])
+  const [portfolioModels, setPortfolioModels] = useState<PortfolioModelMeta[]>([])
   const [status, setStatus] = useState<{ halted: boolean; scheduler: { running: boolean; last_tick: string | null } } | null>(null)
-  const [creating, setCreating] = useState<Partial<BotInput> | null>(null)
+  const [creating, setCreating] = useState<(Partial<BotInput> & { category?: BotCategory }) | null>(null)
   const [resumeOtp, setResumeOtp] = useState('')
   const [error, setError] = useState<{ code: string; message: string } | null>(null)
 
@@ -231,8 +346,9 @@ export default function AutoTradePage() {
 
   useEffect(() => {
     quantApi.strategies().then((r) => setStrategies(r.items)).catch(() => undefined)
+    quantApi.portfolioModels().then((r) => setPortfolioModels(r.items)).catch(() => undefined)
     load()
-    const prefill = sessionStorage.getItem(PREFILL_KEY) // from Quant Lab: "이 설정으로 봇 만들기"
+    const prefill = sessionStorage.getItem(PREFILL_KEY) // from Quant Lab: single or portfolio
     if (prefill) {
       sessionStorage.removeItem(PREFILL_KEY)
       setCreating(JSON.parse(prefill))
@@ -241,12 +357,16 @@ export default function AutoTradePage() {
     return () => window.clearInterval(t)
   }, [load])
 
+  const visibleBots = filter === 'all' ? bots : bots.filter((b) => b.category === filter)
   useEffect(() => {
-    if (!selected && bots.length) setSelected(bots[0].id)
-  }, [bots, selected])
+    if ((!selected || !visibleBots.some((b) => b.id === selected)) && visibleBots.length) {
+      setSelected(visibleBots[0].id)
+    }
+  }, [visibleBots, selected])
 
   const upsert = (b: Bot) => setBots((list) => (list.some((x) => x.id === b.id) ? list.map((x) => (x.id === b.id ? b : x)) : [...list, b]))
-  const current = bots.find((b) => b.id === selected)
+  const current = visibleBots.find((b) => b.id === selected) ?? bots.find((b) => b.id === selected)
+  const countOf = (c: BotCategory) => bots.filter((b) => b.category === c).length
 
   return (
     <div className="autotrade">
@@ -275,41 +395,58 @@ export default function AutoTradePage() {
             load()
           }}>■ 전체 중지</button>
         )}
-        <button className="primary" onClick={() => setCreating({})}>+ 봇 만들기</button>
+        <button className="primary" onClick={() => setCreating({ category: filter === 'all' ? 'swing' : filter, ...(filter === 'rebalance' ? { kind: 'rebalance' } : {}) })}>
+          + 봇 만들기
+        </button>
       </div>
+
+      <div className="tabs" style={{ marginBottom: 10 }}>
+        <button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>전체 {bots.length}</button>
+        <button className={filter === 'swing' ? 'active' : ''} onClick={() => setFilter('swing')}>스윙봇 {countOf('swing')}</button>
+        <button className={filter === 'daytrade' ? 'active' : ''} onClick={() => setFilter('daytrade')}>단타봇 {countOf('daytrade')}</button>
+        <button className={filter === 'rebalance' ? 'active' : ''} onClick={() => setFilter('rebalance')}>리밸런싱 봇 {countOf('rebalance')}</button>
+      </div>
+
       {error?.code === 'toss_credentials_required' && <p className="placeholder">토스증권 API 키가 필요합니다. <Link to="/settings">설정에서 등록하기 →</Link></p>}
 
       <div className="autotrade-body">
         <aside className="bot-list">
-          {bots.map((b) => {
+          {visibleBots.map((b) => {
             const p = botPnl(b)
+            const heldCount = b.kind === 'rebalance'
+              ? Object.values(b.state.positions ?? {}).filter((x) => x.qty > 0).length
+              : b.state.position.qty
+            const heldLabel = b.kind === 'rebalance'
+              ? (heldCount ? `${heldCount}종목 보유` : '미구성')
+              : (heldCount ? `${heldCount}주 보유` : '미보유')
             return (
               <button key={b.id} className={`bot-item ${b.id === selected ? 'active' : ''}`} onClick={() => setSelected(b.id)}>
                 <div className="bot-item-top">
                   <b>{b.name}</b>
+                  <span className={`cat-badge ${b.category}`}>{CAT_LABEL[b.category]}</span>
                   <span className={`mode-badge ${b.mode}`}>{b.mode === 'paper' ? '모의' : '실거래'}</span>
                 </div>
                 <div className="bot-item-sub small">
-                  <span className={`dot ${b.enabled ? 'on' : ''}`} /> {b.enabled ? '켜짐' : '꺼짐'} · {b.state.position.qty ? `${b.state.position.qty}주 보유` : '미보유'}
+                  <span className={`dot ${b.enabled ? 'on' : ''}`} /> {b.enabled ? '켜짐' : '꺼짐'} · {heldLabel}
                   <span className={`spacer-r ${cls(p)}`}>{pct(p)}</span>
                 </div>
               </button>
             )
           })}
-          {!bots.length && (
+          {!visibleBots.length && (
             <p className="muted small">
-              아직 봇이 없습니다. <b>+ 봇 만들기</b>로 시작하거나, 퀀트 랩 백테스트 결과에서 <b>이 설정으로 봇 만들기</b>를 누르세요.
+              {bots.length ? '이 카테고리에 만든 봇이 없습니다.' : <>아직 봇이 없습니다. <b>+ 봇 만들기</b>로 스윙·단타·리밸런싱 봇을 시작하거나, 퀀트 랩에서 바로 생성하세요.</>}
             </p>
           )}
         </aside>
         {current ? (
-          <BotDetail bot={current} strategies={strategies} onChanged={upsert}
+          <BotDetail bot={current} strategies={strategies} portfolioModels={portfolioModels} onChanged={upsert}
                      onDeleted={() => { setBots((l) => l.filter((x) => x.id !== current.id)); setSelected(null) }} />
         ) : <div className="placeholder muted">봇을 선택하세요.</div>}
       </div>
 
       {creating && strategies.length > 0 && (
-        <BotForm strategies={strategies} initial={creating} onClose={() => setCreating(null)}
+        <BotForm strategies={strategies} portfolioModels={portfolioModels} initial={creating} onClose={() => setCreating(null)}
                  onSubmit={async (b) => { const r = await autotradeApi.create(b); upsert(r.bot); setSelected(r.bot.id) }} />
       )}
     </div>

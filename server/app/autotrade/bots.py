@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 from ..errors import ApiError
 from ..market.models import Market
+from ..quant import portfolio
 from ..quant.strategies import STRATEGIES, StrategyParamError
 from ..storage import get_store
 from ..users.repository import now_iso
@@ -19,17 +20,87 @@ MAX_EVENTS_PER_BOT = 300
 SYMBOL_RE = {"KR": re.compile(r"[0-9A-Z]{6}"), "US": re.compile(r"[A-Z][A-Z0-9.\-]{0,11}")}
 
 
+def bot_kind(bot: dict) -> str:
+    return bot.get("kind") or "single"
+
+
+def bot_category(bot: dict) -> str:
+    if bot_kind(bot) == "rebalance":
+        return "rebalance"
+    cls = STRATEGIES.get(bot.get("strategy", ""))
+    return getattr(cls, "category", "swing") if cls else "swing"
+
+
+def bot_timeframe(bot: dict) -> str:
+    if bot_kind(bot) == "rebalance":
+        return "1d"
+    cls = STRATEGIES.get(bot.get("strategy", ""))
+    return getattr(cls, "timeframe", "1d") if cls else "1d"
+
+
 def empty_state(capital: float) -> dict:
     return {"position": {"qty": 0, "entry_price": 0.0, "entry_date": None}, "cash": capital, "pending": [],
             "trades": [], "equity": [], "last_run_date": None, "last_price": None, "last_reconcile": None}
 
 
+def empty_rebalance_state(capital: float) -> dict:
+    return {"positions": {}, "cash": capital, "realized": 0.0, "pending": [], "rebalances": [],
+            "trades": [], "equity": [], "last_run_date": None, "last_rebalance_date": None,
+            "target_weights": {}, "last_prices": {}, "last_reconcile": None}
+
+
+def has_open_position(bot: dict, mode: Optional[str] = None) -> bool:
+    modes = (mode,) if mode else ("paper", "live")
+    if bot_kind(bot) == "rebalance":
+        return any(
+            any(int(p.get("qty") or 0) > 0 for p in (bot["state"][m].get("positions") or {}).values())
+            for m in modes
+        )
+    return any(bot["state"][m]["position"]["qty"] > 0 for m in modes)
+
+
 def validate(body: dict, existing: Optional[dict] = None) -> dict:
     src = {**(existing or {}), **body}
+    kind = str(src.get("kind") or "single")
+    if kind not in ("single", "rebalance"):
+        raise ApiError(400, "invalid_kind")
     try:
         market = Market(str(src.get("market", "")).upper()).value
     except ValueError:
         raise ApiError(400, "invalid_market")
+    try:
+        capital = float(src.get("capital"))
+    except (TypeError, ValueError):
+        raise ApiError(400, "invalid_capital", "운용 자금을 숫자로 입력하세요")
+    if capital <= 0:
+        raise ApiError(400, "invalid_capital", "운용 자금은 0보다 커야 합니다")
+
+    if kind == "rebalance":
+        model = portfolio.PORTFOLIO_MODELS.get(src.get("model"))
+        if model is None:
+            raise ApiError(400, "unknown_model", "알 수 없는 리밸런싱 이론입니다")
+        try:
+            params = model.resolve(src.get("params") or {})
+        except StrategyParamError as e:
+            raise ApiError(400, "invalid_params", str(e))
+        assets = portfolio.validate_assets(market, src.get("assets") or model.presets.get(market), model)
+        rebalance = str(src.get("rebalance") or model.default_rebalance)
+        if rebalance not in portfolio.REBALANCE_MODES:
+            raise ApiError(400, "invalid_rebalance")
+        try:
+            drift_pct = float(src.get("drift_pct", 5.0))
+        except (TypeError, ValueError):
+            raise ApiError(400, "invalid_number", "허용 편차를 숫자로 입력하세요")
+        if not 0.5 <= drift_pct <= 50.0:
+            raise ApiError(400, "out_of_range", "허용 편차는 0.5 ~ 50% 범위여야 합니다")
+        name = str(src.get("name") or f"{model.name} ({market})")[:60]
+        return {
+            "kind": "rebalance", "category": "rebalance", "timeframe": "1d",
+            "name": name, "market": market, "symbol": ",".join(a["symbol"] for a in assets),
+            "model": model.id, "assets": assets, "rebalance": rebalance, "drift_pct": drift_pct,
+            "params": params, "capital": capital,
+        }
+
     symbol = str(src.get("symbol", "")).strip().upper()
     if not SYMBOL_RE[market].fullmatch(symbol):
         raise ApiError(400, "invalid_symbol")
@@ -40,14 +111,11 @@ def validate(body: dict, existing: Optional[dict] = None) -> dict:
         params = cls(src.get("params") or {}).p
     except StrategyParamError as e:
         raise ApiError(400, "invalid_params", str(e))
-    try:
-        capital = float(src.get("capital"))
-    except (TypeError, ValueError):
-        raise ApiError(400, "invalid_capital", "운용 자금을 숫자로 입력하세요")
-    if capital <= 0:
-        raise ApiError(400, "invalid_capital", "운용 자금은 0보다 커야 합니다")
     name = str(src.get("name") or f"{cls.name} · {symbol}")[:60]
-    return {"name": name, "market": market, "symbol": symbol, "strategy": cls.id, "params": params, "capital": capital}
+    return {
+        "kind": "single", "category": cls.category, "timeframe": cls.timeframe,
+        "name": name, "market": market, "symbol": symbol, "strategy": cls.id, "params": params, "capital": capital,
+    }
 
 
 def create(uid: str, body: dict) -> dict:
@@ -55,8 +123,9 @@ def create(uid: str, body: dict) -> dict:
         raise ApiError(400, "too_many_bots", f"봇은 최대 {MAX_BOTS}개까지 만들 수 있습니다")
     fields = validate(body)
     bot_id = uuid.uuid4().hex[:12]
+    init_state = empty_rebalance_state if fields["kind"] == "rebalance" else empty_state
     rec = {**fields, "user_id": uid, "mode": "paper", "enabled": False, "created_at": now_iso(), "updated_at": now_iso(),
-           "state": {"paper": empty_state(fields["capital"]), "live": empty_state(fields["capital"])}}
+           "state": {"paper": init_state(fields["capital"]), "live": init_state(fields["capital"])}}
     return get_store().put(BOTS, bot_id, rec)
 
 
@@ -111,7 +180,32 @@ def events(bot: dict, limit: int = 100) -> list:
 
 def public(bot: dict) -> dict:
     out = {k: v for k, v in bot.items() if k != "state"}
+    out["kind"] = bot_kind(bot)
+    out["category"] = bot_category(bot)
+    out["timeframe"] = bot_timeframe(bot)
     st = state(bot)
+    if out["kind"] == "rebalance":
+        positions = st.get("positions") or {}
+        last_prices = st.get("last_prices") or {}
+        pos_val = sum(
+            int(p.get("qty") or 0) * float(last_prices.get(sym, p.get("entry_price") or 0.0))
+            for sym, p in positions.items()
+        )
+        out["state"] = {
+            "position": {"qty": sum(int(p.get("qty") or 0) for p in positions.values()), "entry_price": 0.0, "entry_date": None},
+            "positions": positions,
+            "pending": st["pending"],
+            "last_run_date": st["last_run_date"],
+            "last_rebalance_date": st.get("last_rebalance_date"),
+            "target_weights": st.get("target_weights") or {},
+            "last_prices": last_prices,
+            "last_price": pos_val,
+            "rebalances": (st.get("rebalances") or [])[-30:],
+            "trades": [],
+            "equity": st["equity"][-400:],
+            **({"cash": st["cash"], "equity_now": st["cash"] + pos_val} if bot["mode"] == "paper" else {}),
+        }
+        return out
     pos = st["position"]
     price = st.get("last_price") or pos.get("entry_price") or 0.0
     out["state"] = {

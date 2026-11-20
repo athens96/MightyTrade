@@ -38,7 +38,13 @@ SELL_SETTLE_INTERVAL = 0.5
 EOD_FLATTEN = timedelta(minutes=10)  # flatten intraday daytrade positions before regular close
 
 
+def is_rebalance(bot: dict) -> bool:
+    return bots.bot_kind(bot) == "rebalance"
+
+
 def is_intraday(bot: dict) -> bool:
+    if is_rebalance(bot):
+        return False
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return cls is not None and getattr(cls, "timeframe", "1d") != "1d"
 
@@ -148,6 +154,9 @@ def decide_intraday(bot: dict, today: str, loaded: Optional[tuple] = None) -> di
 
 
 def preview(bot: dict, today: str) -> dict:
+    if is_rebalance(bot):
+        from . import rebalance as rebal
+        return rebal.preview(bot, today)
     d = decide_intraday(bot, today) if is_intraday(bot) else decide(bot, today)
     tb = d["today_bar"]
     return {
@@ -347,6 +356,9 @@ def _apply_live_fill(st: dict, side: str, qty: float, avg: float, date: str,
 
 def reconcile_live(bot: dict, today: str) -> bool:
     """Pull fills of the bot's own orders from Toss into its position. Returns True if anything changed."""
+    if is_rebalance(bot):
+        from . import rebalance as rebal
+        return rebal.reconcile_live(bot, today)
     st = bot["state"]["live"]
     if not st["pending"]:
         return False
@@ -530,6 +542,9 @@ def run_live(bot: dict, today: str) -> dict:
 
 
 def run(bot: dict, today: str) -> dict:
+    if is_rebalance(bot):
+        from . import rebalance as rebal
+        return rebal.run(bot, today)
     return run_paper(bot, today) if bot["mode"] == "paper" else run_live(bot, today)
 
 

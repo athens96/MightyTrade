@@ -101,7 +101,7 @@ def delete_user(user_id: str):
     otp.verify(users.get_user(g.user["id"]) or g.user, str(body.get("otp_code", "")))
 
     user_bots = bots.list_for(u["id"])
-    live_open = [b for b in user_bots if b["state"]["live"]["position"]["qty"] > 0 or b["state"]["live"]["pending"]]
+    live_open = [b for b in user_bots if bots.has_open_position(b, "live") or b["state"]["live"]["pending"]]
     if live_open and not body.get("force"):
         raise ApiError(409, "live_positions", f"실거래 봇 {len(live_open)}개에 보유·미체결 주문이 있습니다. "
                                               "사용자가 정리한 뒤 삭제하세요 (토스 계좌의 주문·보유는 삭제와 무관하게 남습니다)")

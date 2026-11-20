@@ -84,11 +84,12 @@ def get_bot(bot_id: str):
 def update_bot(bot_id: str):
     bot = bots.get(g.user["id"], bot_id)
     body = request.get_json(silent=True) or {}
-    holding = any(bot["state"][m]["position"]["qty"] > 0 for m in ("paper", "live"))
-    if holding and any(k in body and body[k] != bot.get(k) for k in ("market", "symbol", "strategy")):
-        raise ApiError(409, "bot_has_position", "보유 중인 봇은 종목·전략을 바꿀 수 없습니다")
+    holding = bots.has_open_position(bot)
+    locked_keys = ("market", "model", "assets") if bots.bot_kind(bot) == "rebalance" else ("market", "symbol", "strategy")
+    if holding and any(k in body and body[k] != bot.get(k) for k in locked_keys):
+        raise ApiError(409, "bot_has_position", "보유 중인 봇은 종목·전략(이론)을 바꿀 수 없습니다")
     fields = bots.validate(body, bot)
-    if fields["capital"] != bot["capital"] and bot["state"]["paper"]["position"]["qty"] == 0:
+    if fields["capital"] != bot["capital"] and not bots.has_open_position(bot, "paper"):
         bot["state"]["paper"]["cash"] += fields["capital"] - bot["capital"]
     bot.update(fields)
     bots.log(bot, "config", "설정이 변경되었습니다")
@@ -100,7 +101,7 @@ def update_bot(bot_id: str):
 def delete_bot(bot_id: str):
     bot = bots.get(g.user["id"], bot_id)
     live = bot["state"]["live"]
-    if live["position"]["qty"] > 0 or live["pending"]:
+    if bots.has_open_position(bot, "live") or live["pending"]:
         raise ApiError(409, "bot_has_position", "실거래 보유분이나 미체결 주문이 있는 봇은 삭제할 수 없습니다")
     bots.delete(bot_id)
     return jsonify(ok=True)
@@ -175,6 +176,8 @@ def reset(bot_id: str):
     bot = bots.get(g.user["id"], bot_id)
     if bot["mode"] != "paper":
         raise ApiError(400, "paper_only", "모의 모드 기록만 초기화할 수 있습니다")
-    bot["state"]["paper"] = bots.empty_state(bot["capital"])
+    bot["state"]["paper"] = (
+        bots.empty_rebalance_state(bot["capital"]) if bots.bot_kind(bot) == "rebalance" else bots.empty_state(bot["capital"])
+    )
     bots.log(bot, "config", "모의 기록 초기화")
     return jsonify(bot=bots.public(bots.save(bot)))
