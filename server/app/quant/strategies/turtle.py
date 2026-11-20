@@ -39,11 +39,17 @@ class Turtle(Strategy):
     def on_bar(self, i: int, ctx: Context) -> list:
         pos = ctx.position
         if pos.is_open:
-            n_entry = self.atr[pos.entry_index - 1] or 0.0  # N known when the entry was decided
-            hard_stop = pos.entry_price - self.p["stop_atr"] * n_entry
-            channel = self.ll[i] if self.ll[i] is not None else hard_stop
-            level = max(channel, hard_stop)
-            why = f"{self.p['exit']}일 신저가" if channel >= hard_stop else f"{self.p['stop_atr']:g}N 손절"
+            n_entry = pos.entry_atr
+            if n_entry is None and 0 < pos.entry_index <= len(self.atr):
+                n_entry = self.atr[pos.entry_index - 1]
+            hard_stop = pos.entry_price - self.p["stop_atr"] * n_entry if n_entry else None
+            channel = self.ll[i]
+            if hard_stop is None and channel is None:
+                return []
+            if hard_stop is None or (channel is not None and channel >= hard_stop):
+                level, why = channel, f"{self.p['exit']}일 신저가"
+            else:
+                level, why = hard_stop, f"{self.p['stop_atr']:g}N 손절"
             return [Order("sell", kind="stop", stop=level, reason=why)]
         hh, n = self.hh[i], self.atr[i]
         if hh is None or not n:

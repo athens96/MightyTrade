@@ -126,6 +126,26 @@ def test_turtle_sizes_by_atr_risk():
     assert t["qty"] == math.floor(1e12 * 0.01 / n)
 
 
+def test_turtle_guards_nonpositive_entry_index_and_uses_entry_atr():
+    from app.quant.engine import Context, Position
+    # ATR grows drastically at the end; entry_index <= 0 must NEVER wrap around to self.atr[-1]
+    opens = [100] * 30 + [100, 120, 140, 160, 180]
+    highs = [101] * 30 + [105, 140, 160, 200, 220]
+    lows = [99] * 30 + [95, 110, 130, 150, 160]
+    closes = [100] * 30 + [104, 135, 155, 195, 210]
+    b = make_bars(opens, highs, lows, closes)
+    s = Turtle({"entry": 10, "exit": 5, "atr_n": 5, "stop_atr": 2, "risk_pct": 1})
+    s.prepare(b)
+    last = len(b) - 1
+    # entry_index = 0 or -1 without entry_atr -> falls back to Donchian exit channel (no negative-index wrap)
+    for bad_idx in (0, -1):
+        orders = s.on_bar(last, Context(Position(10, 100.0, bad_idx), 0.0, 2100.0))
+        assert len(orders) == 1 and orders[0].stop == s.ll[last] and "신저가" in orders[0].reason
+    # explicit entry_atr overrides missing entry_index
+    orders = s.on_bar(last, Context(Position(10, 200.0, -1, entry_atr=2.0), 0.0, 2100.0))
+    assert len(orders) == 1 and orders[0].stop == pytest.approx(196.0) and "손절" in orders[0].reason
+
+
 def test_param_validation():
     from app.quant.strategies import StrategyParamError
     with pytest.raises(StrategyParamError):

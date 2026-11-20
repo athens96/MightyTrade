@@ -57,6 +57,7 @@ class Position:
     qty: float = 0.0
     entry_price: float = 0.0
     entry_index: int = -1
+    entry_atr: Optional[float] = None
 
     @property
     def is_open(self) -> bool:

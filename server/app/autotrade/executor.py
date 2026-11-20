@@ -40,11 +40,31 @@ def day_of(t: int) -> str:
 
 
 # ------------------------------------------------------------------ decide (pure)
+def _strategy_atr(strat: Any) -> Optional[float]:
+    atr = getattr(strat, "atr", None)
+    if isinstance(atr, list) and atr and atr[-1] is not None:
+        return float(atr[-1])
+    return None
+
+
+def _load_start(bot: dict, strat: Any) -> int:
+    """History start timestamp: enough bars before today AND before an open position's entry_date."""
+    anchor = time.time()
+    pos = bots.state(bot)["position"]
+    if pos.get("qty", 0) > 0 and pos.get("entry_date"):
+        try:
+            entry_ts = datetime.fromisoformat(pos["entry_date"]).replace(tzinfo=timezone.utc).timestamp()
+            anchor = min(anchor, entry_ts)
+        except ValueError:
+            pass
+    return int(anchor - (strat.warmup() * 1.6 + 40) * 86400)
+
+
 def load(bot: dict, today: str) -> tuple:
     cls = STRATEGIES[bot["strategy"]]
     strat = cls(bot["params"])
     market = Market(bot["market"])
-    start = int(time.time() - (strat.warmup() * 1.6 + 40) * 86400)
+    start = _load_start(bot, strat)
     candles = get_provider(market).get_history(market, bot["symbol"], Interval.D1, start)
     past = [c for c in candles if day_of(c.time) < today]
     today_bar = next((c for c in candles if day_of(c.time) == today), None)
@@ -61,14 +81,20 @@ def decide(bot: dict, today: str, loaded: Optional[tuple] = None) -> dict:
     entry_index = -1
     if pos["qty"] > 0:
         days = [day_of(t) for t in bars.time]
-        entry_index = min(bisect.bisect_left(days, pos.get("entry_date") or days[-1]), len(days) - 1)
-    position = Position(pos["qty"], pos["entry_price"], entry_index)
+        entry_date = pos.get("entry_date")
+        if entry_date is None:
+            entry_index = len(days) - 1
+        elif entry_date < days[0]:
+            entry_index = -1  # entry predates loaded history: avoid wrapping to negative index
+        else:
+            entry_index = bisect.bisect_left(days, entry_date)
+    position = Position(pos["qty"], pos["entry_price"], entry_index, entry_atr=st.get("entry_atr"))
     last = today_bar.close if today_bar else bars.close[-1]
     cash = st["cash"] if bot["mode"] == "paper" else max(bot["capital"] - pos["qty"] * pos["entry_price"], 0.0)
     strat.prepare(bars)
     planned = strat.on_bar(len(bars) - 1, Context(position, cash, cash + pos["qty"] * last)) or []
     return {"date": today, "bar_date": day_of(bars.time[-1]), "orders": planned, "today_bar": today_bar,
-            "candles": candles, "position": pos, "cash": cash, "last": last}
+            "candles": candles, "position": pos, "cash": cash, "last": last, "entry_atr": _strategy_atr(strat)}
 
 
 def describe(o: Order, today_open: Optional[float]) -> str:
@@ -102,12 +128,15 @@ def _costs(market: Market) -> Costs:
 
 
 # ------------------------------------------------------------------ paper
-def _paper_buy(st: dict, qty: int, price: float, c: Costs, date: str, reason: str) -> None:
+def _paper_buy(st: dict, qty: int, price: float, c: Costs, date: str, reason: str,
+               entry_atr: Optional[float] = None) -> None:
     px = price * (1 + c.slippage_pct / 100)
     value = qty * px
     fee = value * c.commission_pct / 100
     st["cash"] -= value + fee
     st["position"] = {"qty": qty, "entry_price": px, "entry_date": date}
+    if entry_atr is not None:
+        st["entry_atr"] = entry_atr
     st["trades"].append({"entry_date": date, "entry_price": px, "qty": qty, "entry_reason": reason, "cost_basis": value + fee,
                          "exit_date": None, "exit_price": None, "exit_reason": "", "pnl": None, "return_pct": None})
 
@@ -123,6 +152,7 @@ def _paper_sell(st: dict, price: float, c: Costs, date: str, reason: str) -> Non
         t.update(exit_date=date, exit_price=px, exit_reason=reason, pnl=net - t["cost_basis"],
                  return_pct=(net / t["cost_basis"] - 1) * 100)
     st["position"] = {"qty": 0, "entry_price": 0.0, "entry_date": None}
+    st.pop("entry_atr", None)
 
 
 def _paper_qty(st: dict, o: Order, price: float, c: Costs) -> int:
@@ -147,7 +177,7 @@ def settle_paper(bot: dict, candles: list, today: str, c: Costs) -> None:
             fill = max(bar.open, level)
             qty = _paper_qty(st, Order("buy", qty=p.get("qty")), fill, c)
             if qty > 0:
-                _paper_buy(st, qty, fill, c, p["active_date"], p["reason"])
+                _paper_buy(st, qty, fill, c, p["active_date"], p["reason"], entry_atr=p.get("entry_atr"))
                 bots.log(bot, "fill", f"[모의] 매수 체결 {qty}주 @ {fill:,.2f} ({p['active_date']} 조건 충족)")
         elif p["side"] == "sell" and holding and bar.low <= level:
             fill = min(bar.open, level)
@@ -179,7 +209,7 @@ def run_paper(bot: dict, today: str) -> dict:
                 if qty <= 0:
                     bots.log(bot, "skip", "[모의] 자금 부족으로 매수하지 못했습니다", "warn")
                     continue
-                _paper_buy(st, qty, o_open, c, today, o.reason)
+                _paper_buy(st, qty, o_open, c, today, o.reason, entry_atr=d["entry_atr"])
                 bots.log(bot, "fill", f"[모의] 매수 체결 {qty}주 @ 시가 {o_open:,.2f} — {o.reason}")
             else:
                 _paper_sell(st, o_open, c, today, o.reason)
@@ -191,13 +221,16 @@ def run_paper(bot: dict, today: str) -> dict:
                 if o.side == "buy":
                     qty = _paper_qty(st, o, o_open, c)
                     if qty > 0:
-                        _paper_buy(st, qty, o_open, c, today, o.reason)
+                        _paper_buy(st, qty, o_open, c, today, o.reason, entry_atr=d["entry_atr"])
                         bots.log(bot, "fill", f"[모의] 시가가 기준가를 넘어 시가 {o_open:,.2f}에 매수 {qty}주 — {o.reason}")
                 else:
                     _paper_sell(st, o_open, c, today, o.reason)
                     bots.log(bot, "fill", f"[모의] 시가가 기준가 아래라 시가 {o_open:,.2f}에 매도 — {o.reason}")
             else:
-                st["pending"].append({"active_date": today, "side": o.side, "level": level, "qty": o.qty, "reason": o.reason})
+                st["pending"].append({
+                    "active_date": today, "side": o.side, "level": level, "qty": o.qty, "reason": o.reason,
+                    **({"entry_atr": d["entry_atr"]} if o.side == "buy" and d["entry_atr"] is not None else {}),
+                })
                 bots.log(bot, "order", f"[모의] {describe(o, o_open)} (오늘 하루 유효)")
     if not d["orders"]:
         bots.log(bot, "decision", f"[모의] {d['bar_date']} 종가 기준 신호 없음")
@@ -214,13 +247,16 @@ def _client_order_id(bot: dict, today: str, n: int, tag: str) -> str:
     return hashlib.sha256(f"{bot['id']}:{today}:{n}:{tag}".encode()).hexdigest()[:32]
 
 
-def _apply_live_fill(st: dict, side: str, qty: float, avg: float, date: str) -> None:
+def _apply_live_fill(st: dict, side: str, qty: float, avg: float, date: str,
+                     entry_atr: Optional[float] = None) -> None:
     pos = st["position"]
     if side == "BUY":
         new_qty = pos["qty"] + qty
         pos["entry_price"] = (pos["qty"] * pos["entry_price"] + qty * avg) / new_qty
         if pos["qty"] == 0:
             pos["entry_date"] = date
+            if entry_atr is not None:
+                st["entry_atr"] = entry_atr
             st["trades"].append({"entry_date": date, "entry_price": avg, "qty": qty, "entry_reason": "",
                                  "exit_date": None, "exit_price": None, "exit_reason": "", "pnl": None, "return_pct": None})
         pos["qty"] = new_qty
@@ -235,6 +271,7 @@ def _apply_live_fill(st: dict, side: str, qty: float, avg: float, date: str) -> 
                      return_pct=(avg / t["entry_price"] - 1) * 100)
         if pos["qty"] == 0:
             pos.update(entry_price=0.0, entry_date=None)
+            st.pop("entry_atr", None)
 
 
 def reconcile_live(bot: dict, today: str) -> bool:
@@ -263,7 +300,7 @@ def reconcile_live(bot: dict, today: str) -> bool:
             filled = ex.get("filledQuantity") or 0.0
             delta = filled - p.get("synced", 0.0)
             if delta > 0 and ex.get("averageFilledPrice"):
-                _apply_live_fill(st, p["side"], delta, ex["averageFilledPrice"], today)
+                _apply_live_fill(st, p["side"], delta, ex["averageFilledPrice"], today, entry_atr=p.get("entry_atr"))
                 p["synced"] = filled
                 changed = True
                 bots.log(bot, "fill", f"{'매수' if p['side'] == 'BUY' else '매도'} 체결 {delta:g}주 @ {ex['averageFilledPrice']:,.2f}")
@@ -349,14 +386,15 @@ def run_live(bot: dict, today: str) -> dict:
                 continue
             crossed = level is not None and ((side == "BUY" and max(today_bar.open, current) >= level)
                                              or (side == "SELL" and min(today_bar.open, current) <= level))
+            extra = {"entry_atr": d["entry_atr"]} if side == "BUY" and d["entry_atr"] is not None else {}
             if o.kind == "market" or crossed:
                 r = _send_market(bot, side, qty, current, _client_order_id(bot, today, n, "mkt"))
-                st["pending"].append({"kind": "order", "id": r["orderId"], "side": side, "date": today, "synced": 0.0})
+                st["pending"].append({"kind": "order", "id": r["orderId"], "side": side, "date": today, "synced": 0.0, **extra})
                 bots.log(bot, "order", f"{'매수' if side == 'BUY' else '매도'} 시장가 {qty}주 주문 — {o.reason}")
                 expect_holding = side == "BUY"
             else:
                 r = _send_conditional(bot, side, qty, level, today, _client_order_id(bot, today, n, "cond"))
-                st["pending"].append({"kind": "conditional", "id": r["conditionalOrderId"], "side": side, "date": today, "synced": 0.0})
+                st["pending"].append({"kind": "conditional", "id": r["conditionalOrderId"], "side": side, "date": today, "synced": 0.0, **extra})
                 bots.log(bot, "order", f"{describe(o, today_bar.open)} → 조건주문 {qty}주 (오늘 하루 유효)")
         except ApiError as e:
             bots.log(bot, "error", f"주문 실패: {e.message}", "error", {"code": e.code})

@@ -129,6 +129,40 @@ def test_paper_needs_todays_open(env):
     assert e.value.code == "market_not_open"
 
 
+def test_turtle_long_held_position_loads_from_entry_date_and_stores_entry_atr(env):
+    """Holding past the default warmup window fetches back to entry_date and avoids negative-index ATR wrap."""
+    seen_starts = []
+    # 90 business days up to 2026-11-20
+    all_days = [d for d in (date(2026, 7, 1) + timedelta(days=i) for i in range(150))
+                if d.weekday() < 5 and d <= date(2026, 11, 20)]
+    long_candles = [Candle(day_ts(d), 100 + i, 102 + i, 98 + i, 101 + i, 1000) for i, d in enumerate(all_days)]
+
+    class RecordingProvider:
+        def get_history(self, market, symbol, interval, start):
+            seen_starts.append(start)
+            return [c for c in long_candles if c.time >= start]
+
+    env["provider"] = RecordingProvider()
+    bot = bots.create("u1", {"market": "KR", "symbol": "005930", "strategy": "turtle",
+                             "params": {"entry": 10, "exit": 5, "atr_n": 5, "stop_atr": 2, "risk_pct": 1}, "capital": 100_000})
+    # Pretend the bot entered 3+ months ago without entry_atr stored (legacy position)
+    entry_d = all_days[20].isoformat()
+    bot["state"]["paper"]["position"] = {"qty": 10, "entry_price": 120.0, "entry_date": entry_d}
+    bots.save(bot)
+    d = executor.decide(reload(bot), all_days[-1].isoformat())
+    # History start was pulled back before entry_date + warmup
+    assert seen_starts[-1] < day_ts(all_days[20]) - 20 * 86400
+    assert len(d["orders"]) == 1 and d["orders"][0].side == "sell"
+    # Even if provider truncates history before entry_date, entry_atr is respected without wrapping to atr[-1]
+    env["provider"] = FakeProvider(long_candles[-25:])
+    bot = reload(bot)
+    bot["state"]["paper"]["entry_atr"] = 1.5
+    bot["state"]["paper"]["position"]["entry_price"] = 250.0
+    bots.save(bot)
+    d2 = executor.decide(reload(bot), all_days[-1].isoformat())
+    assert d2["orders"][0].stop == pytest.approx(247.0)  # 250 - 2 * 1.5
+
+
 # ------------------------------------------------------------------ live
 @pytest.fixture
 def toss(env, monkeypatch):
