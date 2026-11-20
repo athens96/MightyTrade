@@ -1,4 +1,6 @@
 import { useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { PREFILL_KEY } from '../../api/autotrade'
 import type { BacktestResult } from '../../api/quant'
 import { priceFormatter } from '../chart/format'
 import TradingChart, { type ChartMarker } from '../chart/TradingChart'
@@ -21,11 +23,20 @@ export default function BacktestView({ result, title }: { result: BacktestResult
     ])
   }, [result])
   const indicators = useMemo(() => sanitize(result.chart_indicators), [result])
+  const navigate = useNavigate()
+  const makeBot = () => {
+    sessionStorage.setItem(PREFILL_KEY, JSON.stringify({ market: result.market, symbol: result.symbol, strategy: result.strategy, params: result.params }))
+    navigate('/auto')
+  }
 
   return (
     <>
       <div className="result-head">
-        <h3>{title}</h3>
+        <div className="account-head">
+          <h3>{title}</h3>
+          <div className="spacer" />
+          <button className="primary" onClick={makeBot} title="모의 모드로 시작합니다">이 설정으로 봇 만들기 →</button>
+        </div>
         <span className="muted">
           {day(result.period.start)} ~ {day(result.period.end)} · 초기 자본 {money(result.capital)} {result.currency} ·{' '}
           {Object.entries(result.params).map(([k, v]) => `${k}=${v}`).join(', ')}

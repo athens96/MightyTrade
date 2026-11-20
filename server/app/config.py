@@ -46,6 +46,8 @@ class Config:
     TRADING_MAX_ORDERS_PER_DAY = int(os.getenv("TRADING_MAX_ORDERS_PER_DAY", "50"))
     TRADING_MAX_ORDER_KRW = float(os.getenv("TRADING_MAX_ORDER_KRW", "50000000"))  # per order
     TRADING_MAX_ORDER_USD = float(os.getenv("TRADING_MAX_ORDER_USD", "50000"))
+    # Auto-trading scheduler (one per server; see app/autotrade/scheduler.py)
+    AUTOTRADE_SCHEDULER = _bool("AUTOTRADE_SCHEDULER", True)
 
 
 class DevelopmentConfig(Config):
@@ -59,6 +61,7 @@ class ProductionConfig(Config):
 
 class TestingConfig(Config):
     TESTING = True
+    AUTOTRADE_SCHEDULER = False
 
 
 def get_config(name: str | None = None) -> type[Config]:

@@ -233,3 +233,29 @@ input[type=checkbox] { width: auto; letter-spacing: normal; }
 .toast { background: #161b22; border: 1px solid #30363d; border-left: 4px solid #2ea043; border-radius: 6px; padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 16px rgba(0,0,0,.4); }
 .toast.warn { border-left-color: #f0b429; }
 .toast.error { border-left-color: #f85149; }
+button.primary { background: #2f81f7; border-color: #2f81f7; }
+button.danger:not(:disabled) { background: #3a1517; }
+.autotrade { padding: 16px 20px; height: calc(100vh - 53px); display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+.autotrade-head h2 { margin: 0; }
+.autotrade-body { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; min-height: 0; flex: 1; }
+.bot-list { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+.bot-item { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 10px; background: #111418; }
+.bot-item.active { border-color: #2f81f7; background: #161b22; }
+.bot-item-top { display: flex; justify-content: space-between; gap: 8px; }
+.bot-item-sub { display: flex; align-items: center; gap: 5px; color: #8b949e; }
+.spacer-r { margin-left: auto; }
+.mode-badge { font-size: 11px; padding: 1px 7px; border-radius: 9px; border: 1px solid #30363d; color: #8b949e; white-space: nowrap; }
+.mode-badge.live { color: #f85149; border-color: #6e2a27; }
+.state-badge { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: #21262d; color: #8b949e; }
+.state-badge.on { background: #12361f; color: #3fb950; }
+.bot-detail { overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
+.bot-detail h3 { margin: 0; font-size: 17px; }
+.bot-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.panel ul { margin: 4px 0; padding-left: 18px; }
+.live-panel { border-color: #6e2a27; }
+.bot-log { max-height: 280px; overflow-y: auto; border: 1px solid #21262d; border-radius: 8px; font-size: 12px; }
+.log-row { display: flex; gap: 8px; padding: 5px 8px; border-bottom: 1px solid #161b22; align-items: baseline; }
+.log-row.warn { color: #f0b429; }
+.log-row.error { color: #f85149; }
+b.plain { color: #e6edf3; }
+.svg-chart svg.spark { height: 130px; }
