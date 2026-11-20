@@ -11,6 +11,7 @@ import { settingsApi, type Settings } from '../api/settings'
 import IndicatorPanel from '../components/chart/IndicatorPanel'
 import TradingChart from '../components/chart/TradingChart'
 import { DEFAULT_INDICATORS, sanitize, type IndicatorConfig } from '../indicators/registry'
+import { investingUrl } from '../lib/externalLinks'
 
 const INTERVALS: Interval[] = ['1m', '5m', '15m', '1h', '1d', '1w']
 const REFRESH_MS = 15_000
@@ -189,7 +190,7 @@ export default function DashboardPage() {
         <div className="search">
           <input
             className="search-input"
-            placeholder={market === 'KR' ? '종목명 / 코드 검색' : '티커 / 한글명 검색'}
+            placeholder={market === 'KR' ? '종목명 / 코드 검색' : '티커 / 영문명 / 한글명 검색'}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -199,7 +200,10 @@ export default function DashboardPage() {
               {!searching && results.length === 0 && <li className="muted">결과 없음</li>}
               {results.map((r) => (
                 <li key={r.symbol} onClick={() => addItem(r)}>
-                  <span>{r.name}</span>
+                  <span>
+                    {r.name}
+                    {r.english_name && r.english_name !== r.name && <span className="muted small"> · {r.english_name}</span>}
+                  </span>
                   <span className="muted">{r.symbol} · {r.exchange}</span>
                 </li>
               ))}
@@ -240,6 +244,11 @@ export default function DashboardPage() {
         <MarketBar />
         <div className="chart-header">
           <h2>{selected ? `${selected.name} (${selected.symbol})` : '종목을 선택하세요'}</h2>
+          {selected && (
+            <a className="ext-link" href={investingUrl(selected.market, selected.symbol)} target="_blank" rel="noopener noreferrer" title="Investing.com에서 종목 정보 보기">
+              Investing ↗
+            </a>
+          )}
           {shown && (
             <span className={shown.change >= 0 ? 'up' : 'down'}>
               {fmt(shown.price)} {shown.currency} ({shown.change >= 0 ? '+' : ''}

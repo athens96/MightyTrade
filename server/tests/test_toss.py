@@ -234,6 +234,27 @@ def test_stock_list_single_flight_dedupes_concurrent_fetches(app, provider, monk
         assert len([c for c in s.calls if c[1] == "/api/v1/stocks/all"]) == 3
 
 
+def test_us_search_enriches_english_names_via_stocks_batch(app, provider, monkeypatch):
+    monkeypatch.setattr("app.market.providers.toss.time.sleep", lambda s: None)
+    with app.app_context():
+        us_all = [
+            {"symbol": "AAPL", "name": "애플", "market": "NASDAQ"},  # no englishName in /stocks/all
+            {"symbol": "NVDA", "name": "엔비디아", "market": "NASDAQ"},
+        ]
+        us_details = [
+            {"symbol": "AAPL", "name": "애플", "englishName": "Apple Inc."},
+            {"symbol": "NVDA", "name": "엔비디아", "englishName": "NVIDIA Corporation"},
+        ]
+        p, s = provider({
+            ("GET", "/api/v1/stocks/all"): [ok(us_all), ok([]), ok([]), ok([])],
+            ("GET", "/api/v1/stocks"): [ok(us_details)],
+        })
+        hits = p.search(Market.US, "nvidia")
+        assert [i.symbol for i in hits] == ["NVDA"] and hits[0].english_name == "NVIDIA Corporation"
+        assert [i.symbol for i in p.search(Market.US, "apple")] == ["AAPL"]
+        assert len([c for c in s.calls if c[1] == "/api/v1/stocks"]) == 1
+
+
 def test_batch_quotes_one_price_call_and_per_symbol_errors(app, provider):
     with app.app_context():
         p, s = provider({

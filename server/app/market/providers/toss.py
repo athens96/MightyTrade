@@ -22,6 +22,10 @@ HISTORY_TTL = 300
 CANDLE_TTL = {"1m": 10, "1d": 60}   # seconds, in-process cache
 STOCK_LIST_TTL = 12 * 3600
 SEARCH_LIMIT = 30
+STOCK_DETAIL_BATCH = 200       # Toss /api/v1/stocks batch size
+STOCK_DETAIL_SYNC_LIMIT = 400  # enrich first 2 batches synchronously, rest in background
+STOCK_DETAIL_PACE = 0.25       # seconds between background batch calls
+MAX_CANDLE_CACHE = 512
 
 # Toss has no market param: the symbol decides the market. Validate so KR/US tabs can't mix.
 SYMBOL_RE = {Market.KR: re.compile(r"[0-9A-Z]{6}"), Market.US: re.compile(r"[A-Z][A-Z0-9.\-]{0,11}")}
@@ -97,6 +101,9 @@ class TossProvider(MarketDataProvider):
         candles = sorted({c.time: c for c in out}.values(), key=lambda c: c.time)
         with self._lock:
             self._candle_cache = {k: v for k, v in self._candle_cache.items() if v[0] > now}
+            if len(self._candle_cache) >= MAX_CANDLE_CACHE:
+                oldest = min(self._candle_cache, key=lambda k: self._candle_cache[k][0])
+                self._candle_cache.pop(oldest, None)
             self._candle_cache[key] = (now + CANDLE_TTL[base], candles)
         return candles
 
@@ -185,6 +192,35 @@ class TossProvider(MarketDataProvider):
             currency=p.get("currency") or ("KRW" if market == Market.KR else "USD"), time=ts,
         )
 
+    def _enrich_chunk(self, client: Any, chunk: list[Instrument]) -> None:
+        by_sym = {it.symbol: it for it in chunk}
+        try:
+            rows = client.request("GET", "/api/v1/stocks", params={"symbols": ",".join(by_sym)}) or []
+        except ApiError:
+            return
+        for row in rows:
+            inst = by_sym.get(row.get("symbol", ""))
+            eng = (row.get("englishName") or "").strip()
+            if inst is not None and eng:
+                inst.english_name = eng
+
+    def _enrich_us_english_names(self, client: Any, items: list[Instrument]) -> None:
+        """Toss /stocks/all omits englishName for US stocks; backfill via /stocks batch calls."""
+        missing = [it for it in items if not it.english_name]
+        if not missing:
+            return
+        sync_part = missing[:STOCK_DETAIL_SYNC_LIMIT]
+        bg_part = missing[STOCK_DETAIL_SYNC_LIMIT:]
+        for i in range(0, len(sync_part), STOCK_DETAIL_BATCH):
+            self._enrich_chunk(client, sync_part[i : i + STOCK_DETAIL_BATCH])
+        if bg_part:
+            def _bg() -> None:
+                for i in range(0, len(bg_part), STOCK_DETAIL_BATCH):
+                    if STOCK_DETAIL_PACE > 0:
+                        time.sleep(STOCK_DETAIL_PACE)
+                    self._enrich_chunk(client, bg_part[i : i + STOCK_DETAIL_BATCH])
+            threading.Thread(target=_bg, name="toss-us-names", daemon=True).start()
+
     def _stock_list(self, market: Market) -> list[Instrument]:
         key = (_uid(), market)
         now = time.time()
@@ -208,6 +244,8 @@ class TossProvider(MarketDataProvider):
                 for s in client.request("GET", "/api/v1/stocks/all", params={"market": m, "status": "ACTIVE"}) or []:
                     items.append(Instrument(market, s["symbol"], s.get("name") or s.get("englishName") or "",
                                             s.get("market", m), s.get("englishName") or ""))
+            if market == Market.US:
+                self._enrich_us_english_names(client, items)
             done = time.time()
             with self._lock:
                 self._stocks = {k: v for k, v in self._stocks.items() if v[0] > done}

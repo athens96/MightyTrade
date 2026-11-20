@@ -4,14 +4,12 @@ from flask import current_app
 
 from .models import Market
 from .providers.base import MarketDataProvider
-from .providers.investing import InvestingProvider
 from .providers.mock import MockProvider
 from .providers.toss import TossProvider
 
 PROVIDERS: dict[str, type[MarketDataProvider]] = {
     "mock": MockProvider,
     "toss": TossProvider,
-    "investing": InvestingProvider,
 }
 
 

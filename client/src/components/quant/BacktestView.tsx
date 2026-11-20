@@ -6,6 +6,7 @@ import type { BacktestResult } from '../../api/quant'
 import { priceFormatter } from '../chart/format'
 import TradingChart, { type ChartMarker } from '../chart/TradingChart'
 import { DOWN, UP, sanitize } from '../../indicators/registry'
+import { investingUrl } from '../../lib/externalLinks'
 import EquityChart from './EquityChart'
 import MetricsTable from './MetricsTable'
 import TradesTable from './TradesTable'
@@ -36,6 +37,9 @@ export default function BacktestView({ result, title }: { result: BacktestResult
       <div className="result-head">
         <div className="account-head">
           <h3>{title}</h3>
+          <a className="ext-link" href={investingUrl(result.market, result.symbol)} target="_blank" rel="noopener noreferrer" title="Investing.com에서 종목 정보 보기">
+            Investing ↗
+          </a>
           <div className="spacer" />
           <button className="primary" onClick={makeBot} title="모의 모드로 시작합니다">이 설정으로 봇 만들기 →</button>
         </div>
