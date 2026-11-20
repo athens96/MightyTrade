@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4fc3f7"/>
+      <stop offset="1" stop-color="#1e88e5"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="31" fill="#1565c0"/>
+  <circle cx="32" cy="32" r="27" fill="url(#sky)"/>
+  <!-- superhero shield, like the Mighty Code emblem: red with a yellow rim and a dark cartoon outline -->
+  <path d="M11 23 L19.5 13.5 H44.5 L53 23 L32 54 Z" fill="none" stroke="#0d1b2a" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M11 23 L19.5 13.5 H44.5 L53 23 L32 54 Z" fill="#e53935" stroke="#ffd54f" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M20.5 39 V22 L32 33 L43.5 22 V39" fill="none" stroke="#0d1b2a" stroke-width="7.5" stroke-linejoin="round" stroke-linecap="round"/><path d="M20.5 39 V22 L32 33 L43.5 22 V39" fill="none" stroke="#ffd54f" stroke-width="4.5" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

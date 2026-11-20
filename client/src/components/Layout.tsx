@@ -44,7 +44,10 @@ export default function Layout() {
           <NavLink to="/settings">설정</NavLink>
           {isAdmin && <NavLink to="/admin">관리자{badge}</NavLink>}
         </nav>
-        <strong className="brand">Mighty Trade</strong>
+        <strong className="brand">
+          <img src="/favicon.svg" alt="" width={24} height={24} />
+          <span>Mighty Trade</span>
+        </strong>
         <div className="topbar-right">
           <span className="muted desktop-only">{user?.email}</span>
           <button className="desktop-only" onClick={logout}>로그아웃</button>
