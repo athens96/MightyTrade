@@ -17,7 +17,8 @@ server/app/
 ├── transport_crypto.py  클라→서버 비밀값 전송 암호화 (RSA-OAEP-256 + AES-256-GCM)
 ├── storage/             저장소 추상화
 │   ├── base.py            Store 인터페이스 (get/put/delete/find)
-│   └── json_store.py      파일 DB 구현 (컬렉션당 JSON 파일, 파일락 + 원자적 쓰기)
+│   ├── json_store.py      파일 DB 구현 (컬렉션당 JSON 파일, 파일락 + 원자적 쓰기)
+│   └── sqlite_store.py    SQLite(WAL) 구현 + JSON→SQLite 마이그레이션 유틸리티
 ├── auth/                구글 로그인 + OTP (2단계 세션)
 │   ├── google.py          Google ID 토큰 검증, 허용 이메일 체크
 │   ├── otp.py             TOTP 등록/검증, 실패 횟수 잠금
@@ -33,26 +34,28 @@ server/app/
 │   ├── models.py          Market(KR/US), Interval, Candle, Quote
 │   ├── registry.py        시장별 provider 선택 (MARKET_PROVIDER_KR/US)
 │   ├── aggregate.py       1m→5m/15m/1h, 1d→1w 봉 집계
-│   ├── providers/         mock / toss(시세·차트·검색) / investing(TODO)
+│   ├── providers/         mock / toss(시세·차트·검색 + US 영문명 배치 보강)
 │   ├── extras.py          토스 전용: 지수, 장 운영 상태, 투자경고/VI, 투자자 수급, 호가 스냅샷
 │   └── routes.py          /api/market/candles, /quote(s), /search, /overview, /warnings, /investor-flow, /orderbook
-├── quant/               퀀트 연구 (백테스트)
+├── quant/               퀀트 연구 (백테스트 · 포트폴리오)
 │   ├── indicators.py      지표 계산 (클라이언트 TS와 동일 결과, shared/fixtures로 검증)
-│   ├── engine.py          백테스트 엔진: 종가 판단 → 다음 봉 체결, 시장가/스톱, 수수료·세금·슬리피지
+│   ├── engine.py          백테스트 엔진: 종가 판단 → 다음 봉 체결, 시장가/지정가/스톱, 수수료·세금·슬리피지
 │   ├── metrics.py         CAGR, MDD, 샤프/소르티노/칼마, 승률, 손익비 …
 │   ├── optimize.py        파라미터 격자 탐색 (최소 매매 수, 주변 평균으로 안정성 평가)
 │   ├── walkforward.py     워크포워드 검증 (롤링/누적, 검증 구간만 이어붙인 수익곡선, WFE)
 │   ├── montecarlo.py      매매 부트스트랩/셔플 → 수익률·MDD 분포, 손실 확률
-│   ├── worker.py          최적화·워크포워드·몬테카를로용 spawn 프로세스 풀 (GIL 격리)
-│   ├── strategies/        전략 (백테스트·실전 공용 인터페이스): 이평 크로스, 변동성 돌파, RSI(2), 볼린저, 터틀
-│   └── routes.py          /api/quant/strategies, /defaults, /backtest, /optimize, /walkforward, /montecarlo
+│   ├── portfolio.py       멀티자산 자산배분 6종(올웨더·60/40·1/N·리스크패리티·듀얼모멘텀·VAA) 리밸런싱 엔진
+│   ├── worker.py          최적화·워크포워드·몬테카를로·포트폴리오용 spawn 프로세스 풀 (GIL 격리)
+│   ├── strategies/        스윙 7종(이평·터틀·MACD·볼린저·RSI2·IBS·TSMOM) + 단타 4종(변동성돌파·갭회귀·ORB·VWAP)
+│   └── routes.py          /api/quant/strategies, /defaults, /backtest, /optimize, /walkforward, /montecarlo, /portfolio/*
 ├── trading/             주문: 미리보기→OTP 잠금 해제(30분)→전송, 호가단위·상하한가·잔고 검증, 일일/건당 한도, 감사 기록
 │   ├── orders.py          주문 검증·전송·조회·취소·정정, 잠금/한도
 │   ├── ticks.py           KRX/US 호가 단위 반올림·포맷
 │   └── routes.py          /api/trading/*
-└── autotrade/           자동매매 봇: 모의(기본)/실거래, 스케줄러(정규장 시작 1분 뒤), 중복 주문 방지, 체결 반영, 전체 중지
-    ├── bots.py            봇 설정·상태·이벤트 로그 저장
-    ├── executor.py        모의/실거래 1일 스텝 실행, 체결 정산
+└── autotrade/           자동매매 봇: 스윙봇·단타봇(일봉/분봉)·리밸런싱 봇, 모의(기본)/실거래, 전체 중지
+    ├── bots.py            단일·멀티자산 봇 설정·상태·이벤트 로그 저장
+    ├── executor.py        스윙(일봉)·단타(5m/15m 분봉 + 장마감 청산) 모의/실거래 실행
+    ├── rebalance.py       멀티자산 리밸런싱 봇(매도 우선 체결 → 매수) 모의/실거래 실행
     ├── scheduler.py       정규장 스케줄러 (파일 락으로 서버당 1개)
     └── routes.py          /api/autotrade/*
 
@@ -148,20 +151,23 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 - 전송은 **거래 잠금 해제**(OTP, 기본 30분) 상태에서만. 취소는 잠금 없이 가능, 정정은 잠금 필요.
 - 한도: 하루 주문 수, 주문 1건 금액(`.env`의 `TRADING_*`). 모든 주문은 `orders` 컬렉션에 기록.
 
-**자동매매** (메뉴 → 자동매매, 또는 퀀트 랩 백테스트 → "이 설정으로 봇 만들기")
-- 봇 = 종목 + 퀀트 랩 전략 + 파라미터 + 운용 자금. 만들면 **모의 모드·꺼짐**.
-- 매일 정규장 시작 1분 뒤 전날 종가까지의 일봉으로 판단(백테스트와 동일 규칙). 장 마감 1시간 전 이후 시작이면 그날은 건너뜀.
-  - 시장가 신호 → 모의: 오늘 시가 체결 / 실거래: 시장가 주문
-  - 돌파·손절 신호 → 모의: 다음 실행 때 그날 고가·저가로 정산 / 실거래: 토스 조건주문(SINGLE, 당일 유효), 이미 돌파했으면 시장가
-- 실거래 전환은 OTP + 확인 필요, 전환 시 꺼짐. 실거래 주문도 계정 한도를 따르고 매수는 체결 여유 0.5%를 둠.
-- 중복 방지: 실행일을 주문 전에 저장(장애 시 하루를 건너뛸 뿐 두 번 주문하지 않음) + 봇·날짜 기반 고정 clientOrderId.
+**자동매매** (메뉴 → 자동매매, 또는 퀀트 랩 백테스트/포트폴리오 → "봇 만들기")
+- **스윙봇 (7종)**: 이평 크로스(다우 이론), 터틀(돈치안+ATR 사이징), MACD 추세+ATR 추적손절, 볼린저 회귀, RSI(2) 평균회귀, IBS 내부봉 회귀, 시계열 모멘텀(TSMOM·변동성 타겟팅). 매일 정규장 시작 1분 뒤 전일 종가 기준 실행.
+- **단타봇 (4종)**: 변동성 돌파(래리 윌리엄스), 오프닝 갭 회귀(지정가), 오프닝 레인지 돌파(ORB, 15분봉), VWAP 밴드 평균회귀(5분봉). 분봉 단타봇은 봉 마감마다 실행하며 **장 마감 10분 전 강제 청산**.
+- **리밸런싱 봇 (6종)**: 올웨더(레이 달리오), 60/40 클래식(MPT), 동일 비중(1/N), 리스크 패리티(역변동성), 글로벌 듀얼 모멘텀(GEM), VAA(13612W 카나리아). 월/분기/연 정기 또는 비중 편차 이탈 시 **매도 우선 체결 → 매수** 순서로 자동 리밸런싱.
+- 만들면 **모의 모드·꺼짐**. 실거래 전환은 OTP + 확인 필요, 전환 시 꺼짐. 실거래 주문도 계정 한도를 따르고 매수는 체결 여유 0.5%를 둠.
+- 중복 방지: 실행일(분봉은 봉 시각)을 주문 전에 저장 + 봇·날짜·종목 기반 고정 clientOrderId.
 - **전체 중지**: 모든 봇 정지 + 봇이 낸 미체결 주문 취소. 재개는 OTP.
-- 스케줄러는 서빙 프로세스 안에서 돌고 파일 잠금으로 서버당 하나만 실행(개발 서버 리로더 감시 프로세스에서는 미실행).
+- 스케줄러는 서빙 프로세스 안에서 돌고 파일 잠금으로 서버당 하나만 실행(개발 서버 리로더 감시 프로세스·스폰 워커에서는 미실행).
 - 토스는 모의투자 환경이 없음: 실거래 경로는 가짜 응답 테스트로 검증됨. 처음에는 작은 운용 자금으로 시작할 것.
 
-## 저장소 교체 (파일 DB → Supabase 등)
+## 저장소 교체 (`json` → `sqlite`)
 
-비즈니스 코드는 `get_store()`만 사용. `storage/base.py`의 `Store`를 구현한 클래스를 추가하고 `STORAGE_BACKEND`로 선택하면 됨. 컬렉션: `users`, `watchlists`, `settings`, `orders`, `strategies`.
+비즈니스 코드는 `get_store()`만 사용. `.env`에서 `STORAGE_BACKEND=sqlite`로 지정하면 SQLite(WAL 모드, `DATA_DIR/mighty_trade.db`)로 동작하며, 기존 JSON 데이터는 아래 명령으로 1회 이관 가능:
+
+```bash
+cd server && .venv/bin/python -m app.storage.sqlite_store ./data
+```
 
 ## 배포 (Oracle Cloud)
 
@@ -184,11 +190,11 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 - [x] 토스 시세·차트·종목검색 (`TossProvider`)
 - [x] 토스 계좌 조회 (보유종목·매수가능금액), 조건주문 OCO 익절/손절
 - [x] 일반 주문 (지정가/시장가, 정정·취소, 실시간 체결 알림)
-- [x] 자동매매 봇 (모의/실거래)
-- [ ] 미국 종목 영문명 검색 (`/stocks/all`에 englishName 없음 → `/stocks` 배치 조회 필요)
-- [ ] investing.com 데이터 수집 방식 결정 (공식 API 없음 — 이용약관 확인 필요)
+- [x] 자동매매 봇 (스윙봇·단타봇·리밸런싱 봇, 모의/실거래)
+- [x] 미국 종목 영문명 검색 (`/stocks` 배치 조회로 백필)
+- [x] investing.com 종목 바로가기 링크 제공 (외부 링크로 전환, 미구현 프로바이더 제거)
 - [x] 주문 API (검증 → 리스크 체크 → 브로커 → 저장)
-- [x] 퀀트 랩 1단계: 단일 종목 일봉 백테스트 + 전략 5개
+- [x] 퀀트 랩 1단계: 단일 종목 백테스트 + 스윙 7종·단타 4종
 - [x] 퀀트 2단계: 파라미터 최적화 히트맵, 워크포워드, 몬테카를로
-- [ ] 퀀트 3단계: ETF 자산배분/듀얼모멘텀 (포트폴리오, 리밸런싱)
-- [ ] 저장소 백엔드 결정 (Supabase 유력)
+- [x] 퀀트 3단계: ETF 자산배분/듀얼모멘텀/VAA/리스크패리티/올웨더 (포트폴리오, 리밸런싱)
+- [x] 저장소 백엔드: SQLite(WAL 모드) + JSON→SQLite 마이그레이션 유틸리티
