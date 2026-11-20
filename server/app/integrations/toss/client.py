@@ -103,6 +103,10 @@ class TossClient:
                 self._token, self._expires_at = token, exp
                 return token
 
+    def access_token(self, rejected: Optional[str] = None) -> str:
+        """Shared token for other transports (WebSocket). Pass the token Toss rejected to force a refresh."""
+        return self._get_token(force_refresh=rejected is not None, rejected=rejected)
+
     # -------------------------------------------------------------- request
     def request(
         self,

@@ -1,7 +1,28 @@
 import { api } from './client'
 import type { Candle, Instrument, Interval, Market, Quote, WatchItem, WatchQuote } from './types'
 
+export interface IndexQuote { symbol: string; price: number; change: number; change_pct: number }
+export interface SessionStatus {
+  open: boolean
+  session: string | null
+  label: string
+  until?: string
+  next?: { session: string; label: string; at: string } | null
+}
+export interface StockWarning { type: string; label: string; level: 'warning' | 'serious' | 'critical'; start?: string; end?: string }
+export interface FlowRecord { date: string; individual: number | null; foreigner: number | null; institution: number | null; foreign_holding_pct: number | null }
+export interface BookLevel { price: number; volume: number }
+export interface OrderBook { timestamp?: string | null; currency: string; asks: BookLevel[]; bids: BookLevel[] }
+export interface Tick { price: number; volume: number; timestamp: string; currency: string }
+
 export const marketApi = {
+  overview: () => api<{ indices: IndexQuote[]; status: Record<'KR' | 'US', SessionStatus> }>('/market/overview'),
+  warnings: (market: Market, symbol: string) =>
+    api<{ items: StockWarning[] }>(`/market/warnings?${new URLSearchParams({ market, symbol })}`),
+  investorFlow: (symbol: string, count = 20) =>
+    api<{ records: FlowRecord[] }>(`/market/investor-flow?${new URLSearchParams({ symbol, count: String(count) })}`),
+  orderbook: (market: Market, symbol: string) =>
+    api<{ orderbook: OrderBook; trades: Tick[] }>(`/market/orderbook?${new URLSearchParams({ market, symbol })}`),
   candles: (market: Market, symbol: string, interval: Interval, limit = 200) =>
     api<{ candles: Candle[]; provider: string }>(
       `/market/candles?${new URLSearchParams({ market, symbol, interval, limit: String(limit) })}`,

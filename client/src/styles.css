@@ -18,7 +18,7 @@ input { background: #0d1117; color: inherit; border: 1px solid #30363d; border-r
 .topbar nav { display: flex; gap: 12px; }
 .topbar nav a { color: #8b949e; text-decoration: none; }
 .topbar nav a.active { color: #e6edf3; }
-.dashboard { display: grid; grid-template-columns: 290px 1fr; height: calc(100vh - 53px); }
+.dashboard { display: grid; grid-template-columns: 290px minmax(0, 1fr) 300px; height: calc(100vh - 53px); }
 .sidebar { border-right: 1px solid #21262d; padding: 12px; }
 .tabs { display: flex; gap: 6px; }
 .watchlist { list-style: none; padding: 0; margin: 12px 0; }
@@ -29,7 +29,8 @@ input { background: #0d1117; color: inherit; border: 1px solid #30363d; border-r
 .wl-price { font-weight: 600; }
 .watchlist li:hover, .watchlist li.active { background: #161b22; }
 .chart-panel { display: flex; flex-direction: column; padding: 12px 16px; min-width: 0; }
-.chart-header { display: flex; align-items: center; gap: 12px; }
+.chart-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.chart-header h2, .chart-header > span, .chart-header button { white-space: nowrap; }
 .chart-header h2 { margin: 0; font-size: 18px; }
 .chart { flex: 1; min-height: 400px; }
 .placeholder { padding: 24px; }
@@ -169,6 +170,40 @@ button.link { background: none; border: none; color: #58a6ff; padding: 2px 4px; 
 .oco-preview { border-top: 1px solid #30363d; padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .oco-preview h4 { margin: 0; }
 .oco-preview .metrics td { text-align: left; }
+
+.market-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; font-size: 12px; padding: 0 0 8px; border-bottom: 1px solid #21262d; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.mb-status { display: inline-flex; align-items: center; gap: 4px; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #5c6370; }
+.dot.on, .stream-state.connected .dot { background: #3fb950; }
+.stream-state.reconnecting .dot, .stream-state.connecting .dot { background: #f0b429; }
+.stream-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #8b949e; }
+.badge-warn { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid; }
+.badge-warn.warning { color: #f0b429; border-color: #6b5314; }
+.badge-warn.serious { color: #ec835a; border-color: #6e3a24; }
+.badge-warn.critical { color: #f85149; border-color: #6e2a27; }
+.side-panel { border-left: 1px solid #21262d; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.side-panel .tabs { align-items: center; }
+.orderbook { font-size: 12px; font-variant-numeric: tabular-nums; }
+.ob-row { display: grid; grid-template-columns: 1fr 1.1fr 1fr; align-items: center; height: 28px; }
+.ob-row.ask { background: rgba(62,99,221,0.06); }
+.ob-row.bid { background: rgba(229,72,77,0.06); }
+.ob-vol { position: relative; padding: 0 6px; text-align: left; z-index: 0; }
+.ob-vol.right { text-align: right; }
+.ob-row.ask .ob-vol { text-align: right; }
+.ob-row.bid .ob-vol.right { text-align: left; }
+.ob-vol i { position: absolute; top: 3px; bottom: 3px; z-index: -1; border-radius: 2px; }
+.ob-row.ask .ob-vol i { right: 0; background: rgba(62,99,221,0.55); }
+.ob-row.bid .ob-vol i { left: 0; background: rgba(229,72,77,0.55); }
+.ob-price { text-align: center; font-weight: 600; display: flex; flex-direction: column; line-height: 1.05; }
+.ob-price small { font-size: 9px; font-weight: 400; opacity: .8; }
+.ob-spread { height: 2px; background: #30363d; margin: 2px 0; }
+.ob-total { display: flex; justify-content: space-between; padding-top: 6px; }
+.ticks { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.ticks th { color: #8b949e; font-weight: 500; text-align: right; padding: 3px 4px; border-bottom: 1px solid #21262d; }
+.ticks td { text-align: right; padding: 2px 4px; }
+.ticks th:first-child, .ticks td:first-child { text-align: left; }
+.flow .flow-sum td { font-weight: 600; border-bottom: 1px solid #21262d; }
+
 input[type=checkbox] { width: auto; letter-spacing: normal; }
 .account h4 { margin: 4px 0 0; }
 .trades.left-first td:first-child, .trades.left-first th:first-child { text-align: left; }

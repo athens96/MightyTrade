@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request
 from ..auth.decorators import login_required
 from ..errors import ApiError
 from .models import Interval, Market
+from . import extras
 from .registry import get_provider
 
 bp = Blueprint("market", __name__)
@@ -78,3 +79,32 @@ def search():
         return jsonify(items=[])
     return jsonify(items=[i.to_dict() for i in get_provider(market).search(market, q)])
 
+
+# ------------------------------------------------------------------ Toss-only extras
+@bp.get("/overview")
+@login_required
+def overview():
+    """KOSPI/KOSDAQ + KR/US session status (open/closed, current session, next session)."""
+    return jsonify(extras.overview())
+
+
+@bp.get("/warnings")
+@login_required
+def warnings():
+    market, symbol = _market(), _symbol()
+    return jsonify(items=extras.warnings(market, symbol))
+
+
+@bp.get("/investor-flow")
+@login_required
+def investor_flow():
+    symbol = _symbol()
+    count = min(max(request.args.get("count", 20, type=int), 1), 100)
+    return jsonify(extras.investor_flow(symbol, count))
+
+
+@bp.get("/orderbook")
+@login_required
+def orderbook():
+    market, symbol = _market(), _symbol()
+    return jsonify(extras.orderbook(market, symbol))

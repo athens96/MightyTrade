@@ -7,7 +7,9 @@ After=network.target
 User=ubuntu
 WorkingDirectory=/opt/mighty-trade/server
 EnvironmentFile=/opt/mighty-trade/server/.env
-ExecStart=/opt/mighty-trade/server/.venv/bin/gunicorn -w 2 -b 127.0.0.1:5001 wsgi:app
+# One process with threads: the realtime relay keeps one Toss WebSocket per user in memory (Toss allows
+# only 2 per account), and SSE connections are long-lived — so a single gthread worker, not several workers.
+ExecStart=/opt/mighty-trade/server/.venv/bin/gunicorn --worker-class gthread --workers 1 --threads 32 -b 127.0.0.1:5001 wsgi:app
 Restart=always
 
 [Install]

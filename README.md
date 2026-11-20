@@ -26,13 +26,15 @@ server/app/
 │   └── routes.py          /api/auth/*
 ├── integrations/toss/   토스증권 API 클라이언트 (토큰 공유 캐시, 재발급, 429 재시도, 에러 매핑)
 ├── account/             계좌: 보유종목·손익·매수가능금액, 조건주문(OCO 익절/손절, 기본 드라이런 + OTP)
+├── realtime/            실시간 중계: 사용자별 토스 웹소켓 1개 → 브라우저 SSE (호가 5회/초로 합침)
 ├── users/               계정별 데이터 (관심종목, 설정, 증권사 API 키)
 ├── market/              시세/차트
 │   ├── models.py          Market(KR/US), Interval, Candle, Quote
 │   ├── registry.py        시장별 provider 선택 (MARKET_PROVIDER_KR/US)
 │   ├── aggregate.py       1m→5m/15m/1h, 1d→1w 봉 집계
 │   ├── providers/         mock / toss(시세·차트·검색) / investing(TODO)
-│   └── routes.py          /api/market/candles, /quote, /search
+│   ├── extras.py          토스 전용: 지수, 장 운영 상태, 투자경고/VI, 투자자 수급, 호가 스냅샷
+│   └── routes.py          /api/market/candles, /quote(s), /search, /overview, /warnings, /investor-flow, /orderbook
 ├── quant/               퀀트 연구 (백테스트)
 │   ├── indicators.py      지표 계산 (클라이언트 TS와 동일 결과, shared/fixtures로 검증)
 │   ├── engine.py          백테스트 엔진: 종가 판단 → 다음 봉 체결, 시장가/스톱, 수수료·세금·슬리피지
@@ -107,6 +109,7 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 
 ## 토스증권 API 주의사항
 
+- 실시간 시세는 서버가 중계(토스 웹소켓 → SSE). 운영은 gunicorn **gthread 단일 워커**로 실행(`deploy/mighty-trade-api.service`), nginx는 `/api/realtime/` 버퍼링 끔(`deploy/nginx.conf`).
 - 조건주문(OCO)은 실제 주문: 기본은 미리보기(드라이런), 실제 전송은 확인 체크 + 1회용 OTP 필요. 국내는 KRX 정규장에서만 발동.
 
 - 허용 IP 등록 필수 (WTS > 설정 > Open API > 허용 IP 관리). 운영 서버는 고정(예약) 공인 IP 사용.

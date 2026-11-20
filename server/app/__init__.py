@@ -28,6 +28,7 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
     from .auth.routes import bp as auth_bp
     from .market.routes import bp as market_bp
     from .quant.routes import bp as quant_bp
+    from .realtime.routes import bp as realtime_bp
     from .trading.routes import bp as trading_bp
     from .users.routes import bp as users_bp
 
@@ -37,6 +38,7 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
     app.register_blueprint(trading_bp, url_prefix="/api/trading")
     app.register_blueprint(quant_bp, url_prefix="/api/quant")
     app.register_blueprint(account_bp, url_prefix="/api/account")
+    app.register_blueprint(realtime_bp, url_prefix="/api/realtime")
 
     register_error_handlers(app)
 

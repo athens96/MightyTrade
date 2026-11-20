@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
-import { marketApi } from '../api/market'
+import { marketApi, type StockWarning } from '../api/market'
+import MarketBar from '../components/dashboard/MarketBar'
+import SidePanel from '../components/dashboard/SidePanel'
+import { useRealtime } from '../hooks/useRealtime'
 import type { Candle, Instrument, Interval, Market, Quote, WatchItem, WatchQuote } from '../api/types'
 import { priceFormatter } from '../components/chart/format'
 import { settingsApi, type Settings } from '../api/settings'
@@ -21,6 +24,7 @@ export default function DashboardPage() {
   const [interval, setChartInterval] = useState<Interval>('1d')
   const [candles, setCandles] = useState<Candle[]>([])
   const [quote, setQuote] = useState<Quote | null>(null)
+  const [warnings, setWarnings] = useState<StockWarning[]>([])
   const [provider, setProvider] = useState('')
   const [error, setError] = useState('')
   const [needsKey, setNeedsKey] = useState(false)
@@ -157,6 +161,20 @@ export default function DashboardPage() {
 
   const fmt = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 })
 
+  // Live orderbook/ticks for the selected symbol; the latest tick also drives the header price.
+  const live = useRealtime(selected?.market, selected?.symbol)
+  const prevClose = quote ? quote.price - quote.change : null
+  const lastTick = live.ticks[0]
+  const shown = quote && lastTick && prevClose
+    ? { ...quote, price: lastTick.price, change: lastTick.price - prevClose, change_pct: (lastTick.price / prevClose - 1) * 100 }
+    : quote
+
+  useEffect(() => {
+    setWarnings([])
+    if (!selected) return
+    marketApi.warnings(selected.market, selected.symbol).then((r) => setWarnings(r.items)).catch(() => undefined)
+  }, [selected])
+
   return (
     <div className="dashboard">
       <aside className="sidebar">
@@ -219,15 +237,21 @@ export default function DashboardPage() {
       </aside>
 
       <section className="chart-panel">
+        <MarketBar />
         <div className="chart-header">
           <h2>{selected ? `${selected.name} (${selected.symbol})` : '종목을 선택하세요'}</h2>
-          {quote && (
-            <span className={quote.change >= 0 ? 'up' : 'down'}>
-              {fmt(quote.price)} {quote.currency} ({quote.change >= 0 ? '+' : ''}
-              {fmt(quote.change)}, {quote.change >= 0 ? '+' : ''}
-              {fmt(quote.change_pct)}%)
+          {shown && (
+            <span className={shown.change >= 0 ? 'up' : 'down'}>
+              {fmt(shown.price)} {shown.currency} ({shown.change >= 0 ? '+' : ''}
+              {fmt(shown.change)}, {shown.change >= 0 ? '+' : ''}
+              {fmt(shown.change_pct)}%)
             </span>
           )}
+          {warnings.map((w) => (
+            <span key={w.type} className={`badge-warn ${w.level}`} title={w.end ? `${w.start ?? ''} ~ ${w.end}` : w.start ?? ''}>
+              ⚠ {w.label}
+            </span>
+          ))}
           <div className="spacer" />
           <IndicatorPanel value={indicators} onChange={changeIndicators} />
           <div className="tabs">
@@ -254,6 +278,9 @@ export default function DashboardPage() {
         />
         <p className="muted small">data: {provider}</p>
       </section>
+      {selected && (
+        <SidePanel market={selected.market} symbol={selected.symbol} book={live.book} ticks={live.ticks} state={live.state} prevClose={prevClose} />
+      )}
     </div>
   )
 }
