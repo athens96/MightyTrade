@@ -14,7 +14,10 @@ input { background: #0d1117; color: inherit; border: 1px solid #30363d; border-r
 .center { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
 .card form { display: flex; gap: 8px; }
 .qr { background: #fff; padding: 12px; border-radius: 8px; }
-.topbar { display: flex; align-items: center; gap: 16px; padding: 10px 20px; border-bottom: 1px solid #21262d; }
+.topbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 10px 20px; border-bottom: 1px solid #21262d; }
+.topbar-left { grid-column: 1; min-width: 0; }
+.topbar .brand { grid-column: 2; text-align: center; font-size: 18px; letter-spacing: 0.02em; white-space: nowrap; }
+.topbar-right { grid-column: 3; display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
 .topbar nav { display: flex; gap: 12px; }
 .topbar nav a { color: #8b949e; text-decoration: none; }
 .topbar nav a.active { color: #e6edf3; }
@@ -272,3 +275,124 @@ b.plain { color: #e6edf3; }
 .status-badge.rejected { color: #f85149; background: #3a1517; }
 .admin-users td.actions { display: flex; gap: 6px; justify-content: flex-end; }
 .admin-users td.actions button { padding: 3px 10px; font-size: 12px; }
+
+/* ======================================================================
+   Responsive. Desktop rules above stay as-is; these only kick in on
+   narrower screens. Tablet <= 1100px, mobile <= 768px.
+   ====================================================================== */
+.mobile-only { display: none !important; }
+.trades-wrap { overflow-x: auto; }
+.trades th { white-space: nowrap; }
+/* stacked columns: children keep their natural height (scrolling tables must not be squeezed) */
+.bot-detail > *, .quant-results > *, .account > * { flex-shrink: 0; }
+main { min-width: 0; }
+
+@media (max-width: 1100px) {
+  /* dashboard: orderbook/order/flow panel moves under the chart */
+  .dashboard { grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: auto auto; height: auto; min-height: calc(100vh - 53px); }
+  .dashboard .chart-panel { min-height: 620px; }
+  .side-panel { grid-column: 1 / -1; border-left: none; border-top: 1px solid #21262d; }
+  .result-grid { grid-template-columns: 1fr; }
+  .stat-tiles { grid-template-columns: repeat(2, 1fr); }
+  .autotrade-body { grid-template-columns: 240px minmax(0, 1fr); }
+}
+
+@media (max-width: 768px) {
+  .desktop-only { display: none !important; }
+  .mobile-only { display: flex !important; }
+
+  /* iOS zooms into inputs under 16px: keep form controls at 16px */
+  input, select, textarea { font-size: 16px !important; }
+  button { min-height: 36px; }
+
+  /* app shell: compact header, bottom tab bar, page scrolls naturally */
+  .topbar { padding: 8px 14px; padding-top: max(8px, env(safe-area-inset-top)); position: sticky; top: 0; z-index: 30; background: #0b0d10; }
+  main { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; height: calc(58px + env(safe-area-inset-bottom));
+            padding-bottom: env(safe-area-inset-bottom); background: #0d1117; border-top: 1px solid #21262d; justify-content: space-around; }
+  .tabbar a, .tabbar button { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+                              font-size: 11px; color: #8b949e; text-decoration: none; background: none; border: none; border-radius: 0; padding: 4px 0; }
+  .tabbar a.active, .tabbar button.active { color: #e6edf3; }
+  .tab-icon { font-size: 18px; line-height: 1; }
+  .sheet-backdrop { position: fixed; inset: 0; z-index: 45; background: rgba(0,0,0,.5); align-items: flex-end; }
+  .sheet { width: 100%; background: #161b22; border-top-left-radius: 14px; border-top-right-radius: 14px; padding: 14px 16px calc(74px + env(safe-area-inset-bottom));
+           display: flex; flex-direction: column; gap: 6px; }
+  .sheet a, .sheet button { padding: 12px; border-radius: 8px; color: #e6edf3; text-decoration: none; background: #1c2129; border: none; text-align: left; font-size: 15px; }
+  .sheet-user { display: flex; flex-direction: column; padding: 4px 4px 10px; }
+  .toasts { left: 12px; right: 12px; bottom: calc(70px + env(safe-area-inset-bottom)); }
+
+  /* modals become full-width bottom sheets */
+  .modal-backdrop { align-items: flex-end; }
+  .modal { width: 100%; max-width: 100%; max-height: 92vh; border-radius: 14px 14px 0 0; padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+  .modal-grid { grid-template-columns: 1fr; }
+  .modal-actions { flex-wrap: wrap; }
+
+  /* shared pieces */
+  .stat-tiles { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat-tile b { font-size: 18px; }
+  .account-head { flex-wrap: wrap; gap: 8px; }
+  .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .tabs button { flex: 0 0 auto; }
+  .placeholder { padding: 16px; }
+
+  /* tables marked .cards render as one card per row */
+  table.cards thead { display: none; }
+  table.cards, table.cards tbody { display: block; width: 100%; }
+  table.cards tbody tr { display: block; border: 1px solid #21262d; border-radius: 10px; margin: 8px; padding: 8px 12px; background: #111418; }
+  table.cards td { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border: none; text-align: right; white-space: normal; }
+  table.cards td::before { content: attr(data-label); color: #8b949e; text-align: left; flex: 0 0 auto; }
+  table.cards td.card-title { font-size: 15px; justify-content: flex-start; padding-bottom: 6px; }
+  table.cards td.card-title::before, table.cards td.card-actions::before { content: none; }
+  table.cards td.card-actions { justify-content: flex-end; gap: 8px; padding-top: 6px; border-top: 1px solid #21262d; margin-top: 4px; }
+  table.cards td[colspan] { justify-content: flex-start; }
+  .trades-wrap:has(table.cards) { border: none; max-height: none; overflow: visible; }
+
+  /* ---------------- dashboard ---------------- */
+  .dashboard { display: flex; flex-direction: column; height: auto; min-height: 0; }
+  .sidebar { border-right: none; border-bottom: 1px solid #21262d; padding: 10px 12px; }
+  .watchlist { display: flex; gap: 8px; overflow-x: auto; margin: 10px 0 0; padding-bottom: 2px; scrollbar-width: none; }
+  .watchlist li { flex: 0 0 auto; min-width: 150px; border: 1px solid #21262d; }
+  .watchlist li.active .remove { visibility: visible; }
+  .search-results { max-height: 50vh; }
+  .chart-panel { padding: 10px 8px; }
+  .dashboard .chart-panel { min-height: 0; }
+  .market-bar { flex-wrap: nowrap; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+  .market-bar .spacer { display: none; }
+  .chart-header { gap: 6px 10px; }
+  .chart-header h2 { font-size: 16px; }
+  .chart-header .spacer { display: none; }
+  .chart-header > .tabs { width: 100%; }
+  .chart-wrap { flex: none; height: 440px; min-height: 0; }
+  .legend { font-size: 10.5px; left: 4px; right: 4px; }
+  .indicator-dropdown { position: fixed; left: 8px; right: 8px; top: auto; bottom: calc(66px + env(safe-area-inset-bottom)); width: auto; max-height: 65vh; z-index: 50; }
+  .side-panel { border-top: 1px solid #21262d; padding: 12px; overflow: visible; }
+
+  /* ---------------- quant lab ---------------- */
+  .quant { display: block; height: auto; }
+  .quant-form { border-right: none; border-bottom: 1px solid #21262d; padding: 12px; overflow: visible; }
+  .quant-form.collapsed > :not(h2):not(.form-toggle) { display: none !important; }
+  .form-toggle { text-align: left; font-size: 13px; }
+  .quant-results { overflow: visible; padding: 12px; }
+  .result-grid { grid-template-columns: 1fr; }
+  .equity-chart { height: 340px; min-height: 0; margin-bottom: 10px; }
+  .quant-price-chart { height: 420px; }
+  .pick-cards, .hist-row { grid-template-columns: 1fr; }
+  .heatmap-body { overflow-x: auto; }
+  .heatmap-grid { min-width: max-content; }
+  .heatmap-cell { min-width: 30px; }
+  .result-head .account-head h3 { font-size: 15px; }
+
+  /* ---------------- account / settings / admin ---------------- */
+  .account { height: auto; overflow: visible; padding: 12px; }
+  .settings { padding: 12px; max-width: 100%; }
+  .unlock-bar { width: 100%; }
+  .admin-users td.actions { justify-content: flex-end; }
+
+  /* ---------------- auto trading ---------------- */
+  .autotrade { height: auto; overflow: visible; padding: 12px; }
+  .autotrade-body { display: flex; flex-direction: column; gap: 12px; }
+  .bot-list { flex-direction: row; overflow-x: auto; overflow-y: visible; scrollbar-width: none; }
+  .bot-item { flex: 0 0 auto; min-width: 230px; }
+  .bot-detail { overflow: visible; padding-right: 0; }
+  .bot-detail .account-head h3 { flex: 1 1 100%; }
+}

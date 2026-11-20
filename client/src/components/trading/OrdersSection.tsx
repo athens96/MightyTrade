@@ -56,7 +56,7 @@ export default function OrdersSection({ nameOf }: { nameOf: (symbol: string) => 
       </div>
       {error && <p className="error small">{error}</p>}
       <div className="trades-wrap">
-        <table className="trades left-first">
+        <table className="trades left-first cards">
           <thead>
             <tr><th>종목</th><th>주문 시각</th><th>구분</th><th>가격</th><th>수량</th><th>체결</th><th>상태</th><th /></tr>
           </thead>
@@ -66,14 +66,14 @@ export default function OrdersSection({ nameOf }: { nameOf: (symbol: string) => 
               const open = status === 'OPEN'
               return (
                 <tr key={o.orderId}>
-                  <td><b>{nameOf(o.symbol)}</b> <span className="muted small">{o.symbol}</span></td>
-                  <td className="muted">{time(o.orderedAt)}</td>
-                  <td className={o.side === 'BUY' ? 'up' : 'down'}>{o.side === 'BUY' ? '매수' : '매도'} {o.orderType === 'MARKET' ? '시장가' : '지정가'}</td>
-                  <td>{o.price != null ? fmt(o.price) : '-'}</td>
-                  <td>{o.quantity.toLocaleString()}</td>
-                  <td>{o.execution.filledQuantity ? `${o.execution.filledQuantity.toLocaleString()} @ ${fmt(o.execution.averageFilledPrice ?? 0)}` : '-'}</td>
-                  <td>{ORDER_STATUS[o.status] ?? o.status}</td>
-                  <td>
+                  <td className="card-title"><b>{nameOf(o.symbol)}</b> <span className="muted small">{o.symbol}</span></td>
+                  <td data-label="주문 시각" className="muted">{time(o.orderedAt)}</td>
+                  <td data-label="구분" className={o.side === 'BUY' ? 'up' : 'down'}>{o.side === 'BUY' ? '매수' : '매도'} {o.orderType === 'MARKET' ? '시장가' : '지정가'}</td>
+                  <td data-label="가격">{o.price != null ? fmt(o.price) : '-'}</td>
+                  <td data-label="수량">{o.quantity.toLocaleString()}</td>
+                  <td data-label="체결">{o.execution.filledQuantity ? `${o.execution.filledQuantity.toLocaleString()} @ ${fmt(o.execution.averageFilledPrice ?? 0)}` : '-'}</td>
+                  <td data-label="상태">{ORDER_STATUS[o.status] ?? o.status}</td>
+                  <td className="card-actions">
                     {open && o.orderType === 'LIMIT' && <button className="link" onClick={() => modify(o)}>정정</button>}
                     {open && <button className="link danger-link" onClick={() => confirm('주문을 취소할까요?') && act(() => tradingApi.cancel(o.orderId))}>취소</button>}
                   </td>

@@ -13,7 +13,7 @@ export default function LoginPage() {
 
   return (
     <div className="center card">
-      <h1>MightyTrade</h1>
+      <h1>Mighty Trade</h1>
       <p className="muted">Google 계정으로 로그인하세요. 처음이면 관리자 승인 후 이용할 수 있습니다.</p>
       <GoogleLogin
         onSuccess={async ({ credential }) => {

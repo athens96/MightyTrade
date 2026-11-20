@@ -114,7 +114,7 @@ export default function AdminPage() {
       </p>
       {error && <p className="error">{error}</p>}
       <div className="trades-wrap">
-        <table className="trades left-first admin-users">
+        <table className="trades left-first admin-users cards">
           <thead>
             <tr><th>사용자</th><th>상태</th><th>가입 신청</th><th>마지막 로그인</th><th>OTP</th><th>토스 키</th><th>봇</th><th /></tr>
           </thead>
@@ -124,7 +124,7 @@ export default function AdminPage() {
               const admin = u.role === 'admin'
               return (
                 <tr key={u.id}>
-                  <td>
+                  <td className="card-title">
                     <div className="user-cell">
                       {u.picture ? <img src={u.picture} alt="" referrerPolicy="no-referrer" /> : <span className="avatar">{(u.name ?? u.email ?? '?')[0]}</span>}
                       <div>
@@ -133,13 +133,13 @@ export default function AdminPage() {
                       </div>
                     </div>
                   </td>
-                  <td><span className={`status-badge ${u.status}`}>{STATUS[u.status] ?? u.status}</span></td>
-                  <td className="muted">{when(u.created_at)}</td>
-                  <td className="muted">{when(u.last_login_at)}</td>
-                  <td>{u.otp_enabled ? '등록' : '-'}</td>
-                  <td>{u.has_toss_key ? '등록' : '-'}</td>
-                  <td>{u.bots ? `${u.bots}개${u.live_bots ? ` · 실거래 ${u.live_bots}` : ''}` : '-'}</td>
-                  <td className="actions">
+                  <td data-label="상태"><span className={`status-badge ${u.status}`}>{STATUS[u.status] ?? u.status}</span></td>
+                  <td data-label="가입 신청" className="muted">{when(u.created_at)}</td>
+                  <td data-label="마지막 로그인" className="muted">{when(u.last_login_at)}</td>
+                  <td data-label="OTP">{u.otp_enabled ? '등록' : '-'}</td>
+                  <td data-label="토스 키">{u.has_toss_key ? '등록' : '-'}</td>
+                  <td data-label="봇">{u.bots ? `${u.bots}개${u.live_bots ? ` · 실거래 ${u.live_bots}` : ''}` : '-'}</td>
+                  <td className="card-actions actions">
                     {u.status !== 'approved' && <button className="primary" onClick={() => act(() => adminApi.approve(u.id))}>승인</button>}
                     {!self && !admin && u.status !== 'rejected' && (
                       <button onClick={() => confirm(`${u.email} ${u.status === 'approved' ? '승인을 취소' : '가입을 거절'}할까요?`) && act(() => adminApi.reject(u.id))}>

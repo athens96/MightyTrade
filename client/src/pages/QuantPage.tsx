@@ -14,6 +14,7 @@ import {
   type WalkForwardResult,
 } from '../api/quant'
 import type { Market, WatchItem } from '../api/types'
+import { MOBILE, useMediaQuery } from '../hooks/useMediaQuery'
 import BacktestView from '../components/quant/BacktestView'
 import MonteCarloView from '../components/quant/MonteCarloView'
 import OptimizeView from '../components/quant/OptimizeView'
@@ -100,6 +101,8 @@ export default function QuantPage() {
   const [watchlist, setWatchlist] = useState<WatchItem[]>([])
   const [costs, setCosts] = useState<CostDefaults | null>(null)
   const [running, setRunning] = useState(false)
+  const isMobile = useMediaQuery(MOBILE)
+  const [formOpen, setFormOpen] = useState(true) // mobile: the form folds away after a run to show results
   const [error, setError] = useState('')
   const [results, setResults] = useState<{
     backtest?: BacktestResult
@@ -183,6 +186,7 @@ export default function QuantPage() {
         const r = await quantApi.montecarlo({ ...req, runs: form.runs, method: form.mcMethod })
         setResults((s) => ({ ...s, montecarlo: r }))
       }
+      if (isMobile) setFormOpen(false)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -217,8 +221,13 @@ export default function QuantPage() {
 
   return (
     <div className="quant">
-      <form className="quant-form" onSubmit={submit}>
+      <form className={`quant-form${isMobile && !formOpen ? ' collapsed' : ''}`} onSubmit={submit}>
         <h2>퀀트 랩</h2>
+        {isMobile && (
+          <button type="button" className="form-toggle" onClick={() => setFormOpen((o) => !o)}>
+            {formOpen ? '설정 접기 ▲' : `설정 열기 ▼ · ${MODES.find((m) => m.id === form.mode)?.label} · ${form.symbol} · ${meta?.name ?? ''}`}
+          </button>
+        )}
         <div className="mode-tabs">
           {MODES.map((m) => (
             <button type="button" key={m.id} className={m.id === form.mode ? 'active' : ''} title={m.hint} onClick={() => set('mode', m.id)}>

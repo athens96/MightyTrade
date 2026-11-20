@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { MOBILE, useMediaQuery } from '../../hooks/useMediaQuery'
 import { PREFILL_KEY } from '../../api/autotrade'
 import type { BacktestResult } from '../../api/quant'
 import { priceFormatter } from '../chart/format'
@@ -12,16 +13,17 @@ import TradesTable from './TradesTable'
 export const day = (t: number | null) => (t ? new Date(t * 1000).toISOString().slice(0, 10) : '-')
 
 export default function BacktestView({ result, title }: { result: BacktestResult; title: string }) {
+  const isMobile = useMediaQuery(MOBILE)
   const money = priceFormatter(result.market)
   const markers = useMemo<ChartMarker[]>(() => {
-    const withText = result.trades.length <= 20 // labels only when they won't overlap
+    const withText = result.trades.length <= (isMobile ? 6 : 20) // labels only when they won't overlap
     return result.trades.flatMap((t) => [
       { time: t.entry_time, position: 'belowBar' as const, shape: 'arrowUp' as const, color: UP, text: withText ? '매수' : undefined },
       ...(t.exit_time
         ? [{ time: t.exit_time, position: 'aboveBar' as const, shape: 'arrowDown' as const, color: DOWN, text: withText ? '매도' : undefined }]
         : []),
     ])
-  }, [result])
+  }, [result, isMobile])
   const indicators = useMemo(() => sanitize(result.chart_indicators), [result])
   const navigate = useNavigate()
   const makeBot = () => {

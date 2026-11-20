@@ -115,7 +115,7 @@ export default function AccountPage() {
 
       <h4>보유 종목 ({h?.items.length ?? 0})</h4>
       <div className="trades-wrap">
-        <table className="trades holdings">
+        <table className="trades holdings cards">
           <thead>
             <tr>
               <th>종목</th>
@@ -135,17 +135,17 @@ export default function AccountPage() {
               const r = afterCost ? it.profitLoss.rateAfterCostPct : it.profitLoss.ratePct
               return (
                 <tr key={it.symbol}>
-                  <td>
+                  <td className="card-title">
                     <b>{it.name}</b> <span className="muted small">{it.symbol}</span>
                   </td>
-                  <td>{it.quantity.toLocaleString()}</td>
-                  <td>{money(it.averagePurchasePrice, it.currency)}</td>
-                  <td>{money(it.lastPrice, it.currency)}</td>
-                  <td>{money(afterCost ? it.marketValue.amountAfterCost : it.marketValue.amount, it.currency)}</td>
-                  <td className={cls(p)}>{signed(p, it.currency)}</td>
-                  <td className={cls(r)}>{pct(r)}</td>
-                  <td className={cls(it.dailyProfitLoss.ratePct)}>{pct(it.dailyProfitLoss.ratePct)}</td>
-                  <td><button className="link" onClick={() => setOco(it)}>익절·손절</button></td>
+                  <td data-label="보유">{it.quantity.toLocaleString()}</td>
+                  <td data-label="평균단가">{money(it.averagePurchasePrice, it.currency)}</td>
+                  <td data-label="현재가">{money(it.lastPrice, it.currency)}</td>
+                  <td data-label="평가금액">{money(afterCost ? it.marketValue.amountAfterCost : it.marketValue.amount, it.currency)}</td>
+                  <td data-label="손익" className={cls(p)}>{signed(p, it.currency)}</td>
+                  <td data-label="수익률" className={cls(r)}>{pct(r)}</td>
+                  <td data-label="오늘" className={cls(it.dailyProfitLoss.ratePct)}>{pct(it.dailyProfitLoss.ratePct)}</td>
+                  <td className="card-actions"><button className="link" onClick={() => setOco(it)}>익절·손절</button></td>
                 </tr>
               )
             })}
@@ -170,7 +170,7 @@ export default function AccountPage() {
         <span className="muted small">토스증권 앱에서 만든 조건 주문도 함께 보입니다.</span>
       </div>
       <div className="trades-wrap">
-        <table className="trades left-first">
+        <table className="trades left-first cards">
           <thead>
             <tr>
               <th>종목</th>
@@ -188,14 +188,14 @@ export default function AccountPage() {
               const currency = o.market === 'KR' ? 'KRW' : 'USD'
               return (
                 <tr key={o.conditionalOrderId}>
-                  <td><b>{nameOf(o.symbol)}</b> <span className="muted small">{o.symbol}</span></td>
-                  <td>{TYPE[o.type] ?? o.type}</td>
-                  <td>{STATUS[o.status] ?? o.status}</td>
-                  <td>{o.quantity.toLocaleString()}</td>
-                  <td>{legText(o.first, currency)}</td>
-                  <td>{legText(o.second, currency)}</td>
-                  <td>{o.expireDate ?? '-'}</td>
-                  <td>
+                  <td className="card-title"><b>{nameOf(o.symbol)}</b> <span className="muted small">{o.symbol}</span></td>
+                  <td data-label="유형">{TYPE[o.type] ?? o.type}</td>
+                  <td data-label="상태">{STATUS[o.status] ?? o.status}</td>
+                  <td data-label="수량">{o.quantity.toLocaleString()}</td>
+                  <td data-label="조건 1">{legText(o.first, currency)}</td>
+                  <td data-label="조건 2">{legText(o.second, currency)}</td>
+                  <td data-label="만료일">{o.expireDate ?? '-'}</td>
+                  <td className="card-actions">
                     {(o.status === 'WATCHING' || o.status === 'PAUSED') && (
                       <button className="link danger-link" onClick={() => cancel(o)}>취소</button>
                     )}
