@@ -13,6 +13,9 @@ class ApiError(Exception):
         self.code = code
         self.message = message or code
 
+    def __reduce__(self):
+        return (type(self), (self.status, self.code, self.message))
+
 
 def register_error_handlers(app: Flask) -> None:
     @app.errorhandler(ApiError)

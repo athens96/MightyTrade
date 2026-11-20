@@ -11,13 +11,12 @@ from ..auth.decorators import login_required
 from ..errors import ApiError
 from ..market.models import Interval, Market
 from ..market.registry import get_provider
-from . import montecarlo
+from . import worker
 from .data import cost_defaults
 from .engine import Backtester, Bars, Costs, buy_and_hold
 from .metrics import performance
-from .optimize import OBJECTIVES, Axis, combos, max_warmup, parse_axis, run_grid
+from .optimize import OBJECTIVES, Axis, combos, max_warmup, parse_axis
 from .strategies import STRATEGIES, Strategy, StrategyParamError
-from .walkforward import walk_forward
 
 bp = Blueprint("quant", __name__)
 
@@ -129,7 +128,7 @@ def _grid_inputs(s: Setup, body: dict) -> tuple:
     items = combos(s.cls, base, x, y)
     if not any(st for _, _, st, _ in items):
         raise ApiError(400, "invalid_params", next(e for _, _, _, e in items if e))
-    return x, y, objective, min_trades, items
+    return x, y, objective, min_trades, base, items
 
 
 def _axis_json(a: Optional[Axis]) -> Optional[dict]:
@@ -178,13 +177,13 @@ def optimize():
     """Grid search over 1-2 parameters: body = backtest fields + x/y {key,start,stop,step} + objective."""
     body = request.get_json(silent=True) or {}
     s = _setup(body)
-    x, y, objective, min_trades, items = _grid_inputs(s, body)
+    x, y, objective, min_trades, base, items = _grid_inputs(s, body)
     if len(items) > MAX_GRID:
         raise ApiError(400, "range_too_large", f"조합이 {len(items)}개입니다. 최대 {MAX_GRID}개까지 가능합니다")
     t0 = time.time()
     # every combination is evaluated on the same period: start after the longest warm-up in the grid
     _, bars, start, warn = _load(s, max_warmup(items))
-    grid = run_grid(bars, items, x, y, s.capital, s.costs, start, objective, min_trades)
+    grid = worker.run_optimize(bars, s.cls.id, base, x, y, s.capital, s.costs, start, objective, min_trades)
     bench = performance(bars.time[start:], buy_and_hold(bars, start, len(bars), s.capital, s.costs))
     return jsonify(
         **_context(s, bars, start),
@@ -202,7 +201,7 @@ def walkforward():
     """body = backtest fields + x/y ranges + objective + is_years + oos_months + mode (rolling|anchored)."""
     body = request.get_json(silent=True) or {}
     s = _setup(body)
-    x, y, objective, min_trades, items = _grid_inputs(s, body)
+    x, y, objective, min_trades, base, items = _grid_inputs(s, body)
     is_years = _num(body, "is_years", 3, 0.5, 20)
     oos_months = _num(body, "oos_months", 12, 1, 60)
     mode = body.get("mode", "rolling")
@@ -214,7 +213,9 @@ def walkforward():
     if est_windows * len(items) > MAX_WF_RUNS:
         raise ApiError(400, "range_too_large",
                        f"약 {est_windows}개 구간 × {len(items)}개 조합 = 계산량이 너무 큽니다. 조합을 줄이거나 검증 기간을 늘리세요")
-    wf = walk_forward(bars, items, x, y, s.capital, s.costs, start, objective, min_trades, is_years, oos_months, mode)
+    wf = worker.run_walkforward(
+        bars, s.cls.id, base, x, y, s.capital, s.costs, start, objective, min_trades, is_years, oos_months, mode
+    )
     return jsonify(
         **_context(s, bars, start),
         x=_axis_json(x), y=_axis_json(y), objective=objective, min_trades=min_trades,
@@ -237,14 +238,10 @@ def monte_carlo():
         raise ApiError(400, "invalid_method")
     strategy = _strategy(s.cls, s.params)
     _, bars, start, warn = _load(s, strategy.warmup())
-    r = Backtester(bars, strategy, s.capital, s.costs, start).run()
-    impacts = montecarlo.trade_impacts(r["trades"], r["equity"])
-    years = (bars.time[-1] - bars.time[start]) / 86400 / 365.25
-    result: dict[str, Any] = montecarlo.simulate(impacts, runs=runs, method=method, years=years)
+    result = worker.run_montecarlo(bars, s.cls.id, strategy.p, s.capital, s.costs, start, runs, method)
     return jsonify(
         **_context(s, bars, start),
         params=strategy.p,
-        backtest_metrics=r["metrics"],
         warnings=[WARNINGS.get(c, c) for c in warn],
         **result,
     )

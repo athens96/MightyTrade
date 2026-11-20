@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fcntl
 import logging
+import multiprocessing
 import os
 import threading
 from datetime import datetime, timedelta, timezone
@@ -153,8 +154,10 @@ class Scheduler:
 
 
 def maybe_start(app: Flask) -> None:
-    """Start in the serving process only (not in the Werkzeug reloader's watcher process)."""
+    """Start in the serving process only (not in the Werkzeug reloader's watcher or spawned workers)."""
     if not app.config.get("AUTOTRADE_SCHEDULER") or app.testing:
+        return
+    if multiprocessing.current_process().name != "MainProcess":
         return
     if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
         return

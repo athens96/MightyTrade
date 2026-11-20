@@ -190,3 +190,25 @@ def test_api_walkforward_and_montecarlo(session):
     r = session.post("/api/quant/montecarlo", json={**BASE, "strategy": "rsi2", "runs": 300})
     assert r.status_code == 200, r.json
     assert r.json["runs"] == 300 and set(r.json["final_return_pct"]) == {"p5", "p25", "p50", "p75", "p95"}
+
+
+def test_api_quant_process_pool_offload_and_error_propagation(session, app):
+    """Real spawn ProcessPoolExecutor executes quant jobs and preserves ApiError across processes."""
+    from app.quant import worker
+    app.config["QUANT_WORKERS"] = 1
+    try:
+        r = session.post("/api/quant/optimize", json={**BASE, "x": {"key": "fast", "start": 5, "stop": 10, "step": 5}})
+        assert r.status_code == 200 and r.json["best"] is not None
+        assert "quant_pool" in app.extensions
+        # ApiError raised inside worker process (too short period for walk-forward) must unpickle cleanly
+        r_err = session.post("/api/quant/walkforward", json={
+            **BASE, "period": "1y", "x": {"key": "fast", "start": 5, "stop": 10, "step": 5},
+            "is_years": 5, "oos_months": 12,
+        })
+        assert r_err.status_code == 400 and r_err.json["error"] == "not_enough_data"
+        # Monte Carlo runs through the same pool
+        r_mc = session.post("/api/quant/montecarlo", json={**BASE, "strategy": "rsi2", "runs": 100})
+        assert r_mc.status_code == 200 and r_mc.json["runs"] == 100
+    finally:
+        worker.shutdown_app_pool(app)
+        app.config["QUANT_WORKERS"] = 0

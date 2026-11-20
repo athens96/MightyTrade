@@ -51,6 +51,8 @@ class Config:
     TRADING_MAX_ORDER_USD = float(os.getenv("TRADING_MAX_ORDER_USD", "50000"))
     # Auto-trading scheduler (one per server; see app/autotrade/scheduler.py)
     AUTOTRADE_SCHEDULER = _bool("AUTOTRADE_SCHEDULER", True)
+    # Process pool workers for CPU-heavy quant jobs (0 = run in-process)
+    QUANT_WORKERS = int(os.getenv("QUANT_WORKERS", "2"))
 
 
 class DevelopmentConfig(Config):
@@ -65,6 +67,7 @@ class ProductionConfig(Config):
 class TestingConfig(Config):
     TESTING = True
     AUTOTRADE_SCHEDULER = False
+    QUANT_WORKERS = 0
 
 
 def get_config(name: str | None = None) -> type[Config]:
