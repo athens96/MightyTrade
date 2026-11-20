@@ -1,6 +1,7 @@
 """Toss Securities Open API client (https://developers.tossinvest.com).
 
-Shared by market data (market/providers/toss.py) and, later, orders (trading/brokers/toss.py).
+Shared by market data (market/providers/toss.py), account/OCO (account/toss_account.py),
+manual orders (trading/orders.py), and auto-trading bots (autotrade/executor.py).
 Each account uses its own Toss key (users/credentials.py); there is no server-wide key.
 
 Token rules from the Toss docs that shape this code:

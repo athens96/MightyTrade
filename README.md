@@ -43,13 +43,18 @@ server/app/
 │   ├── optimize.py        파라미터 격자 탐색 (최소 매매 수, 주변 평균으로 안정성 평가)
 │   ├── walkforward.py     워크포워드 검증 (롤링/누적, 검증 구간만 이어붙인 수익곡선, WFE)
 │   ├── montecarlo.py      매매 부트스트랩/셔플 → 수익률·MDD 분포, 손실 확률
+│   ├── worker.py          최적화·워크포워드·몬테카를로용 spawn 프로세스 풀 (GIL 격리)
 │   ├── strategies/        전략 (백테스트·실전 공용 인터페이스): 이평 크로스, 변동성 돌파, RSI(2), 볼린저, 터틀
 │   └── routes.py          /api/quant/strategies, /defaults, /backtest, /optimize, /walkforward, /montecarlo
 ├── trading/             주문: 미리보기→OTP 잠금 해제(30분)→전송, 호가단위·상하한가·잔고 검증, 일일/건당 한도, 감사 기록
+│   ├── orders.py          주문 검증·전송·조회·취소·정정, 잠금/한도
+│   ├── ticks.py           KRX/US 호가 단위 반올림·포맷
+│   └── routes.py          /api/trading/*
 └── autotrade/           자동매매 봇: 모의(기본)/실거래, 스케줄러(정규장 시작 1분 뒤), 중복 주문 방지, 체결 반영, 전체 중지
-    ├── models.py          Order, OrderRequest, Position
-    ├── brokers/           Broker 인터페이스, TossBroker(TODO)
-    └── automation/        Strategy / Signal 인터페이스
+    ├── bots.py            봇 설정·상태·이벤트 로그 저장
+    ├── executor.py        모의/실거래 1일 스텝 실행, 체결 정산
+    ├── scheduler.py       정규장 스케줄러 (파일 락으로 서버당 1개)
+    └── routes.py          /api/autotrade/*
 
 client/src/
 ├── api/                 fetch 래퍼 + auth/market/trading API
@@ -182,7 +187,7 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 - [x] 자동매매 봇 (모의/실거래)
 - [ ] 미국 종목 영문명 검색 (`/stocks/all`에 englishName 없음 → `/stocks` 배치 조회 필요)
 - [ ] investing.com 데이터 수집 방식 결정 (공식 API 없음 — 이용약관 확인 필요)
-- [ ] 주문 API (검증 → 리스크 체크 → 브로커 → 저장)
+- [x] 주문 API (검증 → 리스크 체크 → 브로커 → 저장)
 - [x] 퀀트 랩 1단계: 단일 종목 일봉 백테스트 + 전략 5개
 - [x] 퀀트 2단계: 파라미터 최적화 히트맵, 워크포워드, 몬테카를로
 - [ ] 퀀트 3단계: ETF 자산배분/듀얼모멘텀 (포트폴리오, 리밸런싱)
