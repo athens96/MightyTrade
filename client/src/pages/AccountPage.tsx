@@ -3,8 +3,10 @@ import { Link } from 'react-router-dom'
 import { accountApi, type AccountSummary, type ConditionalLeg, type ConditionalOrder, type Holding } from '../api/account'
 import { ApiError } from '../api/client'
 import OcoDialog from '../components/account/OcoDialog'
+import { FeatureGuideBox } from '../components/GuideBox'
 import OrdersSection from '../components/trading/OrdersSection'
 import { priceFormatter } from '../components/chart/format'
+import { FEATURE_GUIDES } from '../lib/featureGuides'
 
 const krw = priceFormatter('KR')
 const usd = priceFormatter('US')
@@ -86,6 +88,7 @@ export default function AccountPage() {
         <div className="spacer" />
         <button onClick={load} disabled={loading}>{loading ? '불러오는 중…' : '새로고침'}</button>
       </div>
+      <FeatureGuideBox guide={FEATURE_GUIDES.account} />
       {error && <p className="error">{error.message}</p>}
 
       {h && summary && (

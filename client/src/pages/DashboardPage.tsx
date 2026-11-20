@@ -11,6 +11,8 @@ import { settingsApi, type Settings } from '../api/settings'
 import IndicatorPanel from '../components/chart/IndicatorPanel'
 import TradingChart from '../components/chart/TradingChart'
 import { DEFAULT_INDICATORS, sanitize, type IndicatorConfig } from '../indicators/registry'
+import { FeatureGuideBox } from '../components/GuideBox'
+import { FEATURE_GUIDES } from '../lib/featureGuides'
 import { investingUrl } from '../lib/externalLinks'
 
 const INTERVALS: Interval[] = ['1m', '5m', '15m', '1h', '1d', '1w']
@@ -286,6 +288,7 @@ export default function DashboardPage() {
           viewKey={`${selected?.market}:${selected?.symbol}:${interval}`}
         />
         <p className="muted small">data: {provider}</p>
+        <FeatureGuideBox guide={FEATURE_GUIDES.dashboard} />
       </section>
       {selected && (
         <SidePanel market={selected.market} symbol={selected.symbol} name={selected.name} lastPrice={shown?.price ?? null} book={live.book} ticks={live.ticks} state={live.state} prevClose={prevClose} />

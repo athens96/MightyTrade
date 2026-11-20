@@ -38,6 +38,7 @@ class Strategy(ABC):
     theory: ClassVar[str] = ""          # financial theory citation
     summary: ClassVar[str]  # one line
     description: ClassVar[str]  # rules + how to read results
+    guide: ClassVar[dict[str, Any]] = {}  # background, setup, execution, caution
     params: ClassVar[list]  # list[Param]
 
     def __init__(self, raw: Optional[dict] = None):
@@ -85,6 +86,7 @@ class Strategy(ABC):
             "theory": cls.theory,
             "summary": cls.summary,
             "description": cls.description,
+            "guide": cls.guide,
             "params": [asdict(p) for p in cls.params],
         }
 

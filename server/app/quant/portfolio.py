@@ -186,6 +186,7 @@ class PortfolioModel:
         params: Optional[list[Param]] = None,
         presets: Optional[dict[str, list[dict]]] = None,
         default_rebalance: str = "monthly",
+        guide: Optional[dict[str, Any]] = None,
     ):
         self.id = id
         self.name = name
@@ -199,6 +200,7 @@ class PortfolioModel:
         self.params = params or []
         self.presets = presets or {}
         self.default_rebalance = default_rebalance
+        self.guide = guide or {}
 
     def resolve(self, raw: Optional[dict]) -> dict[str, Any]:
         return _resolve_params(self.params, raw)
@@ -216,6 +218,7 @@ class PortfolioModel:
             "theory": self.theory,
             "summary": self.summary,
             "description": self.description,
+            "guide": self.guide,
             "uses_roles": self.uses_roles,
             "uses_weights": self.uses_weights,
             "default_rebalance": self.default_rebalance,
@@ -238,6 +241,24 @@ PORTFOLIO_MODELS: dict[str, PortfolioModel] = {
             lambda p: 2,
             uses_weights=True,
             default_rebalance="quarterly",
+            guide={
+                "background": (
+                    "세계 최대 헤지펀드 브리지워터(Bridgewater)의 레이 달리오(Ray Dalio)가 창안한 거시경제 리스크 균형 이론입니다. "
+                    "미래 경제는 예측할 수 없으므로 ① 성장 상승 ② 성장 둔화 ③ 물가 상승 ④ 물가 하락의 4계절 각각에서 강세를 보이는 "
+                    "주식(성장)·국채(침체/디플레)·금/원자재(인플레)에 위험 비중을 균등 배분해 어떤 경기 국면에서도 치명적 손실을 피하는 구조입니다."
+                ),
+                "setup": [
+                    "기본 비중: 주식 30% / 장기채 40% / 중기채 15% / 금 7.5% / 원자재 7.5% (합계 100%로 자동 정규화).",
+                    "리밸런싱 주기: 분기 초(권장) 또는 비중 편차 이탈 ±5% 설정 시 거래비용 대비 리밸런싱 보너스가 우수합니다.",
+                    "운용 자금은 5개 ETF 중 비중이 가장 작은 7.5% 종목도 최소 1주 이상 매수 가능한 금액 이상으로 잡으세요.",
+                ],
+                "execution": [
+                    "정기일(또는 편차 초과일) 정규장 시작 1분 뒤 현재 평가총액과 각 자산의 목표 수량을 산출합니다.",
+                    "목표 비중보다 초과 보유한 자산(오른 자산)의 매도 주문을 먼저 전송하고 짧은 체결 확인 폴링을 수행합니다.",
+                    "확보된 현금과 봇 자금 한도 내에서 부족한 자산(내린 자산)을 시장가로 매수해 목표 비중을 복원합니다.",
+                ],
+                "caution": "2022년처럼 금리 급등으로 주식과 장기채가 동시에 하락하는 이례적 인플레이션 국면에서는 방어력이 약화될 수 있습니다.",
+            },
             presets={
                 "US": [
                     {"symbol": "SPY", "name": "미국 S&P500", "role": "offensive", "weight": 30},
@@ -266,6 +287,23 @@ PORTFOLIO_MODELS: dict[str, PortfolioModel] = {
             lambda p: 2,
             uses_weights=True,
             default_rebalance="quarterly",
+            guide={
+                "background": (
+                    "1952년 해리 마코위츠(Harry Markowitz, 노벨경제학상)의 현대 포트폴리오 이론(MPT)을 가장 단순하고 견고하게 구현한 "
+                    "표준 자산배분입니다. 기대수익이 높은 주식과 상관관계가 낮거나 음(-)인 채권을 60:40으로 결합하면, "
+                    "단독 자산 대비 변동성(위험)을 크게 낮추면서 위험조정수익(샤프비율)을 개선할 수 있습니다."
+                ),
+                "setup": [
+                    "기본 비중: 주식(SPY / KODEX 200) 60% + 채권(AGG / 국고채10년) 40%. 공격 성향이면 70:30, 안정 성향이면 40:60으로 조절하세요.",
+                    "리밸런싱 주기: 분기 초 또는 연간 1회(또는 편차 ±5%)로 불필요한 매매 회전율을 줄이는 것이 유리합니다.",
+                ],
+                "execution": [
+                    "리밸런싱 예정일 정규장 시작 1분 뒤 주식·채권 현재 비중과 목표 비중의 차이를 계산합니다.",
+                    "비중이 커진 자산을 먼저 시장가 매도해 현금을 확보한 뒤, 비중이 줄어든 자산을 시장가 매수합니다.",
+                    "비예정일에는 매매하지 않고 일일 평가자산 추이만 기록합니다.",
+                ],
+                "caution": "장기 주식 강세장에서는 주식 100% 대비 수익률이 뒤처지며, 급격한 금리 인상기에는 채권 완충 효과가 줄어듭니다.",
+            },
             presets={
                 "US": [
                     {"symbol": "SPY", "name": "미국 S&P500", "role": "offensive", "weight": 60},
@@ -287,6 +325,23 @@ PORTFOLIO_MODELS: dict[str, PortfolioModel] = {
             _equal_weights,
             lambda p: 2,
             default_rebalance="monthly",
+            guide={
+                "background": (
+                    "DeMiguel, Garlappi & Uppal(2009, Review of Financial Studies)이 14개 정교한 최적화 모델과 단순 1/N 분산의 "
+                    "표본 외(Out-of-Sample) 성과를 비교해 '추정 오차 때문에 단순 동일 비중(1/N)을 이기기 매우 어렵다'는 결론을 낸 "
+                    "학술 이론에 기반합니다. 정기적으로 1/N로 되돌리면 자연스럽게 고점 매도·저점 매수(리밸런싱 보너스)가 발생합니다."
+                ),
+                "setup": [
+                    "서로 상관관계가 낮은 3~6개 자산군(예: 미국주식 + 기술주 + 장기채 + 금)을 고를수록 분산 효과가 커집니다.",
+                    "별도 비중 입력 없이 편입된 모든 종목에 자동으로 정확히 1/N씩 균등 배분됩니다.",
+                    "리밸런싱은 월간 또는 분기 주기를 권장합니다.",
+                ],
+                "execution": [
+                    "리밸런싱 시점마다 총평가액을 종목 수(N)로 균등 분할해 종목별 목표 수량을 계산합니다.",
+                    "목표 수량을 초과한 종목을 먼저 시장가 매도한 뒤, 부족한 종목을 시장가 매수합니다.",
+                ],
+                "caution": "변동성이 극단적으로 다른 자산을 섞으면 변동성이 큰 종목(예: 레버리지·테마주)이 전체 포트폴리오 위험을 지배할 수 있습니다.",
+            },
             presets={
                 "US": [
                     {"symbol": "SPY", "name": "S&P500", "role": "offensive", "weight": 25},
@@ -313,6 +368,24 @@ PORTFOLIO_MODELS: dict[str, PortfolioModel] = {
             lambda p: int(p["vol_window"]) + 1,
             params=[Param("vol_window", "변동성 기간 (일)", 60, 10, 252)],
             default_rebalance="monthly",
+            guide={
+                "background": (
+                    "에드워드 치엔(Edward Qian, PanAgora)이 정립한 리스크 패리티(Risk Parity) 이론입니다. 전통 60/40 포트폴리오는 자본은 60:40이지만 "
+                    "주식의 변동성이 채권보다 훨씬 커 실제 위험의 약 90%가 주식에 쏠립니다. 각 자산의 최근 실현 변동성 역수(w_i ∝ 1/σ_i)로 "
+                    "비중을 동적 조절하면 모든 자산이 전체 변동성에 균등하게 기여하도록 제어할 수 있습니다."
+                ),
+                "setup": [
+                    "변동성 기간(vol_window): 기본 60거래일(약 3개월). 민감한 위험 대응은 20~40일, 안정적 회전율은 60~120일이 적합합니다.",
+                    "주식·장기채·중기채·금 등 변동성 수준과 상관관계가 다른 ETF 3~5개 조합을 권장합니다.",
+                    "리밸런싱 주기: 매월 초가 변동성 변화를 반영하면서도 회전율을 과도하게 높이지 않는 균형점입니다.",
+                ],
+                "execution": [
+                    "리밸런싱일 정규장 시작 1분 뒤, 전일 종가 기준 최근 vol_window일간 각 자산의 일간 수익률 표준편차(σ)를 계산합니다.",
+                    "각 자산의 1/σ 비율로 목표 비중을 자동 산출합니다(변동성이 급등한 자산의 목표 비중 자동 축소).",
+                    "초과 보유 종목을 먼저 매도하고, 확보된 현금으로 부족 종목을 매수해 새 목표 비중을 맞춥니다.",
+                ],
+                "caution": "변동성이 매우 낮은 단기채·현금성 ETF를 함께 넣으면 해당 자산으로 비중이 지나치게 쏠려 기대수익이 낮아질 수 있습니다.",
+            },
             presets={
                 "US": [
                     {"symbol": "SPY", "name": "S&P500", "role": "offensive", "weight": 25},
@@ -343,6 +416,25 @@ PORTFOLIO_MODELS: dict[str, PortfolioModel] = {
                 Param("top_n", "상위 선택 개수", 1, 1, 5),
             ],
             default_rebalance="monthly",
+            guide={
+                "background": (
+                    "게리 안토나치(Gary Antonacci)가 2012년 Wagner Award 수상 논문과 저서 'Dual Momentum Investing'에서 체계화한 "
+                    "글로벌 주식 모멘텀(GEM) 이론입니다. ① 횡단면 '상대 모멘텀'(공격 자산 중 승자 선택)으로 수익을 극대화하고, "
+                    "② 시계열 '절대 모멘텀'(선택 자산의 과거 수익률 > 0 여부)으로 글로벌 금융위기 같은 대형 하락장에서 채권으로 대피합니다."
+                ),
+                "setup": [
+                    "자산 역할(role): 반드시 공격(offensive: 미국/선진국/국내 주식 ETF)과 방어(defensive: 종합채권/국채 ETF)를 각각 1개 이상 지정하세요.",
+                    "모멘텀 기간(lookback): 원전 기본값은 252거래일(12개월). 빠른 전환은 126일(6개월)도 널리 쓰입니다.",
+                    "상위 선택 개수(top_n): 원전 GEM은 1개(집중), 분산을 원하면 공격 자산 3~4개 중 상위 2개로 설정합니다.",
+                    "리밸런싱 주기: 매월 초(월 1회 모멘텀 점검)가 표준입니다.",
+                ],
+                "execution": [
+                    "매월 첫 거래일 정규장 시작 1분 뒤, 전일 종가 기준 모든 자산의 lookback일 누적 수익률을 계산합니다.",
+                    "공격 자산 중 수익률 상위 top_n개를 선정하고, 각 자산의 수익률이 0% 초과면 투자, 0% 이하면 최고 모멘텀 방어 자산으로 대체합니다.",
+                    "교체가 발생하면 기존 보유 종목을 먼저 전량 시장가 매도 → 체결 확인 후 신규 선정 종목을 시장가 매수합니다.",
+                ],
+                "caution": "급락 후 V자 급반등하는 장세에서는 모멘텀 전환이 한 템포 늦어 단기 '채찍 효과(휩소)' 손실이 발생할 수 있습니다.",
+            },
             presets={
                 "US": [
                     {"symbol": "SPY", "name": "미국 주식", "role": "offensive", "weight": 50},
@@ -368,6 +460,25 @@ PORTFOLIO_MODELS: dict[str, PortfolioModel] = {
             uses_roles=True,
             params=[Param("top_offensive", "공격 상위 종목 수", 1, 1, 4)],
             default_rebalance="monthly",
+            guide={
+                "background": (
+                    "Wouter Keller & Jan Willem Keuning(2017, 'Breadth Momentum and Vigilant Asset Allocation')이 발표한 "
+                    "카나리아 기반 동적 자산배분 이론입니다. 최근 수익률에 높은 가중치를 주는 13612W 모멘텀(12×r1m + 4×r3m + 2×r6m + 1×r12m)을 "
+                    "계산해, 공격 자산 중 '단 1개라도 음수'면 시장 전반의 균열 신호(광산의 카나리아)로 간주하고 즉시 방어 채권으로 100% 대피합니다."
+                ),
+                "setup": [
+                    "공격 자산(offensive): 원전 G4는 SPY(미국)·VEA(선진국)·VWO(신흥국)·AGG(종합채권) 4종 조합입니다.",
+                    "방어 자산(defensive): 원전은 SHY(단기채)·IEF(중기채)·LQD(회사채) 3종 중 가장 강한 1종으로 대피합니다.",
+                    "공격 상위 종목 수(top_offensive): 공격형은 1(집중), 안정적 분산은 2로 설정합니다.",
+                    "리밸런싱 주기: 매월 초 고정(최소 1년 이상 상장 이력이 있는 ETF 필요).",
+                ],
+                "execution": [
+                    "매월 첫 거래일 정규장 시작 1분 뒤, 모든 편입 ETF의 1·3·6·12개월 가중 모멘텀(13612W) 점수를 산출합니다.",
+                    "공격 자산 전부의 점수가 양수(+)일 때만 공격 상위 top_offensive개 종목에 균등 배분합니다.",
+                    "공격 자산 중 1개라도 0 이하이면 공격 자산을 전량 매도하고, 방어 자산 중 13612W 점수가 가장 높은 1종목에 100% 투자합니다.",
+                ],
+                "caution": "공격↔방어 전환이 100% 단위로 자주 일어나므로 연간 회전율이 높습니다. 거래비용이 낮은 미국/국내 대표 유동성 ETF로 운용하세요.",
+            },
             presets={
                 "US": [
                     {"symbol": "SPY", "name": "미국 주식", "role": "offensive", "weight": 25},

@@ -20,10 +20,12 @@ import {
 import type { Market, WatchItem } from '../api/types'
 import { MOBILE, useMediaQuery } from '../hooks/useMediaQuery'
 import BacktestView from '../components/quant/BacktestView'
+import { FeatureGuideBox, StrategyGuideBox } from '../components/GuideBox'
 import MonteCarloView from '../components/quant/MonteCarloView'
 import OptimizeView from '../components/quant/OptimizeView'
 import PortfolioView from '../components/quant/PortfolioView'
 import WalkForwardView from '../components/quant/WalkForwardView'
+import { FEATURE_GUIDES } from '../lib/featureGuides'
 
 type Mode = 'backtest' | 'optimize' | 'walkforward' | 'montecarlo' | 'portfolio'
 
@@ -348,10 +350,13 @@ export default function QuantPage() {
               </select>
             </label>
             {meta && (
-              <p className="muted small strategy-desc">
-                {meta.theory && <><b>[{meta.category === 'daytrade' ? '단타' : '스윙'} · {meta.timeframe}]</b> {meta.theory}<br /></>}
-                {meta.description}
-              </p>
+              <>
+                <p className="muted small strategy-desc">
+                  {meta.theory && <><b>[{meta.category === 'daytrade' ? '단타' : '스윙'} · {meta.timeframe}]</b> {meta.theory}<br /></>}
+                  {meta.description}
+                </p>
+                <StrategyGuideBox theory={meta.theory} guide={meta.guide} />
+              </>
             )}
           </>
         )}
@@ -370,6 +375,7 @@ export default function QuantPage() {
             <p className="muted small strategy-desc">
               <b>[리밸런싱]</b> {pModel.theory}<br />{pModel.description}
             </p>
+            <StrategyGuideBox theory={pModel.theory} guide={pModel.guide} />
             <fieldset className="costs">
               <legend>리밸런싱 규칙</legend>
               <label>
@@ -540,6 +546,7 @@ export default function QuantPage() {
       </form>
 
       <section className="quant-results">
+        <FeatureGuideBox guide={FEATURE_GUIDES.quant} />
         {!current && <div className="placeholder muted">왼쪽에서 설정하고 실행하세요.</div>}
         {form.mode === 'backtest' && results.backtest && <BacktestView result={results.backtest} title={titleOf(results.backtest)} />}
         {form.mode === 'optimize' && results.optimize && (

@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { brokerApi, type TossCredentialStatus } from '../api/broker'
 import { useAuth } from '../auth/AuthContext'
+import { FeatureGuideBox } from '../components/GuideBox'
+import { FEATURE_GUIDES } from '../lib/featureGuides'
 
 export default function SettingsPage() {
   const { user } = useAuth()
@@ -51,6 +53,7 @@ export default function SettingsPage() {
   return (
     <div className="settings">
       <h2>토스증권 API 연결</h2>
+      <FeatureGuideBox guide={FEATURE_GUIDES.settings} />
 
       <section className="panel">
         <h3>현재 상태</h3>

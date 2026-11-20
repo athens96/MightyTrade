@@ -5,7 +5,9 @@ import { ApiError } from '../api/client'
 import { quantApi, type PortfolioModelMeta, type StrategyMeta } from '../api/quant'
 import { priceFormatter } from '../components/chart/format'
 import BotForm from '../components/autotrade/BotForm'
+import { FeatureGuideBox, StrategyGuideBox } from '../components/GuideBox'
 import { investingUrl } from '../lib/externalLinks'
+import { FEATURE_GUIDES } from '../lib/featureGuides'
 
 const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱' }
 const REBAL_LABEL: Record<string, string> = { monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈' }
@@ -131,6 +133,10 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
           </>
         )}
       </p>
+      <StrategyGuideBox
+        theory={isRebal ? pModel?.theory : meta?.theory}
+        guide={isRebal ? pModel?.guide : meta?.guide}
+      />
       {error && <p className="error">{error}</p>}
 
       <div className="stat-tiles">
@@ -406,6 +412,7 @@ export default function AutoTradePage() {
         <button className={filter === 'daytrade' ? 'active' : ''} onClick={() => setFilter('daytrade')}>단타봇 {countOf('daytrade')}</button>
         <button className={filter === 'rebalance' ? 'active' : ''} onClick={() => setFilter('rebalance')}>리밸런싱 봇 {countOf('rebalance')}</button>
       </div>
+      <FeatureGuideBox guide={FEATURE_GUIDES.autotrade} />
 
       {error?.code === 'toss_credentials_required' && <p className="placeholder">토스증권 API 키가 필요합니다. <Link to="/settings">설정에서 등록하기 →</Link></p>}
 

@@ -191,7 +191,8 @@ def test_api_requires_login(client):
 def test_api_backtest_with_mock_data(session):
     items = session.get("/api/quant/strategies").json["items"]
     assert [i["id"] for i in items] == list(STRATEGIES)
-    assert all({"category", "timeframe", "theory"} <= set(i) for i in items)
+    assert all({"category", "timeframe", "theory", "guide"} <= set(i) for i in items)
+    assert all({"background", "setup", "execution", "caution"} <= set(i["guide"]) for i in items)
     assert {i["category"] for i in items} == {"swing", "daytrade"}
     d = session.get("/api/quant/defaults?market=KR").json
     assert d["currency"] == "KRW" and d["commission_source"] == "default"

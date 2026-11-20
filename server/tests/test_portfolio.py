@@ -117,6 +117,7 @@ def test_api_portfolio_models_and_backtest(session):
     r = session.get("/api/quant/portfolio/models")
     assert r.status_code == 200
     assert {m["id"] for m in r.json["items"]} == set(portfolio.PORTFOLIO_MODELS)
+    assert all({"background", "setup", "execution", "caution"} <= set(m["guide"]) for m in r.json["items"])
     rb = session.post("/api/quant/portfolio/backtest", json={
         "market": "US", "model": "all_weather", "period": "3y", "rebalance": "quarterly",
     })

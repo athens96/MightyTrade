@@ -14,6 +14,13 @@ export interface StrategyParam {
   integer: boolean
 }
 
+export interface StrategyGuide {
+  background?: string
+  setup?: string[]
+  execution?: string[]
+  caution?: string
+}
+
 export interface StrategyMeta {
   id: string
   name: string
@@ -22,6 +29,7 @@ export interface StrategyMeta {
   theory: string
   summary: string
   description: string
+  guide?: StrategyGuide
   params: StrategyParam[]
 }
 
@@ -246,6 +254,7 @@ export interface PortfolioModelMeta {
   theory: string
   summary: string
   description: string
+  guide?: StrategyGuide
   uses_roles: boolean
   uses_weights: boolean
   default_rebalance: RebalanceMode

@@ -3,6 +3,7 @@ import type { Bot, BotCategory, BotInput } from '../../api/autotrade'
 import { marketApi } from '../../api/market'
 import type { PortfolioAsset, PortfolioModelMeta, RebalanceMode, StrategyMeta } from '../../api/quant'
 import type { Market, WatchItem } from '../../api/types'
+import { StrategyGuideBox } from '../GuideBox'
 
 interface Props {
   strategies: StrategyMeta[]
@@ -277,14 +278,20 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
         )}
 
         {!isRebal && meta && (
-          <p className="muted small" style={{ marginTop: 10 }}>
-            <b>{meta.theory}</b><br />{meta.summary}
-          </p>
+          <>
+            <p className="muted small" style={{ marginTop: 10 }}>
+              <b>{meta.theory}</b><br />{meta.summary}
+            </p>
+            <StrategyGuideBox theory={meta.theory} guide={meta.guide} />
+          </>
         )}
         {isRebal && pModel && (
-          <p className="muted small" style={{ marginTop: 10 }}>
-            <b>{pModel.theory}</b><br />{pModel.summary}
-          </p>
+          <>
+            <p className="muted small" style={{ marginTop: 10 }}>
+              <b>{pModel.theory}</b><br />{pModel.summary}
+            </p>
+            <StrategyGuideBox theory={pModel.theory} guide={pModel.guide} />
+          </>
         )}
         {error && <p className="error">{error}</p>}
         <div className="modal-actions">
