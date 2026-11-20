@@ -65,6 +65,7 @@ class TossProvider(MarketDataProvider):
         self._lock = threading.Lock()
         self._candle_cache: dict[tuple, tuple[float, list[Candle]]] = {}
         self._stocks: dict[tuple[str, Market], tuple[float, list[Instrument]]] = {}
+        self._stock_locks: dict[tuple[str, Market], threading.Lock] = {}
 
     # ------------------------------------------------------------ helpers
     def _check(self, market: Market, symbol: str) -> None:
@@ -185,23 +186,33 @@ class TossProvider(MarketDataProvider):
         )
 
     def _stock_list(self, market: Market) -> list[Instrument]:
+        key = (_uid(), market)
         now = time.time()
         with self._lock:
-            hit = self._stocks.get((_uid(), market))
+            hit = self._stocks.get(key)
             if hit and hit[0] > now:
                 return hit[1]
-        client = get_toss_client()
-        items: list[Instrument] = []
-        for i, m in enumerate(STOCK_MARKETS[market]):
-            if i:
-                time.sleep(1.05)  # STOCK_ALL rate limit: 1 req/s
-            for s in client.request("GET", "/api/v1/stocks/all", params={"market": m, "status": "ACTIVE"}) or []:
-                items.append(Instrument(market, s["symbol"], s.get("name") or s.get("englishName") or "",
-                                        s.get("market", m), s.get("englishName") or ""))
-        with self._lock:
-            self._stocks = {k: v for k, v in self._stocks.items() if v[0] > now}
-            self._stocks[(_uid(), market)] = (now + STOCK_LIST_TTL, items)
-        return items
+            fetch_lock = self._stock_locks.setdefault(key, threading.Lock())
+        # Single-flight per (user, market): concurrent searches wait instead of hitting Toss 1 req/s limits.
+        with fetch_lock:
+            now = time.time()
+            with self._lock:
+                hit = self._stocks.get(key)
+                if hit and hit[0] > now:
+                    return hit[1]
+            client = get_toss_client()
+            items: list[Instrument] = []
+            for i, m in enumerate(STOCK_MARKETS[market]):
+                if i:
+                    time.sleep(1.05)  # STOCK_ALL rate limit: 1 req/s
+                for s in client.request("GET", "/api/v1/stocks/all", params={"market": m, "status": "ACTIVE"}) or []:
+                    items.append(Instrument(market, s["symbol"], s.get("name") or s.get("englishName") or "",
+                                            s.get("market", m), s.get("englishName") or ""))
+            done = time.time()
+            with self._lock:
+                self._stocks = {k: v for k, v in self._stocks.items() if v[0] > done}
+                self._stocks[key] = (done + STOCK_LIST_TTL, items)
+            return items
 
     def search(self, market: Market, query: str) -> list[Instrument]:
         """Toss has no search API: match against the cached full stock list."""

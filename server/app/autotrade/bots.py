@@ -72,6 +72,14 @@ def save(bot: dict) -> dict:
     return get_store().put(BOTS, bot["id"], bot)
 
 
+def delete(bot_id: str) -> None:
+    """Delete a bot and all of its event log entries."""
+    store = get_store()
+    store.delete(BOTS, bot_id)
+    for e in store.find(EVENTS, lambda r: r.get("bot_id") == bot_id):
+        store.delete(EVENTS, e["id"])
+
+
 def list_for(uid: str) -> list:
     return sorted(get_store().find(BOTS, lambda b: b.get("user_id") == uid), key=lambda b: b["created_at"])
 

@@ -64,7 +64,7 @@ def stream():
 @login_required
 def order_stream():
     """SSE: the user's own order events (accepted / filled / cancelled / rejected) — event: order."""
-    if current_app.config["MARKET_PROVIDERS"]["KR"] != "toss":
+    if "toss" not in current_app.config["MARKET_PROVIDERS"].values():
         raise ApiError(501, "requires_toss", "토스증권 연동에서만 제공됩니다")
     uid = g.user["id"]
     creds = credentials.get_toss(uid)

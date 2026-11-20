@@ -98,12 +98,11 @@ def update_bot(bot_id: str):
 @bp.delete("/bots/<bot_id>")
 @login_required
 def delete_bot(bot_id: str):
-    from ..storage import get_store
     bot = bots.get(g.user["id"], bot_id)
     live = bot["state"]["live"]
     if live["position"]["qty"] > 0 or live["pending"]:
         raise ApiError(409, "bot_has_position", "실거래 보유분이나 미체결 주문이 있는 봇은 삭제할 수 없습니다")
-    get_store().delete(bots.BOTS, bot_id)
+    bots.delete(bot_id)
     return jsonify(ok=True)
 
 

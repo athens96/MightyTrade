@@ -71,7 +71,7 @@ def tick(app: Flask, now: Optional[datetime] = None) -> None:
     for uid, user_bots in by_user.items():
         with app.app_context():
             user = users.get_user(uid)
-            if not user or user.get("autotrade_halted") or not credentials.get_toss(uid):
+            if not user or users.status_of(user) != "approved" or user.get("autotrade_halted") or not credentials.get_toss(uid):
                 continue
             g.user = user
             for market in sorted({b["market"] for b in user_bots}):

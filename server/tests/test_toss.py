@@ -201,6 +201,39 @@ def test_search_ranks_symbol_then_name(app, provider, monkeypatch):
         assert len([c for c in s.calls if c[1] == "/api/v1/stocks/all"]) == 3
 
 
+def test_stock_list_single_flight_dedupes_concurrent_fetches(app, provider, monkeypatch):
+    import threading
+    import time as timemod
+    monkeypatch.setattr("app.market.providers.toss.time.sleep", lambda s: None)
+    with app.app_context():
+        stocks = [{"symbol": "005930", "name": "삼성전자", "englishName": "Samsung", "market": "KOSPI"}]
+        p, s = provider({("GET", "/api/v1/stocks/all"): [ok(stocks), ok([]), ok([])]})
+        orig_req = s.request
+
+        def slow_req(*args, **kwargs):
+            timemod.sleep(0.05)
+            return orig_req(*args, **kwargs)
+        s.request = slow_req
+
+        results = []
+        barrier = threading.Barrier(3)
+
+        def worker():
+            with app.app_context():
+                g.user = {"id": "u1"}
+                barrier.wait()
+                results.append([i.symbol for i in p.search(Market.KR, "삼성")])
+
+        threads = [threading.Thread(target=worker) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert results == [["005930"]] * 3
+        # 3 concurrent searches on cold cache must trigger only 1 fetch pass (3 KR exchanges)
+        assert len([c for c in s.calls if c[1] == "/api/v1/stocks/all"]) == 3
+
+
 def test_batch_quotes_one_price_call_and_per_symbol_errors(app, provider):
     with app.app_context():
         p, s = provider({

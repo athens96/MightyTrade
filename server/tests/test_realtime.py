@@ -139,3 +139,14 @@ def test_personal_order_events_are_declared_and_never_dropped(fast):
     events = [d["event"] for e, d in sub.drain() if e == "order"]
     assert events == ["PENDING", "PARTIAL_FILL", "FILL"]
     hub.unsubscribe("u1", sub)
+
+
+def test_order_stream_allows_us_only_toss_provider(client, app, monkeypatch):
+    from fakes import login
+    login(client, monkeypatch)
+    app.config["MARKET_PROVIDERS"] = {"KR": "mock", "US": "mock"}
+    assert client.get("/api/realtime/orders").status_code == 501
+    app.config["MARKET_PROVIDERS"] = {"KR": "mock", "US": "toss"}
+    # Passed provider gate -> reaches Toss credentials check (409), not 501 requires_toss
+    r = client.get("/api/realtime/orders")
+    assert r.status_code == 409 and r.json["error"] == "toss_credentials_required"

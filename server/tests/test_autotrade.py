@@ -355,6 +355,15 @@ def test_scheduler_respects_kill_switch_and_late_start(app, sched_env):
         assert bots.list_for("u1")[0]["state"]["paper"]["last_run_date"] == "2026-11-20"  # day skipped, not retried
 
 
+def test_scheduler_skips_unapproved_users(app, sched_env):
+    start, ran = sched_env
+    with app.app_context():
+        from app.users import repository as users
+        users.update_user("u1", status="rejected")
+    scheduler.tick(app, start + timedelta(minutes=2))
+    assert ran == []
+
+
 def test_only_one_scheduler_per_server(app):
     a, b = scheduler.Scheduler(app), scheduler.Scheduler(app)
     try:
@@ -400,3 +409,17 @@ def test_api_kill_switch(session, monkeypatch):
     assert c.get("/api/autotrade/status").json["halted"] is True
     assert c.post("/api/autotrade/resume", json={"otp_code": "000000"}).status_code == 401
     assert c.post("/api/autotrade/resume", json={"otp_code": totp.at(time.time() + 30)}).json == {"halted": False}
+
+
+def test_api_delete_bot_also_removes_its_events(session, monkeypatch):
+    c, _ = session
+    monkeypatch.setattr("app.autotrade.routes.credentials.get_toss", lambda uid: {"account_seq": 7})
+    b1 = c.post("/api/autotrade/bots", json={"market": "KR", "symbol": "005930", "strategy": "ma_cross", "capital": 1e6}).json["bot"]["id"]
+    b2 = c.post("/api/autotrade/bots", json={"market": "KR", "symbol": "000660", "strategy": "ma_cross", "capital": 1e6}).json["bot"]["id"]
+    c.post(f"/api/autotrade/bots/{b1}/enable")
+    c.post(f"/api/autotrade/bots/{b2}/enable")
+    assert c.delete(f"/api/autotrade/bots/{b1}").status_code == 200
+    with c.application.app_context():
+        from app.storage import get_store
+        assert not get_store().find(bots.EVENTS, lambda e: e.get("bot_id") == b1)
+        assert get_store().find(bots.EVENTS, lambda e: e.get("bot_id") == b2)
