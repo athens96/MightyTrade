@@ -1,8 +1,10 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { useOrderEvents } from '../hooks/useOrderEvents'
 
 export default function Layout() {
   const { user, logout } = useAuth()
+  const toasts = useOrderEvents()
   return (
     <div className="app">
       <header className="topbar">
@@ -21,6 +23,9 @@ export default function Layout() {
       <main>
         <Outlet />
       </main>
+      <div className="toasts" aria-live="polite">
+        {toasts.map((t) => <div key={t.id} className={`toast ${t.tone}`}>{t.text}</div>)}
+      </div>
     </div>
   )
 }

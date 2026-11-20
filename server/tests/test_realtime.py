@@ -125,3 +125,17 @@ def test_sse_text_format(fast):
     gen = s.events(stop=lambda: False)
     chunk = next(gen)
     assert chunk.startswith("event: trade\ndata: ") and chunk.endswith("\n\n")
+
+
+def test_personal_order_events_are_declared_and_never_dropped(fast):
+    hub, conns, _ = make_hub()
+    sub = hub.subscribe("u1", {"personal:order:3"})
+    assert wait_for(lambda: conns and any("personal:order" in x for x in conns[0].sent))
+    assert {"type": "personal:order", "codes": ["3"]} in json.loads(conns[0].sent[-1])
+    for ev in ("PENDING", "PARTIAL_FILL", "FILL"):
+        conns[0].incoming.put(msg("personal:order:3", {"event": ev, "accountSeq": "3", "order": {"orderId": "o1"}}))
+    assert wait_for(lambda: conns[0].incoming.empty())
+    time.sleep(0.1)
+    events = [d["event"] for e, d in sub.drain() if e == "order"]
+    assert events == ["PENDING", "PARTIAL_FILL", "FILL"]
+    hub.unsubscribe("u1", sub)

@@ -58,3 +58,27 @@ def stream():
 
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@bp.get("/orders")
+@login_required
+def order_stream():
+    """SSE: the user's own order events (accepted / filled / cancelled / rejected) — event: order."""
+    if current_app.config["MARKET_PROVIDERS"]["KR"] != "toss":
+        raise ApiError(501, "requires_toss", "토스증권 연동에서만 제공됩니다")
+    uid = g.user["id"]
+    creds = credentials.get_toss(uid)
+    if not creds or creds.get("account_seq") is None:
+        raise ApiError(409, "toss_credentials_required", "토스증권 API 키를 먼저 등록하세요 (설정)")
+    hub = get_hub()
+    sub = hub.subscribe(uid, {f"personal:order:{creds['account_seq']}"})
+
+    def generate():
+        try:
+            yield "retry: 5000\n\n"
+            yield from sub.events()
+        finally:
+            hub.unsubscribe(uid, sub)
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

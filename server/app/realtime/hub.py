@@ -56,12 +56,15 @@ class Subscriber:
         self._lock = threading.Lock()
         self._books: dict = {}
         self._trades: deque = deque(maxlen=300)
+        self._orders: list = []
         self._status: Optional[dict] = None
 
     def push(self, topic: str, data: dict) -> None:
         with self._lock:
             if topic.startswith("orderbook:"):
                 self._books[topic] = data  # only the latest snapshot matters
+            elif topic.startswith("personal:"):
+                self._orders.append(data)  # never dropped: every order event matters
             else:
                 self._trades.append(data)
         self._wake.set()
@@ -77,8 +80,10 @@ class Subscriber:
             if self._status is not None:
                 out.append(("status", self._status))
                 self._status = None
+            out += [("order", o) for o in self._orders]
             out += [("trade", t) for t in self._trades]
             out += [("orderbook", b) for b in self._books.values()]
+            self._orders.clear()
             self._trades.clear()
             self._books.clear()
         return out
