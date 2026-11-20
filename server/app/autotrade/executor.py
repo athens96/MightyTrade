@@ -33,6 +33,8 @@ from . import bots
 
 TERMINAL = {"FILLED", "CANCELED", "REJECTED", "REPLACED"}
 LIVE_BUY_HEADROOM = 0.005
+SELL_SETTLE_POLLS = 5
+SELL_SETTLE_INTERVAL = 0.5
 
 
 def day_of(t: int) -> str:
@@ -339,6 +341,25 @@ def _send_conditional(bot: dict, side: str, qty: int, level: float, today: str, 
     return result
 
 
+def _wait_sell_fill(bot: dict, today: str, order_id: str) -> None:
+    """Wait briefly for an open-market sell to fill before sizing a same-day follow-up buy."""
+    st = bot["state"]["live"]
+    for i in range(SELL_SETTLE_POLLS):
+        if i and SELL_SETTLE_INTERVAL > 0:
+            time.sleep(SELL_SETTLE_INTERVAL)
+        reconcile_live(bot, today)
+        if not any(p["kind"] == "order" and p["id"] == order_id for p in st["pending"]):
+            return
+
+
+def _unsynced_sell_qty(st: dict) -> float:
+    return sum(
+        max(float(p.get("qty") or 0.0) - float(p.get("synced") or 0.0), 0.0)
+        for p in st["pending"]
+        if p.get("kind") == "order" and p.get("side") == "SELL"
+    )
+
+
 def run_live(bot: dict, today: str) -> dict:
     st = bot["state"]["live"]
     if st["last_run_date"] == today:
@@ -359,18 +380,30 @@ def run_live(bot: dict, today: str) -> dict:
     current = float((client.request("GET", "/api/v1/prices", params={"symbols": bot["symbol"]}) or [{}])[0].get("lastPrice") or today_bar.close)
     c = _costs(Market(m))
     pos = st["position"]
-    # Fills only reach `pos` at the next reconcile, so track what today's sent orders will leave us
+    # Fills only reach `pos` at reconcile, so track what today's sent orders will leave us
     # holding — e.g. volatility breakout sells at the open and may re-enter on a breakout the same day.
     expect_holding = pos["qty"] > 0
-    for n, o in enumerate(d["orders"]):
+    orders = d["orders"]
+    for n, o in enumerate(orders):
         if (o.side == "buy" and expect_holding) or (o.side == "sell" and not expect_holding):
             continue
         side = "BUY" if o.side == "buy" else "SELL"
         try:
             level = _level(o, today_bar.open) if o.kind == "stop" else None
+            crossed = level is not None and ((side == "BUY" and max(today_bar.open, current) >= level)
+                                             or (side == "SELL" and min(today_bar.open, current) <= level))
+            immediate = o.kind == "market" or crossed
             if side == "BUY":
                 bp = normalize(client.request("GET", "/api/v1/buying-power", params={"currency": currency}, account_seq=seq) or {})
-                budget = min(max(bot["capital"] - pos["qty"] * pos["entry_price"], 0.0), bp.get("cashBuyingPower") or 0.0)
+                # Account for an in-flight same-day sell that has not settled into `pos` yet.
+                unsynced_sell = _unsynced_sell_qty(st)
+                eff_qty = max(pos["qty"] - unsynced_sell, 0.0)
+                bot_budget = max(bot["capital"] - eff_qty * pos["entry_price"], 0.0)
+                cash_bp = bp.get("cashBuyingPower") or 0.0
+                if not immediate and unsynced_sell > 0:
+                    # Conditional buys trigger later intraday, after the open market sell settles.
+                    cash_bp += unsynced_sell * current * (1 - (c.commission_pct + c.tax_pct) / 100)
+                budget = min(bot_budget, cash_bp)
                 est = level or current
                 # market fills can be worse than the last price: keep >=0.5% headroom so Toss doesn't reject
                 headroom = max((c.slippage_pct + c.commission_pct) / 100, LIVE_BUY_HEADROOM)
@@ -384,17 +417,22 @@ def run_live(bot: dict, today: str) -> dict:
             if qty <= 0:
                 bots.log(bot, "skip", f"{'자금' if side == 'BUY' else '매도 가능 수량'} 부족으로 주문하지 않았습니다", "warn")
                 continue
-            crossed = level is not None and ((side == "BUY" and max(today_bar.open, current) >= level)
-                                             or (side == "SELL" and min(today_bar.open, current) <= level))
             extra = {"entry_atr": d["entry_atr"]} if side == "BUY" and d["entry_atr"] is not None else {}
-            if o.kind == "market" or crossed:
+            if immediate:
                 r = _send_market(bot, side, qty, current, _client_order_id(bot, today, n, "mkt"))
-                st["pending"].append({"kind": "order", "id": r["orderId"], "side": side, "date": today, "synced": 0.0, **extra})
+                st["pending"].append({"kind": "order", "id": r["orderId"], "side": side, "qty": qty,
+                                      "date": today, "synced": 0.0, **extra})
                 bots.log(bot, "order", f"{'매수' if side == 'BUY' else '매도'} 시장가 {qty}주 주문 — {o.reason}")
-                expect_holding = side == "BUY"
+                if side == "SELL" and any(nxt.side == "buy" for nxt in orders[n + 1:]):
+                    _wait_sell_fill(bot, today, r["orderId"])
+                    sell_in_flight = any(p["kind"] == "order" and p["id"] == r["orderId"] for p in st["pending"])
+                    expect_holding = pos["qty"] > 0 and not sell_in_flight
+                else:
+                    expect_holding = side == "BUY"
             else:
                 r = _send_conditional(bot, side, qty, level, today, _client_order_id(bot, today, n, "cond"))
-                st["pending"].append({"kind": "conditional", "id": r["conditionalOrderId"], "side": side, "date": today, "synced": 0.0, **extra})
+                st["pending"].append({"kind": "conditional", "id": r["conditionalOrderId"], "side": side, "qty": qty,
+                                      "date": today, "synced": 0.0, **extra})
                 bots.log(bot, "order", f"{describe(o, today_bar.open)} → 조건주문 {qty}주 (오늘 하루 유효)")
         except ApiError as e:
             bots.log(bot, "error", f"주문 실패: {e.message}", "error", {"code": e.code})

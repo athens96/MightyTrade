@@ -173,6 +173,7 @@ def toss(env, monkeypatch):
         ("POST", "/api/v1/orders"): lambda p, j: {"orderId": f"o-{j['clientOrderId'][:6]}"},
         ("POST", "/api/v1/conditional-orders"): {"conditionalOrderId": "c-1"},
     })
+    monkeypatch.setattr(executor, "SELL_SETTLE_INTERVAL", 0)
     for mod in (executor, trading, toss_account):
         monkeypatch.setattr(mod, "_account", lambda: (fake, 7))
     return fake
@@ -238,7 +239,57 @@ def test_live_same_day_sell_and_rebuy_are_both_sent(toss):
     Scripted.script = {"2026-11-17": [Order("sell"), Order("buy", kind="stop", stop_from_open=3)]}
     executor.run(reload(bot), "2026-11-18")
     assert order_posts(toss)[0][3]["side"] == "SELL" and order_posts(toss)[0][3]["quantity"] == "50"
-    assert [c for c in toss.calls if c[1] == "/api/v1/conditional-orders"]
+    conds = [c for c in toss.calls if c[1] == "/api/v1/conditional-orders"]
+    assert conds and conds[0][3]["quantity"] == "96"  # full 10,000 budget (floor(10000 / (103 * 1.005)))
+
+
+def test_live_same_day_sell_rebuy_full_capital_when_filled_or_pending(toss):
+    """Fully invested bot (100% of capital) must still size its same-day conditional re-entry properly."""
+    # Case 1: sell fills during settle poll -> cashBuyingPower updates -> full rebuy
+    settled = {"done": False}
+    toss.routes[("GET", "/api/v1/sellable-quantity")] = {"sellableQuantity": "100"}
+    toss.routes[("GET", "/api/v1/buying-power")] = lambda p, j: {"currency": "KRW", "cashBuyingPower": "10000" if settled["done"] else "0"}
+
+    bot = make_bot("live", capital=10_000)
+    bot["state"]["live"]["position"] = {"qty": 100, "entry_price": 100, "entry_date": "2026-11-16"}
+    bots.save(bot)
+    sell_id = f"o-{executor._client_order_id(bot, '2026-11-18', 0, 'mkt')[:6]}"
+
+    def get_order(p, j):
+        settled["done"] = True
+        return {"status": "FILLED", "execution": {"filledQuantity": "100", "averageFilledPrice": "100"}}
+
+    toss.routes[("GET", f"/api/v1/orders/{sell_id}")] = get_order
+    Scripted.script = {"2026-11-17": [Order("sell"), Order("buy", kind="stop", stop_from_open=3)]}
+    executor.run(reload(bot), "2026-11-18")
+    conds = [c for c in toss.calls if c[1] == "/api/v1/conditional-orders"]
+    assert len(conds) == 1 and conds[0][3]["quantity"] == "96"
+    assert reload(bot)["state"]["live"]["position"]["qty"] == 0
+
+    # Case 2: sell still PENDING (not yet reflected in buying power) -> conditional rebuy uses estimated proceeds
+    bot2 = make_bot("live", capital=10_000)
+    bot2["state"]["live"]["position"] = {"qty": 100, "entry_price": 100, "entry_date": "2026-11-16"}
+    bots.save(bot2)
+    sell_id2 = f"o-{executor._client_order_id(bot2, '2026-11-18', 0, 'mkt')[:6]}"
+    toss.routes[("GET", "/api/v1/buying-power")] = {"currency": "KRW", "cashBuyingPower": "0"}
+    toss.routes[("GET", f"/api/v1/orders/{sell_id2}")] = {"status": "PENDING", "execution": {"filledQuantity": "0"}}
+    executor.run(reload(bot2), "2026-11-18")
+    conds = [c for c in toss.calls if c[1] == "/api/v1/conditional-orders"]
+    assert len(conds) == 2 and conds[1][3]["quantity"] == "96"
+
+
+def test_live_rejected_sell_blocks_followup_rebuy(toss):
+    """If the open sell is rejected during settle polling, do not place a follow-up buy."""
+    toss.routes[("GET", "/api/v1/sellable-quantity")] = {"sellableQuantity": "100"}
+    bot = make_bot("live", capital=10_000)
+    bot["state"]["live"]["position"] = {"qty": 100, "entry_price": 100, "entry_date": "2026-11-16"}
+    bots.save(bot)
+    sell_id = f"o-{executor._client_order_id(bot, '2026-11-18', 0, 'mkt')[:6]}"
+    toss.routes[("GET", f"/api/v1/orders/{sell_id}")] = {"status": "REJECTED", "execution": {"filledQuantity": "0"}}
+    Scripted.script = {"2026-11-17": [Order("sell"), Order("buy", kind="stop", stop_from_open=3)]}
+    executor.run(reload(bot), "2026-11-18")
+    assert not [c for c in toss.calls if c[1] == "/api/v1/conditional-orders"]
+    assert reload(bot)["state"]["live"]["position"]["qty"] == 100
 
 
 def test_reconcile_applies_fills_and_follows_triggered_conditionals(toss):
