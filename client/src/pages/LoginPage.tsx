@@ -2,6 +2,10 @@ import { useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { GoogleLogin } from '@react-oauth/google'
 import { useAuth } from '../auth/AuthContext'
+import AuthShell from '../components/auth/AuthShell'
+
+// Google's button takes a fixed pixel width: fill the card (card 420px - padding), narrower on phones.
+const buttonWidth = () => Math.min(356, window.innerWidth - 84)
 
 export default function LoginPage() {
   const { status, loginWithGoogle } = useAuth()
@@ -12,23 +16,30 @@ export default function LoginPage() {
   if (status === 'authenticated') return <Navigate to="/" replace />
 
   return (
-    <div className="center card">
-      <img className="login-mascot" src="/mascot-256.png" alt="" width={128} height={128} />
-      <h1>Mighty Trade</h1>
-      <p className="muted">Google 계정으로 로그인하세요. 처음이면 관리자 승인 후 이용할 수 있습니다.</p>
-      <GoogleLogin
-        onSuccess={async ({ credential }) => {
-          if (!credential) return setError('Google credential이 없습니다')
-          try {
-            const next = await loginWithGoogle(credential)
-            if (next === 'approval_pending' || next === 'rejected') setGate(next)
-            else navigate('/otp')
-          } catch (e) {
-            setError((e as Error).message)
-          }
-        }}
-        onError={() => setError('Google 로그인 실패')}
-      />
+    <AuthShell>
+      <img className="auth-mascot" src="/mascot-256.png" alt="" width={112} height={112} />
+      <h1 className="auth-title">Mighty <span>Trade</span></h1>
+      <p className="auth-tag">시장을 읽고, 전략을 검증하고, 자동으로 실행합니다.</p>
+      <div className="auth-google">
+        <GoogleLogin
+          theme="outline"
+          size="large"
+          text="signin_with"
+          shape="rectangular"
+          width={buttonWidth()}
+          onSuccess={async ({ credential }) => {
+            if (!credential) return setError('Google credential이 없습니다')
+            try {
+              const next = await loginWithGoogle(credential)
+              if (next === 'approval_pending' || next === 'rejected') setGate(next)
+              else navigate('/otp')
+            } catch (e) {
+              setError((e as Error).message)
+            }
+          }}
+          onError={() => setError('Google 로그인 실패')}
+        />
+      </div>
       {gate === 'approval_pending' && (
         <div className="gate">
           <b>가입 신청이 접수되었습니다.</b>
@@ -42,6 +53,12 @@ export default function LoginPage() {
         </div>
       )}
       {error && <p className="error">{error}</p>}
-    </div>
+      <ul className="auth-secure">
+        <li>OTP 2단계 인증</li>
+        <li>API 키 암호화 저장</li>
+        <li>관리자 승인제</li>
+      </ul>
+      <p className="auth-note">처음 로그인하면 관리자 승인 후 이용할 수 있습니다.</p>
+    </AuthShell>
   )
 }

@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { authApi } from '../api/auth'
 import { useAuth } from '../auth/AuthContext'
+import AuthShell from '../components/auth/AuthShell'
 
 export default function OtpPage() {
   const { status, nextStep, verifyOtp } = useAuth()
@@ -34,16 +35,18 @@ export default function OtpPage() {
   }
 
   return (
-    <div className="center card">
-      <h2>{nextStep === 'otp_setup' ? 'OTP 등록' : 'OTP 인증'}</h2>
+    <AuthShell>
+      <img className="auth-mascot small" src="/mascot-256.png" alt="" width={72} height={72} />
+      <h2 className="auth-heading">{nextStep === 'otp_setup' ? 'OTP 등록' : 'OTP 인증'}</h2>
+      {nextStep !== 'otp_setup' && <p className="auth-tag">인증 앱에 표시된 6자리 코드를 입력하세요.</p>}
       {nextStep === 'otp_setup' && setup && (
         <>
-          <p className="muted">Google Authenticator 등 OTP 앱으로 QR을 스캔하세요.</p>
+          <p className="auth-tag">Google Authenticator 등 OTP 앱으로 QR을 스캔하세요.</p>
           <div className="qr"><QRCodeSVG value={setup.otpauth_url} size={180} /></div>
-          <code className="muted">{setup.secret}</code>
+          <code className="auth-secret">{setup.secret}</code>
         </>
       )}
-      <form onSubmit={submit}>
+      <form className="auth-otp" onSubmit={submit}>
         <input
           inputMode="numeric"
           autoComplete="one-time-code"
@@ -56,6 +59,6 @@ export default function OtpPage() {
         <button type="submit" disabled={code.length !== 6}>확인</button>
       </form>
       {error && <p className="error">{error}</p>}
-    </div>
+    </AuthShell>
   )
 }
