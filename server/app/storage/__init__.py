@@ -15,6 +15,9 @@ def init_storage(app: Flask) -> None:
     if backend == "json":
         from .json_store import JsonFileStore
         store: Store = JsonFileStore(app.config["DATA_DIR"])
+    elif backend == "sqlite":
+        from .sqlite_store import SqliteStore
+        store = SqliteStore(app.config["DATA_DIR"])
     elif backend == "supabase":
         raise NotImplementedError("Supabase store is not implemented yet (see storage/base.py)")
     else:
