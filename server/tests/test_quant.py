@@ -4,6 +4,7 @@ import math
 import pyotp
 import pytest
 
+from fakes import approve_all
 from app.auth import routes as auth_routes
 from app.quant import fixtures
 from app.quant import indicators as ind
@@ -143,6 +144,8 @@ def test_indicator_fixture_is_current():
 def session(client, monkeypatch):
     monkeypatch.setattr(auth_routes, "verify_google_credential",
                         lambda c: {"sub": "q", "email": "q@example.com", "email_verified": True})
+    client.post("/api/auth/google", json={"credential": "x"})
+    approve_all(client)
     client.post("/api/auth/google", json={"credential": "x"})
     totp = pyotp.TOTP(client.post("/api/auth/otp/setup").json["secret"])
     client.post("/api/auth/otp/verify", json={"code": totp.now()})

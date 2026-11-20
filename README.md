@@ -25,6 +25,7 @@ server/app/
 │   ├── decorators.py      @login_required, @pending_required
 │   └── routes.py          /api/auth/*
 ├── integrations/toss/   토스증권 API 클라이언트 (토큰 공유 캐시, 재발급, 429 재시도, 에러 매핑)
+├── admin/               관리자: 가입 승인·거절, 계정 삭제(OTP 재확인, 데이터 전체 삭제)
 ├── account/             계좌: 보유종목·손익·매수가능금액, 조건주문(OCO 익절/손절, 기본 드라이런 + OTP)
 ├── realtime/            실시간 중계: 사용자별 토스 웹소켓 1개 → 브라우저 SSE (호가 5회/초로 합침)
 ├── users/               계정별 데이터 (관심종목, 설정, 증권사 API 키)
@@ -125,6 +126,15 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 - 새 전략 추가: `server/app/quant/strategies/`에 `Strategy`를 상속한 클래스(`prepare` / `on_bar`)를 만들고 `strategies/__init__.py`의 `STRATEGIES`에 등록. 화면에는 자동으로 나타남.
 - 체결 규칙: 바 i 종가에 판단한 주문은 바 i+1에서만 체결(미래 정보 차단). 롱 전용, 한 번에 한 포지션, 정수 주식.
 - 지표를 바꾸면 `cd server && .venv/bin/python -m app.quant.fixtures`로 fixture 재생성 → 서버·클라이언트 테스트가 두 구현의 일치를 검증.
+
+## 가입 승인 · 관리자
+
+- 관리자 = `server/.env`의 `ADMIN_EMAILS`(쉼표 구분). DB가 아니라 환경 설정이라 데이터를 고쳐 관리자가 될 수 없음. 관리자는 자동 승인.
+- 새 Google 로그인은 **승인 대기**로 등록되고, 승인 전에는 OTP 등록·모든 API가 막힘. 거절된 계정은 로그인 시 거절 안내.
+- 관리자 메뉴(승인 대기 건수 배지): 승인 / 거절(승인 취소, 해당 봇 자동 정지) / 삭제.
+- 삭제: 관리자 OTP + 이메일 입력 확인. 프로필·OTP, 관심종목·설정, 토스 키(캐시 토큰 포함), 봇·기록, 주문 기록을 삭제. 실거래 봇에 보유·미체결이 있으면 기본 거부. 자기 자신·다른 관리자는 삭제 불가.
+- 이 기능 이전에 만들어진 계정은 승인된 것으로 간주.
+- `ALLOWED_EMAILS`는 선택 사항(지정하면 그 이메일만 가입 신청 가능). 비우면 누구나 신청하고 관리자가 승인.
 
 ## 거래 · 자동매매
 

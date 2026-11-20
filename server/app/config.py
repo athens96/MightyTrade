@@ -20,6 +20,9 @@ class Config:
 
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
     ALLOWED_EMAILS = _csv("ALLOWED_EMAILS")
+    # Service admins (comma separated). Admins are auto-approved and manage sign-ups.
+    # Kept in the environment (not the DB) so nobody can grant themselves admin by editing data.
+    ADMIN_EMAILS = _csv("ADMIN_EMAILS")
 
     OTP_ISSUER = os.getenv("OTP_ISSUER", "MightyTrade")
     OTP_MAX_FAILS = int(os.getenv("OTP_MAX_FAILS", "5"))

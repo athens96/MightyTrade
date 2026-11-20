@@ -20,6 +20,14 @@ def google_login():
     info = verify_google_credential(credential)
     user = users.upsert_from_google(info)
 
+    status = users.status_of(user)
+    if status != "approved":
+        # Not usable yet: no session or OTP step until an admin approves the sign-up.
+        resp = jsonify(next="approval_pending" if status == "pending" else "rejected", user=users.public_view(user))
+        tokens.clear(resp, "pending")
+        tokens.clear(resp, "session")
+        return resp
+
     resp = jsonify(
         next="otp_verify" if user.get("otp_enabled") else "otp_setup",
         user=users.public_view(user),

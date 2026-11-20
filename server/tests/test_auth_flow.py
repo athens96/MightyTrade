@@ -1,12 +1,15 @@
 import pyotp
 
 from app.auth import routes as auth_routes
+from fakes import approve_all
 
 GOOGLE_INFO = {"sub": "g-123", "email": "me@example.com", "email_verified": True, "name": "Me"}
 
 
 def _login(client, monkeypatch):
     monkeypatch.setattr(auth_routes, "verify_google_credential", lambda c: GOOGLE_INFO)
+    client.post("/api/auth/google", json={"credential": "x"})
+    approve_all(client)
     return client.post("/api/auth/google", json={"credential": "x"})
 
 

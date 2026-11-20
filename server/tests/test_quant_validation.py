@@ -4,6 +4,7 @@ import math
 import pyotp
 import pytest
 
+from fakes import approve_all
 from app.auth import routes as auth_routes
 from app.errors import ApiError
 from app.quant import montecarlo, optimize
@@ -151,6 +152,8 @@ def test_trade_impact_uses_equity_before_entry():
 def session(client, monkeypatch):
     monkeypatch.setattr(auth_routes, "verify_google_credential",
                         lambda c: {"sub": "v", "email": "v@example.com", "email_verified": True})
+    client.post("/api/auth/google", json={"credential": "x"})
+    approve_all(client)
     client.post("/api/auth/google", json={"credential": "x"})
     totp = pyotp.TOTP(client.post("/api/auth/otp/setup").json["secret"])
     client.post("/api/auth/otp/verify", json={"code": totp.now()})

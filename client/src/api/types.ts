@@ -7,6 +7,8 @@ export interface User {
   name: string
   picture?: string
   otp_enabled: boolean
+  status: 'pending' | 'approved' | 'rejected'
+  role: 'admin' | 'user'
 }
 
 export interface Candle {

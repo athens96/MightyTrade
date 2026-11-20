@@ -259,3 +259,16 @@ button.danger:not(:disabled) { background: #3a1517; }
 .log-row.error { color: #f85149; }
 b.plain { color: #e6edf3; }
 .svg-chart svg.spark { height: 130px; }
+.gate { border: 1px solid #2f81f7; border-radius: 8px; padding: 12px 16px; max-width: 360px; text-align: center; }
+.gate.rejected { border-color: #f85149; }
+.gate p { margin: 6px 0 0; }
+.nav-badge { display: inline-block; margin-left: 5px; min-width: 18px; padding: 0 5px; border-radius: 9px; background: #e5484d; color: #fff; font-size: 11px; text-align: center; line-height: 18px; }
+.user-cell { display: flex; align-items: center; gap: 10px; }
+.user-cell img, .user-cell .avatar { width: 30px; height: 30px; border-radius: 50%; }
+.user-cell .avatar { display: inline-flex; align-items: center; justify-content: center; background: #30363d; font-weight: 600; }
+.status-badge { font-size: 12px; padding: 2px 8px; border-radius: 9px; background: #21262d; }
+.status-badge.pending { color: #f0b429; background: #3a2a10; }
+.status-badge.approved { color: #3fb950; background: #12361f; }
+.status-badge.rejected { color: #f85149; background: #3a1517; }
+.admin-users td.actions { display: flex; gap: 6px; justify-content: flex-end; }
+.admin-users td.actions button { padding: 3px 10px; font-size: 12px; }

@@ -1,7 +1,7 @@
 import { api } from './client'
 import type { User } from './types'
 
-export type NextStep = 'otp_setup' | 'otp_verify'
+export type NextStep = 'otp_setup' | 'otp_verify' | 'approval_pending' | 'rejected'
 
 export const authApi = {
   google: (credential: string) =>

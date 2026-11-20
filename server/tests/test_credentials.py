@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from fakes import approve_all
 from app.auth import routes as auth_routes
 from app.errors import ApiError
 from app.integrations.toss import client as toss_client
@@ -34,6 +35,8 @@ def seal(key_info, payload, aad):
 def session(client, monkeypatch):
     """Logged-in client. Returns (client, user_id, totp)."""
     monkeypatch.setattr(auth_routes, "verify_google_credential", lambda c: GOOGLE_INFO)
+    client.post("/api/auth/google", json={"credential": "x"})
+    approve_all(client)
     uid = client.post("/api/auth/google", json={"credential": "x"}).json["user"]["id"]
     totp = pyotp.TOTP(client.post("/api/auth/otp/setup").json["secret"])
     assert client.post("/api/auth/otp/verify", json={"code": totp.now()}).status_code == 200

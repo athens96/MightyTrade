@@ -33,6 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loginWithGoogle = useCallback(async (credential: string) => {
     const res = await authApi.google(credential)
+    if (res.next === 'approval_pending' || res.next === 'rejected') return res.next // no session until approved
     setUser(res.user)
     setNextStep(res.next)
     setStatus('pending')

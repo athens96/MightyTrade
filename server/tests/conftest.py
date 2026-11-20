@@ -6,6 +6,7 @@ from app import create_app
 TEST_OVERRIDES = {
     "GOOGLE_CLIENT_ID": "test-client",
     "ALLOWED_EMAILS": [],
+    "ADMIN_EMAILS": ["admin@example.com"],
     "MARKET_PROVIDERS": {"KR": "mock", "US": "mock"},
     "TOSS_API_BASE_URL": "https://toss.test",
     "ENCRYPTION_KEY": "",

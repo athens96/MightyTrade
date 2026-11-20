@@ -25,6 +25,7 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
     init_storage(app)
 
     from .account.routes import bp as account_bp
+    from .admin.routes import bp as admin_bp
     from .autotrade.routes import bp as autotrade_bp
     from .auth.routes import bp as auth_bp
     from .market.routes import bp as market_bp
@@ -41,6 +42,7 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
     app.register_blueprint(account_bp, url_prefix="/api/account")
     app.register_blueprint(realtime_bp, url_prefix="/api/realtime")
     app.register_blueprint(autotrade_bp, url_prefix="/api/autotrade")
+    app.register_blueprint(admin_bp, url_prefix="/api/admin")
 
     register_error_handlers(app)
 
