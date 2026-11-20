@@ -341,11 +341,11 @@ def screener_run():
     except ValueError:
         raise ApiError(400, "invalid_market")
     preset = str(body.get("preset") or "momentum_quality")
-    universe = str(body.get("universe") or ("kr_bluechip" if market == Market.KR else "us_bluechip"))
+    universe = str(body.get("universe") or ("kr_all_150" if market == Market.KR else "us_sp100"))
     custom = body.get("symbols")
     if isinstance(custom, str):
         custom = [s.strip() for s in re.split(r"[\s,;]+", custom) if s.strip()]
-    top_n = int(_num(body, "top_n", 15, 1, 30))
+    top_n = int(_num(body, "top_n", 20, 1, 40))
     return jsonify(
         screener.run_screen(
             market,
@@ -354,6 +354,7 @@ def screener_run():
             custom_symbols=custom if isinstance(custom, list) else None,
             strategy_id=body.get("strategy"),
             exclude_warnings=bool(body.get("exclude_warnings", True)),
+            strict_only=bool(body.get("strict_only", False)),
             top_n=top_n,
         )
     )

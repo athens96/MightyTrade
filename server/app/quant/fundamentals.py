@@ -104,12 +104,13 @@ def _fetch_us_yahoo(symbols: list[str]) -> dict[str, dict[str, Any]]:
     except Exception:
         return {s: _empty("unavailable") for s in symbols}
 
-    for i in range(0, len(symbols), 40):
-        batch = symbols[i : i + 40]
+    for i in range(0, len(symbols), 50):
+        batch = symbols[i : i + 50]
+        y_to_orig = {s.replace(".", "-"): s for s in batch}
         try:
             r = sess.get(
                 "https://query1.finance.yahoo.com/v7/finance/quote",
-                params={"symbols": ",".join(batch), "crumb": crumb},
+                params={"symbols": ",".join(y_to_orig.keys()), "crumb": crumb},
                 timeout=HTTP_TIMEOUT,
             )
             if r.status_code in (401, 403):
@@ -118,14 +119,15 @@ def _fetch_us_yahoo(symbols: list[str]) -> dict[str, dict[str, Any]]:
                 sess, crumb = _yahoo_session()
                 r = sess.get(
                     "https://query1.finance.yahoo.com/v7/finance/quote",
-                    params={"symbols": ",".join(batch), "crumb": crumb},
+                    params={"symbols": ",".join(y_to_orig.keys()), "crumb": crumb},
                     timeout=HTTP_TIMEOUT,
                 )
             if not r.ok:
                 continue
             rows = (r.json().get("quoteResponse") or {}).get("result") or []
             for q in rows:
-                sym = str(q.get("symbol") or "").upper()
+                raw_sym = str(q.get("symbol") or "").upper()
+                sym = y_to_orig.get(raw_sym, raw_sym)
                 per = _parse_float(q.get("trailingPE"))
                 pbr = _parse_float(q.get("priceToBook"))
                 eps = _parse_float(q.get("epsTrailingTwelveMonths"))
@@ -188,7 +190,7 @@ def _fetch_kr_naver(symbols: list[str]) -> dict[str, dict[str, Any]]:
     if not symbols:
         return {}
     out: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=min(6, len(symbols))) as pool:
+    with ThreadPoolExecutor(max_workers=min(12, len(symbols))) as pool:
         for sym, row in pool.map(_fetch_kr_one, symbols):
             out[sym] = row
     return out

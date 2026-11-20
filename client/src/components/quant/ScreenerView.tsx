@@ -121,8 +121,12 @@ export default function ScreenerView({ result, preset, onBacktest, onPortfolio }
           )}
         </div>
         <span className="muted small">
-          스캔 {result.scanned}종목 중 <b>{result.passed}종목</b> 분석 완료 (상위 {result.items.length}개 표시 · {result.elapsed_sec}초)
+          스캔 {result.scanned}종목 중 <b>{result.passed}종목</b> 분석 완료
+          {result.matched_count != null && <> · <b className="up">조건 충족 {result.matched_count}종목</b></>}
+          {' '}(상위 {result.items.length}개 표시 · {result.elapsed_sec}초)
+          {result.skipped > 0 && ` · 데이터 부족 ${result.skipped}개 제외`}
           {result.excluded_warnings.length > 0 && ` · 위험 종목 ${result.excluded_warnings.length}개 자동 제외`}
+          {result.data_source && ` · ${result.data_source}`}
           {result.fundamentals_source && ` · ${SOURCE_LABELS[result.fundamentals_source] ?? result.fundamentals_source}`}
         </span>
       </div>
@@ -210,6 +214,9 @@ export default function ScreenerView({ result, preset, onBacktest, onPortfolio }
                     >
                       ↗
                     </a>
+                    {r.matched && r.match_label && (
+                      <span className="match-badge">{r.match_label}</span>
+                    )}
                     {r.warnings.length > 0 && (
                       <span className="warn-badge" title={r.warnings.join(', ')}>⚠ {r.warnings[0]}</span>
                     )}

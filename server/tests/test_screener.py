@@ -6,7 +6,7 @@ import pytest
 
 from fakes import approve_all
 from app.auth import routes as auth_routes
-from app.quant import fundamentals, screener
+from app.quant import fundamentals, screener, screener_data
 
 
 @pytest.fixture
@@ -36,6 +36,14 @@ def test_fundamental_parsers_and_mock():
     assert m1 == m2
     assert m1["AAPL"]["per"] > 0 and m1["AAPL"]["roe"] > 0 and m1["AAPL"]["source"] == "mock"
 
+    # Ordinary KR stock filter excludes ETFs, preferred shares, and SPACs
+    assert screener_data._is_ordinary_kr_stock({"itemCode": "005930", "stockName": "삼성전자", "stockEndType": "stock"})
+    assert not screener_data._is_ordinary_kr_stock({"itemCode": "005935", "stockName": "삼성전자우", "stockEndType": "stock"})
+    assert not screener_data._is_ordinary_kr_stock({"itemCode": "069500", "stockName": "KODEX 200", "stockEndType": "etf"})
+    assert not screener_data._is_ordinary_kr_stock({"itemCode": "450000", "stockName": "미래에셋스팩10호", "stockEndType": "stock"})
+    rows = screener_data._FCHART_ROW_RE.findall('<item data="20261120|180000|185000|179000|181000|123456" />')
+    assert rows == [("20261120", "180000|185000|179000|181000|123456")]
+
 
 def test_screener_presets_endpoint_and_guides(session):
     r = session.get("/api/quant/screener/presets")
@@ -61,9 +69,9 @@ def test_screener_all_presets_on_kr(session, preset_id):
     body = r.json
     assert body["scanned"] == 5 and body["passed"] == 5
     assert len(body["items"]) == 5
-    scores = [it["score"] for it in body["items"]]
-    assert scores == sorted(scores, reverse=True)
-    assert all(0 <= s <= 100 for s in scores)
+    rank_keys = [(1 if it["matched"] else 0, it["score"]) for it in body["items"]]
+    assert rank_keys == sorted(rank_keys, reverse=True)
+    assert all(0 <= it["score"] <= 100 for it in body["items"])
     assert all(it["reasons"] for it in body["items"])
     text = json.dumps(body)
     assert "NaN" not in text and "Infinity" not in text
@@ -85,8 +93,17 @@ def test_screener_all_us_presets(session, preset_id):
 
 def test_screener_validations_and_watchlist(session):
     # KR-only smart_money rejects US
-    r1 = session.post("/api/quant/screener/run", json={"market": "US", "preset": "smart_money", "universe": "us_bluechip"})
+    r1 = session.post("/api/quant/screener/run", json={"market": "US", "preset": "smart_money", "universe": "us_sp100"})
     assert r1.status_code == 400 and r1.json["error"] == "kr_only_preset"
+
+    # Legacy alias universe IDs still work (saved localStorage compatibility)
+    r_alias = session.post("/api/quant/screener/run", json={"market": "KR", "preset": "momentum_quality", "universe": "kr_bluechip", "top_n": 10})
+    assert r_alias.status_code == 200 and r_alias.json["universe"] == "kr_all_150" and len(r_alias.json["items"]) == 10
+
+    # Strict-only filter returns only matched rows
+    r_strict = session.post("/api/quant/screener/run", json={"market": "US", "preset": "magic_formula", "universe": "us_sp100", "strict_only": True, "top_n": 20})
+    assert r_strict.status_code == 200
+    assert all(it["matched"] for it in r_strict.json["items"])
 
     # Intraday strategy rejected for strategy_fit
     r2 = session.post("/api/quant/screener/run", json={

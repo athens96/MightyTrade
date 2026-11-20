@@ -319,6 +319,7 @@ b.plain { color: #e6edf3; }
 .row-btns { display: flex; gap: 4px; justify-content: flex-end; }
 .row-btns button { padding: 3px 8px; font-size: 12px; white-space: nowrap; }
 .warn-badge { display: inline-block; margin-left: 4px; font-size: 10px; padding: 1px 5px; border-radius: 6px; background: #3a2a10; color: #f0b429; }
+.match-badge { display: inline-block; margin-left: 5px; font-size: 10.5px; padding: 1px 6px; border-radius: 6px; background: #12361f; color: #3fb950; font-weight: 600; white-space: nowrap; }
 .quant-form textarea { width: 100%; box-sizing: border-box; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font-family: inherit; font-size: 12px; resize: vertical; }
 .quant-form label.check { flex-direction: row; align-items: center; gap: 6px; cursor: pointer; }
 

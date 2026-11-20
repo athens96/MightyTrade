@@ -340,6 +340,7 @@ export interface ScreenerRunRequest {
   symbols?: string | string[]
   strategy?: string
   exclude_warnings?: boolean
+  strict_only?: boolean
   top_n?: number
 }
 
@@ -376,6 +377,8 @@ export interface ScreenerRow {
   fit_win_rate?: N
   fit_trades?: number
   warnings: string[]
+  matched?: boolean
+  match_label?: string
   score: number
   reasons: string[]
 }
@@ -389,8 +392,10 @@ export interface ScreenerResult {
   recommended_portfolio: string
   scanned: number
   passed: number
+  matched_count?: number
   skipped: number
   excluded_warnings: string[]
+  data_source?: string
   fundamentals_source: string | null
   elapsed_sec: number
   notices: string[]

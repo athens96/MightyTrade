@@ -1,16 +1,15 @@
-"""Quant Stock Screener: extract promising stocks using price/trend, oversold bounce,
-KR foreign+institution flows, strategy-fit backtesting, and free fundamental metrics
-(Magic Formula, High-Dividend Low-Vol, Multi-Factor).
+"""Quant Stock Screener: large-universe (100~200 stocks) quant extraction using fast public
+daily bars, KR foreign+institution flows, strategy-fit backtesting, and free fundamentals
+(Magic Formula, High-Dividend Low-Vol, Multi-Factor) with Toss warning safety filtering.
 """
 from __future__ import annotations
 
 import hashlib
 import math
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
-from flask import copy_current_request_context, current_app, g
+from flask import current_app, g
 
 from ..errors import ApiError
 from ..market import extras
@@ -20,107 +19,223 @@ from ..storage import get_store
 from ..users.routes import DEFAULT_WATCHLIST, WATCHLISTS
 from . import fundamentals as fund_mod
 from . import indicators as ind
+from . import screener_data as sdata
 from .data import cost_defaults
 from .engine import Backtester, Bars, Costs
 from .portfolio import SYMBOL_RE
 from .strategies import STRATEGIES
 
-MAX_CUSTOM_SYMBOLS = 30
+MAX_CUSTOM_SYMBOLS = 50
 
-# ------------------------------------------------------------------ curated liquid universes
+# Fallback static KR stocks (used in mock mode or if Naver market-cap list is unreachable)
+KR_FALLBACK_KOSPI: list[tuple[str, str]] = [
+    ("005930", "삼성전자"), ("000660", "SK하이닉스"), ("373220", "LG에너지솔루션"),
+    ("207940", "삼성바이오로직스"), ("005380", "현대차"), ("000270", "기아"),
+    ("068270", "셀트리온"), ("105560", "KB금융"), ("055550", "신한지주"),
+    ("086790", "하나금융지주"), ("005490", "POSCO홀딩스"), ("035420", "NAVER"),
+    ("035720", "카카오"), ("006400", "삼성SDI"), ("051910", "LG화학"),
+    ("012330", "현대모비스"), ("028260", "삼성물산"), ("033780", "KT&G"),
+    ("017670", "SK텔레콤"), ("030200", "KT"), ("015760", "한국전력"),
+    ("012450", "한화에어로스페이스"), ("329180", "HD현대중공업"), ("034020", "두산에너빌리티"),
+    ("010130", "고려아연"), ("009150", "삼성전기"), ("018260", "삼성에스디에스"),
+    ("032830", "삼성생명"), ("000810", "삼성화재"), ("138040", "메리츠금융지주"),
+]
+
+KR_FALLBACK_KOSDAQ: list[tuple[str, str]] = [
+    ("196170", "알테오젠"), ("247540", "에코프로비엠"), ("086520", "에코프로"),
+    ("028300", "HLB"), ("277810", "레인보우로보틱스"), ("058470", "리노공업"),
+    ("214150", "클래시스"), ("039030", "이오테크닉스"), ("035900", "JYP Ent."),
+    ("041510", "에스엠"), ("257720", "실리콘투"), ("293490", "카카오게임즈"),
+    ("112040", "위메이드"), ("067160", "SOOP"), ("145020", "휴젤"),
+]
+
+KR_ETF_LIST: list[tuple[str, str]] = [
+    ("069500", "KODEX 200"), ("229200", "코스닥150"), ("360750", "미국 S&P500"),
+    ("133690", "미국 나스닥100"), ("381170", "미국테크TOP10"), ("381180", "미국필라델피아반도체"),
+    ("091160", "반도체"), ("091180", "자동차"), ("091170", "은행"),
+    ("102970", "증권"), ("305720", "2차전지산업"), ("244580", "바이오"),
+    ("449450", "방산"), ("466920", "조선"), ("266360", "미디어&엔터"),
+    ("139260", "IT"), ("140700", "보험"), ("117700", "건설"),
+    ("458730", "미국배당다우존스"), ("161510", "플러스 고배당주"), ("211560", "배당성장"),
+    ("329200", "리츠부동산인프라"), ("148070", "국고채10년"), ("114260", "국고채3년"),
+    ("153130", "단기채권"), ("305080", "미국채10년선물"), ("453850", "미국30년국채"),
+    ("132030", "골드선물"), ("261220", "WTI원유"), ("261240", "미국달러선물"),
+]
+
+# 100 liquid S&P 500 leaders spanning all 11 GICS sectors (growth + value + dividend + defensive)
+US_SP100_LIST: list[tuple[str, str]] = [
+    # Tech & Semiconductors
+    ("AAPL", "Apple"), ("MSFT", "Microsoft"), ("NVDA", "NVIDIA"), ("AVGO", "Broadcom"),
+    ("ORCL", "Oracle"), ("CRM", "Salesforce"), ("ADBE", "Adobe"), ("CSCO", "Cisco"),
+    ("ACN", "Accenture"), ("IBM", "IBM"), ("QCOM", "Qualcomm"), ("TXN", "Texas Instruments"),
+    ("AMD", "AMD"), ("AMAT", "Applied Materials"), ("INTU", "Intuit"), ("NOW", "ServiceNow"),
+    ("MU", "Micron"), ("LRCX", "Lam Research"), ("ADI", "Analog Devices"), ("KLAC", "KLA"),
+    # Communication Services
+    ("GOOGL", "Alphabet"), ("META", "Meta"), ("NFLX", "Netflix"), ("DIS", "Disney"),
+    ("TMUS", "T-Mobile"), ("VZ", "Verizon"), ("T", "AT&T"), ("CMCSA", "Comcast"),
+    # Consumer Discretionary
+    ("AMZN", "Amazon"), ("TSLA", "Tesla"), ("HD", "Home Depot"), ("MCD", "McDonald's"),
+    ("LOW", "Lowe's"), ("BKNG", "Booking"), ("TJX", "TJX"), ("NKE", "Nike"),
+    ("SBUX", "Starbucks"), ("GM", "General Motors"), ("F", "Ford"),
+    # Consumer Staples
+    ("WMT", "Walmart"), ("COST", "Costco"), ("PG", "Procter & Gamble"), ("KO", "Coca-Cola"),
+    ("PEP", "PepsiCo"), ("PM", "Philip Morris"), ("MO", "Altria"), ("CL", "Colgate-Palmolive"),
+    ("MDLZ", "Mondelez"), ("KMB", "Kimberly-Clark"), ("TGT", "Target"),
+    # Healthcare
+    ("LLY", "Eli Lilly"), ("UNH", "UnitedHealth"), ("JNJ", "Johnson & Johnson"), ("ABBV", "AbbVie"),
+    ("MRK", "Merck"), ("TMO", "Thermo Fisher"), ("ABT", "Abbott"), ("ISRG", "Intuitive Surgical"),
+    ("AMGN", "Amgen"), ("PFE", "Pfizer"), ("DHR", "Danaher"), ("BMY", "Bristol-Myers"),
+    ("GILD", "Gilead"), ("CVS", "CVS Health"), ("MDT", "Medtronic"),
+    # Financials
+    ("JPM", "JPMorgan"), ("V", "Visa"), ("MA", "Mastercard"), ("BAC", "Bank of America"),
+    ("WFC", "Wells Fargo"), ("GS", "Goldman Sachs"), ("MS", "Morgan Stanley"), ("BLK", "BlackRock"),
+    ("SCHW", "Charles Schwab"), ("AXP", "American Express"), ("C", "Citigroup"), ("USB", "U.S. Bancorp"),
+    ("CB", "Chubb"), ("PGR", "Progressive"), ("MET", "MetLife"),
+    # Industrials & Defense
+    ("GE", "GE Aerospace"), ("CAT", "Caterpillar"), ("RTX", "RTX"), ("HON", "Honeywell"),
+    ("UNP", "Union Pacific"), ("LMT", "Lockheed Martin"), ("DE", "Deere"), ("UPS", "UPS"),
+    ("BA", "Boeing"), ("ETN", "Eaton"),
+    # Energy
+    ("XOM", "Exxon Mobil"), ("CVX", "Chevron"), ("COP", "ConocoPhillips"), ("SLB", "Schlumberger"),
+    ("EOG", "EOG Resources"), ("PSX", "Phillips 66"),
+    # Utilities, Materials & REITs
+    ("NEE", "NextEra Energy"), ("SO", "Southern Co"), ("DUK", "Duke Energy"), ("LIN", "Linde"),
+    ("FCX", "Freeport-McMoRan"), ("AMT", "American Tower"), ("PLD", "Prologis"), ("O", "Realty Income"),
+]
+
+US_NASDAQ50_LIST: list[tuple[str, str]] = [
+    ("AAPL", "Apple"), ("MSFT", "Microsoft"), ("NVDA", "NVIDIA"), ("AMZN", "Amazon"),
+    ("GOOGL", "Alphabet"), ("META", "Meta"), ("TSLA", "Tesla"), ("AVGO", "Broadcom"),
+    ("COST", "Costco"), ("NFLX", "Netflix"), ("AMD", "AMD"), ("TMUS", "T-Mobile"),
+    ("CSCO", "Cisco"), ("PEP", "PepsiCo"), ("LIN", "Linde"), ("ADBE", "Adobe"),
+    ("QCOM", "Qualcomm"), ("TXN", "Texas Instruments"), ("ISRG", "Intuitive Surgical"), ("INTU", "Intuit"),
+    ("AMGN", "Amgen"), ("AMAT", "Applied Materials"), ("BKNG", "Booking"), ("HON", "Honeywell"),
+    ("PANW", "Palo Alto"), ("CRWD", "CrowdStrike"), ("SNPS", "Synopsys"), ("CDNS", "Cadence"),
+    ("KLAC", "KLA"), ("LRCX", "Lam Research"), ("MU", "Micron"), ("MRVL", "Marvell"),
+    ("ADI", "Analog Devices"), ("ASML", "ASML"), ("PLTR", "Palantir"), ("APP", "AppLovin"),
+    ("MELI", "MercadoLibre"), ("SHOP", "Shopify"), ("DDOG", "Datadog"), ("ZS", "Zscaler"),
+    ("FTNT", "Fortinet"), ("GILD", "Gilead"), ("REGN", "Regeneron"), ("VRTX", "Vertex"),
+    ("MDLZ", "Mondelez"), ("SBUX", "Starbucks"), ("PYPL", "PayPal"), ("ABNB", "Airbnb"),
+    ("ADP", "ADP"), ("CTAS", "Cintas"),
+]
+
+US_DIVIDEND40_LIST: list[tuple[str, str]] = [
+    ("JNJ", "Johnson & Johnson"), ("KO", "Coca-Cola"), ("PEP", "PepsiCo"), ("PG", "Procter & Gamble"),
+    ("XOM", "Exxon Mobil"), ("CVX", "Chevron"), ("ABBV", "AbbVie"), ("MRK", "Merck"),
+    ("PFE", "Pfizer"), ("BMY", "Bristol-Myers"), ("GILD", "Gilead"), ("VZ", "Verizon"),
+    ("T", "AT&T"), ("MO", "Altria"), ("PM", "Philip Morris"), ("O", "Realty Income"),
+    ("AMT", "American Tower"), ("SPG", "Simon Property"), ("PSA", "Public Storage"), ("VICI", "VICI Properties"),
+    ("SO", "Southern Co"), ("DUK", "Duke Energy"), ("NEE", "NextEra Energy"), ("ED", "Consolidated Edison"),
+    ("D", "Dominion Energy"), ("KMB", "Kimberly-Clark"), ("CL", "Colgate-Palmolive"), ("GIS", "General Mills"),
+    ("MCD", "McDonald's"), ("HD", "Home Depot"), ("LOW", "Lowe's"), ("IBM", "IBM"),
+    ("LMT", "Lockheed Martin"), ("RTX", "RTX"), ("CAT", "Caterpillar"), ("UPS", "UPS"),
+    ("JPM", "JPMorgan"), ("USB", "U.S. Bancorp"), ("PNC", "PNC Financial"), ("MET", "MetLife"),
+]
+
+US_ETF_LIST: list[tuple[str, str]] = [
+    ("SPY", "미국 S&P500"), ("QQQ", "나스닥100"), ("IWM", "미국 소형주"), ("DIA", "다우존스"),
+    ("VTI", "미국 전체주식"), ("VEA", "선진국 주식"), ("VWO", "신흥국 주식"), ("EWY", "한국 MSCI"),
+    ("XLK", "기술 (IT)"), ("XLV", "헬스케어"), ("XLF", "금융"), ("XLE", "에너지"),
+    ("XLI", "산업재"), ("XLY", "경기소비재"), ("XLP", "필수소비재"), ("XLU", "유틸리티"),
+    ("XLRE", "부동산 리츠"), ("XLB", "소재"), ("XLC", "커뮤니케이션"), ("SMH", "반도체"),
+    ("SOXX", "필라델피아 반도체"), ("ITA", "미국 방산"), ("XBI", "바이오테크"), ("SCHD", "미국 배당성장"),
+    ("VYM", "고배당 주식"), ("JEPI", "커버드콜 인컴"), ("TLT", "미국 장기국채"), ("IEF", "미국 중기국채"),
+    ("SHY", "미국 단기국채"), ("GLD", "금"), ("DBC", "원자재"),
+]
+
+# Backwards-compatible aliases (old saved localStorage universe IDs)
+UNIVERSE_ALIASES = {
+    "kr_bluechip": "kr_all_150",
+    "us_bluechip": "us_sp100",
+}
+
 UNIVERSES: dict[str, dict[str, dict[str, Any]]] = {
     "KR": {
-        "kr_bluechip": {
-            "id": "kr_bluechip",
-            "name": "코스피 대표 우량주 (25종)",
-            "description": "거래량이 풍부한 국내 시가총액 상위 대표 기업 25종목",
+        "kr_all_150": {
+            "id": "kr_all_150",
+            "name": "국내 코스피·코스닥 핵심 150종",
+            "description": "실시간 시가총액 상위 코스피 100 + 코스닥 50 보통주 (우선주·스팩 자동 제외)",
+            "count": 150,
             "is_etf": False,
-            "items": [
-                ("005930", "삼성전자"), ("000660", "SK하이닉스"), ("373220", "LG에너지솔루션"),
-                ("207940", "삼성바이오로직스"), ("005380", "현대차"), ("000270", "기아"),
-                ("068270", "셀트리온"), ("105560", "KB금융"), ("055550", "신한지주"),
-                ("086790", "하나금융지주"), ("005490", "POSCO홀딩스"), ("035420", "NAVER"),
-                ("035720", "카카오"), ("006400", "삼성SDI"), ("051910", "LG화학"),
-                ("012330", "현대모비스"), ("028260", "삼성물산"), ("033780", "KT&G"),
-                ("017670", "SK텔레콤"), ("030200", "KT"), ("015760", "한국전력"),
-                ("012450", "한화에어로스페이스"), ("329180", "HD현대중공업"), ("034020", "두산에너빌리티"),
-                ("010130", "고려아연"),
-            ],
+        },
+        "kr_kospi_120": {
+            "id": "kr_kospi_120",
+            "name": "코스피 시총 상위 120종",
+            "description": "실시간 코스피 시가총액 상위 대형·중형 보통주 120종목",
+            "count": 120,
+            "is_etf": False,
+        },
+        "kr_kosdaq_100": {
+            "id": "kr_kosdaq_100",
+            "name": "코스닥 시총 상위 100종",
+            "description": "실시간 코스닥 시가총액 상위 성장·중소형 보통주 100종목",
+            "count": 100,
+            "is_etf": False,
         },
         "kr_etf": {
             "id": "kr_etf",
-            "name": "국내 대표 섹터·자산 ETF (16종)",
-            "description": "지수·업종·채권·금·배당 등 국내 상장 대표 ETF 16종목",
+            "name": "국내 대표 섹터·자산 ETF (30종)",
+            "description": "지수·미국·반도체·방산·조선·배당·채권·금·원유 대표 ETF 30종목",
+            "count": len(KR_ETF_LIST),
             "is_etf": True,
-            "items": [
-                ("069500", "KODEX 200"), ("229200", "코스닥150"), ("360750", "미국 S&P500"),
-                ("133690", "미국 나스닥100"), ("091160", "반도체"), ("091180", "자동차"),
-                ("091170", "은행"), ("305720", "2차전지산업"), ("244580", "바이오"),
-                ("148070", "국고채10년"), ("114260", "국고채3년"), ("153130", "단기채권"),
-                ("132030", "골드선물"), ("261220", "WTI원유"), ("458730", "미국배당다우존스"),
-                ("161510", "고배당"),
-            ],
         },
         "watchlist": {
             "id": "watchlist",
             "name": "내 관심종목",
             "description": "시세 화면에서 저장해 둔 내 국내 관심종목 목록",
+            "count": 0,
             "is_etf": False,
-            "items": [],
         },
         "custom": {
             "id": "custom",
             "name": "직접 입력 종목",
-            "description": "원하는 종목 코드를 쉼표로 입력해 비교 (최대 30종목)",
+            "description": "원하는 종목 코드를 쉼표로 입력해 비교 (최대 50종목)",
+            "count": 0,
             "is_etf": False,
-            "items": [],
         },
     },
     "US": {
-        "us_bluechip": {
-            "id": "us_bluechip",
-            "name": "미국 핵심 우량주 (25종)",
-            "description": "S&P500·나스닥을 대표하는 글로벌 대형 우량주 25종목",
+        "us_sp100": {
+            "id": "us_sp100",
+            "name": f"미국 S&P500 핵심 대형주 ({len(US_SP100_LIST)}종)",
+            "description": f"11개 전 업종(IT·반도체·헬스케어·금융·에너지·소비재·배당·리츠) 핵심 {len(US_SP100_LIST)}종목",
+            "count": len(US_SP100_LIST),
             "is_etf": False,
-            "items": [
-                ("AAPL", "Apple"), ("MSFT", "Microsoft"), ("NVDA", "NVIDIA"),
-                ("AMZN", "Amazon"), ("GOOGL", "Alphabet"), ("META", "Meta"),
-                ("TSLA", "Tesla"), ("AVGO", "Broadcom"), ("JPM", "JPMorgan"),
-                ("LLY", "Eli Lilly"), ("V", "Visa"), ("MA", "Mastercard"),
-                ("UNH", "UnitedHealth"), ("XOM", "Exxon Mobil"), ("JNJ", "Johnson & Johnson"),
-                ("PG", "Procter & Gamble"), ("HD", "Home Depot"), ("COST", "Costco"),
-                ("ABBV", "AbbVie"), ("KO", "Coca-Cola"), ("PEP", "PepsiCo"),
-                ("MRK", "Merck"), ("CVX", "Chevron"), ("WMT", "Walmart"), ("AMD", "AMD"),
-            ],
+        },
+        "us_nasdaq_50": {
+            "id": "us_nasdaq_50",
+            "name": "미국 나스닥·AI·성장주 (50종)",
+            "description": "반도체·소프트웨어·보안·바이오 등 미국 핵심 성장주 50종목",
+            "count": len(US_NASDAQ50_LIST),
+            "is_etf": False,
+        },
+        "us_dividend_40": {
+            "id": "us_dividend_40",
+            "name": "미국 고배당·배당귀족·가치주 (40종)",
+            "description": "꾸준한 배당을 주는 미국 배당귀족·에너지·유틸리티·리츠·금융 40종목",
+            "count": len(US_DIVIDEND40_LIST),
+            "is_etf": False,
         },
         "us_etf": {
             "id": "us_etf",
-            "name": "미국 대표 섹터·자산 ETF (20종)",
-            "description": "미국 지수·8대 업종·채권·금·원자재·배당 대표 ETF 20종목",
+            "name": "미국 대표 섹터·자산 ETF (31종)",
+            "description": "미국 지수·11개 전 섹터·반도체·방산·배당·국채·금·원자재 대표 ETF 31종목",
+            "count": len(US_ETF_LIST),
             "is_etf": True,
-            "items": [
-                ("SPY", "미국 S&P500"), ("QQQ", "나스닥100"), ("IWM", "미국 소형주"),
-                ("DIA", "다우존스"), ("VEA", "선진국 주식"), ("VWO", "신흥국 주식"),
-                ("XLK", "기술 (IT)"), ("XLV", "헬스케어"), ("XLF", "금융"),
-                ("XLE", "에너지"), ("XLI", "산업재"), ("XLY", "경기소비재"),
-                ("XLP", "필수소비재"), ("XLU", "유틸리티"), ("TLT", "장기국채"),
-                ("IEF", "중기국채"), ("SHY", "단기국채"), ("GLD", "금"),
-                ("DBC", "원자재"), ("SCHD", "미국 배당성장"),
-            ],
         },
         "watchlist": {
             "id": "watchlist",
             "name": "내 관심종목",
             "description": "시세 화면에서 저장해 둔 내 미국 관심종목 목록",
+            "count": 0,
             "is_etf": False,
-            "items": [],
         },
         "custom": {
             "id": "custom",
             "name": "직접 입력 종목",
-            "description": "원하는 미국 티커를 쉼표로 입력해 비교 (최대 30종목)",
+            "description": "원하는 미국 티커를 쉼표로 입력해 비교 (최대 50종목)",
+            "count": 0,
             "is_etf": False,
-            "items": [],
         },
     },
 }
@@ -136,8 +251,8 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
             "theory": "추세 모멘텀 + 저변동성 · 롤러코스터 말고 '꾸준히 우상향하는' 주도주 찾기",
             "summary": "최근 3·6·12개월 동안 수익률이 좋으면서도 중간에 덜 출렁인 우량 추세주를 뽑습니다",
             "description": (
-                "단순히 급등한 종목은 금방 급락할 위험이 큽니다. 최근 3·6·12개월 수익률을 하루 출렁임 크기로 나누어 "
-                "'마음 편하게 계단식으로 올라가는' 종목에 높은 점수를 주며, 200일 평균선 위와 52주 신고가 근처 종목을 우대합니다."
+                "단순히 급등한 종목은 금방 급락할 위험이 큽니다. 100~150개 종목 중 최근 3·6·12개월 수익률을 하루 출렁임 크기로 나누어 "
+                "'마음 편하게 계단식으로 올라가는' 종목에 높은 점수를 주며, 200일 평균선 위와 52주 신고가 근처 종목을 우선 선정합니다."
             ),
             "needs_fundamentals": False,
             "kr_only": False,
@@ -150,13 +265,13 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
                     "여기에 '중간에 크게 흔들리지 않을수록 더 좋다(저변동성)'는 조건을 더해, 급등락 테마주 대신 진짜 돈이 몰리며 차분히 오르는 주도주를 찾아냅니다."
                 ),
                 "setup": [
-                    "국내·미국 우량주 묶음이나 대표 ETF 묶음 모두 잘 맞습니다.",
-                    "'위험 종목 자동 제외'를 켜두면 국내 시장의 단기과열·투자경고 종목이 자동으로 걸러집니다.",
+                    "국내 코스피·코스닥 150종이나 미국 S&P500 100종, 또는 대표 ETF 묶음 모두 잘 맞습니다.",
+                    "'조건 완벽 충족 종목만 보기'를 켜면 200일선 위 + 3~6개월 상승 + 적정 변동성을 모두 통과한 종목만 추려 볼 수 있습니다.",
                 ],
                 "execution": [
-                    "선택한 후보 종목들의 최근 1년치 일봉 가격을 불러와 3·6·12개월 수익률과 최근 60일 출렁임(변동성)을 계산합니다.",
-                    "'수익률 ÷ 출렁임' 점수와 52주 최고가 근접도, 200일 평균선 위 여부를 합쳐 100점 만점으로 줄 세웁니다.",
-                    "뽑힌 종목은 [백테스트]로 검증하거나, 위쪽 [상위 종목으로 포트폴리오 →] 버튼으로 '섹터·종목 모멘텀 로테이션' 봇에 바로 연결할 수 있습니다.",
+                    "후보군(최대 150종목)의 최근 1년치 일봉 가격을 고속으로 불러와 3·6·12개월 수익률과 60일 출렁임(변동성)을 계산합니다.",
+                    "'수익률 ÷ 출렁임' 점수와 52주 최고가 근접도, 200일 평균선 위 여부를 합쳐 조건 충족 종목을 우선 정렬합니다.",
+                    "뽑힌 종목은 [백테스트]로 검증하거나, 위쪽 [상위 종목 포트폴리오 실험 →]으로 '섹터·종목 모멘텀 로테이션'에 바로 연결하세요.",
                 ],
                 "caution": "이미 꽤 오른 종목들이 상위에 올라오므로, 한 종목에 몰빵하기보다 상위 3~5종목으로 나누어 담거나 추세 추종 스윙봇과 함께 쓰는 것이 안전합니다.",
             },
@@ -167,8 +282,8 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
             "theory": "래리 코너스 RSI(2) + IBS · 장기 상승세 우량주의 일시적 세일 구간 포착",
             "summary": "큰 흐름은 상승(200일선 위)인데 최근 2~5일 사이 과하게 떨어져 반등 가능성이 높은 종목을 찾습니다",
             "description": (
-                "장기적으로는 건강하게 오르고 있는 우량주(200일 평균선 위) 중에서, 최근 며칠 사이 투자자들이 겁먹고 과하게 팔아치운 종목을 찾아냅니다. "
-                "짧은 기간의 과매도 지표인 RSI(2)와 하루 종가 위치(IBS)가 바닥권일수록 높은 점수를 받습니다."
+                "장기적으로는 건강하게 오르고 있는 우량주(200일 평균선 위) 중에서, 최근 며칠 사이 투자자들이 겁먹고 과하게 팔아치운 종목을 100~150개 종목에서 골라냅니다. "
+                "짧은 기간 과매도 지표인 RSI(2) ≤ 25 또는 하루 위치(IBS) ≤ 0.25에 해당하는 '진짜 세일 구간' 종목을 우선 보여줍니다."
             ),
             "needs_fundamentals": False,
             "kr_only": False,
@@ -182,12 +297,12 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
                     "단기적으로만 너무 눌려 곧 고무줄처럼 튀어 오를 가능성이 높은 스윙 반등 후보를 골라냅니다."
                 ),
                 "setup": [
-                    "국내·미국 대표 우량주 또는 대표 지수·섹터 ETF 묶음에서 찾는 것을 추천합니다. (실적이 탄탄한 대형주일수록 반등 확률이 높습니다.)",
+                    "국내 코스피·코스닥 150종 또는 미국 S&P500 100종처럼 종목 수가 넓은 묶음에서 스캔해야 '진짜 과매도' 종목을 놓치지 않고 찾을 수 있습니다.",
                     "뽑힌 종목은 바로 옆 [백테스트]를 눌러 'RSI(2) 단기 과매도' 또는 'IBS 하루 눌림목' 전략으로 과거 승률을 확인해 보세요.",
                 ],
                 "execution": [
                     "후보 종목의 200일 평균선 위치(장기 건강 상태), 2일 RSI(최근 이틀간 눌린 정도), IBS(오늘 하루 중 종가 위치)를 계산합니다.",
-                    "200일 평균선 위에 있으면서 RSI(2)와 IBS가 바닥에 가까울수록 높은 점수를 부여합니다.",
+                    "200일선 위에 있으면서 RSI(2) ≤ 25 또는 IBS ≤ 0.25인 종목에 '★ 조건 충족' 배지를 달아 맨 위에 배치합니다.",
                     "200일선 아래(장기 하락세)에 있는 종목은 '떨어지는 칼날' 위험이 있어 점수를 낮춥니다.",
                 ],
                 "caution": "기업 자체에 큰 악재(실적 쇼크·유상증자 등)가 터져 급락한 경우엔 반등하지 않고 더 빠질 수 있으므로, 매수 전 [Investing ↗] 링크로 최신 뉴스를 꼭 확인하세요.",
@@ -200,7 +315,7 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
             "summary": "최근 5일·20일 동안 외국인과 기관이 함께 순매수하고 외국인 보유 비중이 늘어나는 국내 종목을 추출합니다",
             "description": (
                 "국내 주식 시장은 자금력이 큰 외국인과 기관 투자자가 함께 살 때 추세가 이어지는 경우가 많습니다. "
-                "토스증권의 일별 투자자 수급 데이터를 분석해 최근 5일·20일간 외국인·기관 동반 순매수와 외국인 지분 증가가 뚜렷한 종목을 골라냅니다."
+                "코스피·코스닥 100~150종목의 최근 20거래일 일별 투자자 수급을 고속 분석해 외국인·기관 동시 순매수(쌍끌이)와 지분 증가가 뚜렷한 종목을 뽑아냅니다."
             ),
             "needs_fundamentals": False,
             "kr_only": True,
@@ -213,13 +328,13 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
                     "한쪽만 사는 것보다 외국인과 기관이 '동시에(쌍끌이)' 며칠 이상 꾸준히 사 모으는 종목은 수급이 탄탄해 쉽게 무너지지 않고 우상향할 가능성이 높습니다."
                 ),
                 "setup": [
-                    "국내(KR) 시장 전용 기능입니다. '코스피 대표 우량주' 또는 '내 관심종목'에서 실행해 보세요.",
-                    "실제 외국인·기관 수급은 [설정]에서 토스증권 API 키를 연결했을 때 실시간 데이터로 조회됩니다(미연결 시 연습용 데이터).",
+                    "국내(KR) 시장 전용 기능입니다. '국내 코스피·코스닥 핵심 150종'이나 '코스피 120종'에서 실행하면 진짜 쌍끌이 주도주를 찾기 좋습니다.",
+                    "수급 데이터는 공개 시세 수급(네이버 금융)을 고속 스캔하고, 최종 상위 종목은 토스증권 투자경고 안전필터로 한 번 더 걸러줍니다.",
                 ],
                 "execution": [
-                    "각 국내 종목의 최근 20거래일 외국인·기관 일별 순매수량과 외국인 보유 비율 변화를 불러옵니다.",
-                    "최근 5일·20일 외국인 순매수, 기관 순매수, 양쪽 동시 순매수(쌍끌이) 보너스, 그리고 최근 주가 추세를 합쳐 100점 만점으로 순위를 매깁니다.",
-                    "단기과열·투자경고 종목은 위험 필터로 자동 제외됩니다.",
+                    "국내 후보 종목의 최근 20거래일 외국인·기관 일별 순매수량과 외국인 보유 비율 변화를 한꺼번에 불러옵니다.",
+                    "5일·20일 외국인·기관 동시 순매수(쌍끌이) 종목에 '★ 조건 충족' 배지와 가산점을 부여해 상위에 배치합니다.",
+                    "최종 상위 후보 중 토스증권 투자경고·단기과열 종목은 자동 제외됩니다.",
                 ],
                 "caution": "외국인·기관 수급은 하루아침에 매도로 돌아설 수도 있습니다. 수급만 보고 매수하기보다 차트에서 이미 너무 급등한 자리가 아닌지 꼭 함께 확인하세요.",
             },
@@ -249,8 +364,8 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
                     "마음에 드는 상위 종목의 [백테스트]를 누르면 해당 종목과 전략이 그대로 세팅되어 5년·10년 장기 검증까지 바로 이어갈 수 있습니다.",
                 ],
                 "execution": [
-                    "후보 종목들의 최근 2년치 일봉 데이터를 불러와 선택한 전략의 기본 설정으로 실제 수수료·세금을 반영해 백테스트합니다.",
-                    "위험 대비 수익(샤프 점수), 총수익률, 승률, 그리고 매매 횟수가 너무 적지 않은지를 종합해 100점 만점으로 순위를 매깁니다.",
+                    "후보 종목들의 최근 2년치 일봉 데이터를 불러와 선택한 전략의 기본 설정으로 실제 수수료·세금을 반영해 일괄 백테스트합니다.",
+                    "매매 횟수 3회 이상 + 수익률 플러스 + 위험 대비 수익(샤프 0.5 이상) 종목을 '★ 조건 충족'으로 우선 배치합니다.",
                     "결과 표에서 각 종목의 최근 2년 수익률·최대 손실폭(MDD)·승률을 한눈에 비교할 수 있습니다.",
                 ],
                 "caution": "최근 2년 성적이 좋았다고 앞으로도 100% 보장되지는 않습니다. 상위에 뽑힌 종목은 꼭 [워크포워드]나 [몬테카를로] 탭에서 한 번 더 검증한 뒤 봇을 만드세요.",
@@ -263,7 +378,7 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
             "summary": "이익을 잘 내는 능력(ROE) 순위와 주가가 싼 정도(PER) 순위를 합쳐 최고의 가성비 우량주를 뽑습니다",
             "description": (
                 "월스트리트의 전설적인 가치투자자 조엘 그린블라트가 책 '주식 시장을 이기는 작은 책'에서 공개해 전 세계적으로 유명해진 '마법공식'입니다. "
-                "돈을 아주 잘 버는 탄탄한 회사인데, 가격은 이익 대비 저렴하게 거래되는 '가성비 최고 우량주'를 자동으로 찾아냅니다."
+                "100~150개 기업 중 돈을 잘 버는 탄탄한 회사(높은 ROE)인데 가격은 저렴한(낮은 PER) '가성비 최고 우량주'를 자동으로 찾아냅니다."
             ),
             "needs_fundamentals": True,
             "kr_only": False,
@@ -278,13 +393,13 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
                     "두 순위를 더해 가장 앞선 종목들을 골라 투자하면 장기적으로 시장을 크게 앞선다는 것이 수많은 연구로 검증되었습니다."
                 ),
                 "setup": [
-                    "PER·ROE 같은 기업 성적표가 필요하므로 ETF가 아닌 '코스피 대표 우량주' 또는 '미국 핵심 우량주' 묶음을 선택하세요.",
+                    "PER·ROE 같은 기업 성적표가 필요하므로 ETF가 아닌 '코스피·코스닥 150종' 또는 '미국 S&P500 100종' 묶음을 선택하세요.",
                     "재무 정보는 공개 시장 데이터(국내 네이버금융 · 미국 야후파이낸스)에서 별도 키 없이 자동으로 가져옵니다.",
                 ],
                 "execution": [
-                    "후보 종목의 최신 PER(저평가 정도)과 ROE(돈 버는 힘)를 불러옵니다. 적자 기업(PER·ROE가 0 이하)은 자동 제외됩니다.",
-                    "모든 후보에 대해 'ROE 높은 순위'와 'PER 낮은 순위'를 각각 매겨 합산한 뒤 100점 만점으로 환산합니다.",
-                    "상위 5~10개 종목을 골라 [상위 종목으로 포트폴리오 →] 버튼으로 '동일 비중(1/N)' 장기 분산 투자를 해보세요.",
+                    "후보 기업 전체의 최신 PER(저평가 정도)과 ROE(돈 버는 힘)를 불러옵니다. 적자 기업(PER·ROE 0 이하)은 자동 감점됩니다.",
+                    "모든 후보에 대해 'ROE 높은 순위'와 'PER 낮은 순위'를 합산해 100점 만점으로 환산하며, PER ≤ 20배 & ROE ≥ 12% 기업을 '★ 조건 충족'으로 표시합니다.",
+                    "상위 5~10개 종목을 골라 [상위 종목 포트폴리오 실험 →] 버튼으로 '동일 비중(1/N)' 장기 분산 투자를 해보세요.",
                 ],
                 "caution": "경기에 따라 일시적으로 이익이 확 늘어난 회사(예: 해운·철강 호황 끝물)는 PER이 착시처럼 낮아 보일 수 있습니다. 1~2종목에 집중하지 말고 최소 5종목 이상 나누어 담으세요.",
             },
@@ -296,7 +411,7 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
             "summary": "배당수익률이 높으면서도 평소 주가 흔들림이 적은 안정적인 배당주를 뽑습니다",
             "description": (
                 "주가가 롤러코스터처럼 출렁이는 게 싫고, 예금 이자처럼 꾸준한 배당금을 받으며 편안하게 투자하고 싶은 분들을 위한 발굴기입니다. "
-                "배당수익률이 높을수록, 그리고 최근 60일 주가 출렁임이 작을수록 높은 점수를 받습니다."
+                "연 배당률 2.5% 이상이면서 주가 출렁임이 적은(연 32% 이하) 안정적인 배당주를 우선적으로 찾아냅니다."
             ),
             "needs_fundamentals": True,
             "kr_only": False,
@@ -309,13 +424,13 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
                     "'저변동성 이상 현상'이 널리 알려져 있습니다. 여기에 매년 현금으로 들어오는 높은 배당금까지 더해지면, 주가가 잠시 쉬어가는 시기에도 배당으로 버티며 안정적으로 자산을 불릴 수 있습니다."
                 ),
                 "setup": [
-                    "국내·미국 우량주 묶음 또는 배당 ETF가 포함된 목록에서 실행해 보세요.",
+                    "미국은 '미국 고배당·배당귀족·가치주 (40종)' 또는 'S&P500 (100종)', 국내는 '코스피 120종' 묶음을 선택하면 알짜 배당주가 풍성하게 나옵니다.",
                     "배당은 높지만 주가가 계속 폭락 중인 '배당 함정'을 피하기 위해 최근 1년 추세도 함께 참고해 점수를 매깁니다.",
                 ],
                 "execution": [
                     "후보 종목의 최신 배당수익률(%)과 최근 60일 주가 출렁임(연 변동성 %), 1년 수익률을 함께 불러옵니다.",
-                    "배당수익률이 높을수록(+), 주가 출렁임이 낮을수록(+), 1년 흐름이 무너지지 않았을수록 높은 점수를 줍니다.",
-                    "상위 종목들은 [상위 종목으로 포트폴리오 →] 버튼으로 '리스크 패리티'나 '동일 비중' 배당 포트폴리오로 바로 구성할 수 있습니다.",
+                    "연 배당률 2.5% 이상이면서 출렁임이 연 32% 이하인 안정 고배당주를 '★ 조건 충족'으로 맨 위에 배치합니다.",
+                    "상위 종목들은 [상위 종목 포트폴리오 실험 →] 버튼으로 '리스크 패리티'나 '동일 비중' 배당 포트폴리오로 바로 구성할 수 있습니다.",
                 ],
                 "caution": "회사가 이익이 줄었는데도 무리하게 배당을 주거나, 주가가 크게 떨어져서 겉보기에만 배당률이 높아진 종목은 조심해야 합니다. [Investing ↗]에서 배당 이력을 함께 확인하세요.",
             },
@@ -341,11 +456,11 @@ SCREENER_PRESETS: dict[str, dict[str, Any]] = {
                     "이 세 가지 장점은 서로 시기가 엇갈리며 보완해 주기 때문에, 세 점수를 골고루 합치면 '싸면서도 시장이 알아봐 주기 시작한 진짜 우량주'를 찾을 수 있습니다."
                 ),
                 "setup": [
-                    "국내 '코스피 대표 우량주' 또는 미국 '미국 핵심 우량주' 묶음에서 실행하는 것을 가장 추천합니다.",
+                    "국내 '코스피·코스닥 핵심 150종' 또는 미국 '미국 S&P500 핵심 대형주 (100종)' 묶음에서 실행하는 것을 가장 추천합니다.",
                     "특정 조건 하나에 치우치지 않고 종합적으로 탄탄한 종목을 고르고 싶을 때 첫 번째로 써보기 좋습니다.",
                 ],
                 "execution": [
-                    "후보 종목의 가격 데이터(6·12개월 추세·변동성)와 재무 데이터(PER·PBR·ROE)를 모두 불러옵니다.",
+                    "후보 종목의 가격 데이터(6·12개월 추세·변동성)와 재무 데이터(PER·PBR·ROE)를 고속으로 모두 불러옵니다.",
                     "가치 점수(1/3) + 우량 점수(1/3) + 상승 추세 점수(1/3)를 각각 100점 만점으로 매겨 평균을 냅니다.",
                     "뽑힌 상위 5~8개 종목은 장기 분산 포트폴리오로 굴리거나 개별 스윙봇 후보로 활용하세요.",
                 ],
@@ -396,12 +511,26 @@ def _mock_flow(symbol: str) -> dict[str, Any]:
     f20 = f5 * 3 + (((h >> 24) % 500) - 220) * 1000
     i20 = i5 * 3 + (((h >> 32) % 500) - 220) * 1000
     f_delta = round((((h >> 40) % 160) - 70) / 100.0, 2)
-    return {"f5": f5, "i5": i5, "f20": f20, "i20": i20, "f_delta": f_delta}
+    return {
+        "flow_5d_for": f5,
+        "flow_5d_inst": i5,
+        "flow_20d_for": f20,
+        "flow_20d_inst": i20,
+        "foreign_delta_pct": f_delta,
+    }
 
 
-def _resolve_candidates(market: Market, universe_id: str, custom_symbols: Optional[list[str]]) -> list[tuple[str, str]]:
+def _resolve_candidates(
+    market: Market,
+    universe_id: str,
+    custom_symbols: Optional[list[str]],
+    *,
+    is_mock: bool,
+) -> tuple[str, list[tuple[str, str]]]:
     m = market.value
-    if universe_id == "custom":
+    uid_norm = UNIVERSE_ALIASES.get(universe_id, universe_id)
+
+    if uid_norm == "custom":
         raw = custom_symbols or []
         seen: set[str] = set()
         out: list[tuple[str, str]] = []
@@ -417,20 +546,45 @@ def _resolve_candidates(market: Market, universe_id: str, custom_symbols: Option
                 break
         if len(out) < 2:
             raise ApiError(400, "too_few_symbols", "직접 입력 종목은 최소 2개 이상 입력하세요")
-        return out
+        return uid_norm, out
 
-    if universe_id == "watchlist":
+    if uid_norm == "watchlist":
         rec = get_store().get(WATCHLISTS, g.user["id"])
         wl = rec["items"] if rec else DEFAULT_WATCHLIST
         out = [(it["symbol"], it.get("name") or it["symbol"]) for it in wl if it.get("market") == m]
         if len(out) < 1:
             raise ApiError(400, "empty_watchlist", f"관심종목에 저장된 {m} 종목이 없습니다. 시세 화면에서 종목을 추가하거나 대표 묶음을 선택하세요")
-        return out[:MAX_CUSTOM_SYMBOLS]
+        return uid_norm, out[:MAX_CUSTOM_SYMBOLS]
 
-    uni = UNIVERSES[m].get(universe_id)
-    if uni is None:
+    if uid_norm not in UNIVERSES[m]:
         raise ApiError(400, "unknown_universe", "알 수 없는 후보 종목 묶음입니다")
-    return list(uni["items"])
+
+    if m == "KR":
+        if uid_norm == "kr_etf":
+            return uid_norm, list(KR_ETF_LIST)
+        if uid_norm == "kr_kospi_120":
+            live = [] if is_mock else sdata.fetch_kr_market_leaders("KOSPI", 120)
+            return uid_norm, live or list(KR_FALLBACK_KOSPI)
+        if uid_norm == "kr_kosdaq_100":
+            live = [] if is_mock else sdata.fetch_kr_market_leaders("KOSDAQ", 100)
+            return uid_norm, live or list(KR_FALLBACK_KOSDAQ)
+        # kr_all_150: top 100 KOSPI + top 50 KOSDAQ
+        if is_mock:
+            return uid_norm, list(KR_FALLBACK_KOSPI) + list(KR_FALLBACK_KOSDAQ)
+        kospi = sdata.fetch_kr_market_leaders("KOSPI", 100) or list(KR_FALLBACK_KOSPI)
+        kosdaq = sdata.fetch_kr_market_leaders("KOSDAQ", 50) or list(KR_FALLBACK_KOSDAQ)
+        seen_k = {c for c, _ in kospi}
+        merged = list(kospi) + [(c, n) for c, n in kosdaq if c not in seen_k]
+        return uid_norm, merged
+
+    # US static curated large universes
+    if uid_norm == "us_sp100":
+        return uid_norm, list(US_SP100_LIST)
+    if uid_norm == "us_nasdaq_50":
+        return uid_norm, list(US_NASDAQ50_LIST)
+    if uid_norm == "us_dividend_40":
+        return uid_norm, list(US_DIVIDEND40_LIST)
+    return uid_norm, list(US_ETF_LIST)
 
 
 def presets_meta() -> dict[str, Any]:
@@ -438,7 +592,7 @@ def presets_meta() -> dict[str, Any]:
         "presets": list(SCREENER_PRESETS.values()),
         "universes": {
             m: [
-                {"id": u["id"], "name": u["name"], "description": u["description"], "count": len(u["items"]), "is_etf": u["is_etf"]}
+                {"id": u["id"], "name": u["name"], "description": u["description"], "count": u["count"], "is_etf": u["is_etf"]}
                 for u in group.values()
             ]
             for m, group in UNIVERSES.items()
@@ -464,7 +618,6 @@ def _compute_price_stats(bars: Bars) -> dict[str, Any]:
             return None
         return (last / c[-1 - days] - 1.0) * 100.0
 
-    # 60-day annualized volatility (%)
     vw = min(60, n - 1)
     rets = [c[k] / c[k - 1] - 1.0 for k in range(n - vw, n) if c[k - 1] > 0]
     vol60 = None
@@ -512,11 +665,12 @@ def _compute_price_stats(bars: Bars) -> dict[str, Any]:
 def _run_strategy_fit(bars: Bars, strategy_cls: type, capital: float, costs: Costs) -> dict[str, Any]:
     strat = strategy_cls({})
     warm = strat.warmup()
-    # Evaluate over most recent ~2 years (up to 504 trading days)
     start = max(warm, len(bars) - 504)
     if start >= len(bars) - 20:
-        return {"fit_return_pct": None, "fit_cagr_pct": None, "fit_mdd_pct": None,
-                "fit_sharpe": None, "fit_win_rate": None, "fit_trades": 0}
+        return {
+            "fit_return_pct": None, "fit_cagr_pct": None, "fit_mdd_pct": None,
+            "fit_sharpe": None, "fit_win_rate": None, "fit_trades": 0,
+        }
     res = Backtester(bars, strat, capital, costs, start).run()
     m = res["metrics"]
     return {
@@ -547,16 +701,20 @@ def _score_and_explain(preset_id: str, rows: list[dict[str, Any]]) -> list[dict[
             base = _blend([(p_mom[i], 0.60), (p_52[i], 0.25), (p_vol[i], 0.15)]) or 0.0
             bonus = 8.0 if r["above_ma200"] else -12.0
             r["score"] = round(max(0.0, min(100.0, base + bonus)), 1)
+            r6 = r["ret_6m_pct"] if r["ret_6m_pct"] is not None else (r["ret_3m_pct"] or 0.0)
+            vol = r["vol_60d_pct"] if r["vol_60d_pct"] is not None else 99.0
+            r["matched"] = bool(r["above_ma200"] and r6 >= 8.0 and vol <= 48.0)
+            r["match_label"] = "★ 상승 추세 충족" if r["matched"] else "근접 후보"
             reasons = []
             if r["ret_6m_pct"] is not None:
                 reasons.append(f"최근 6개월 {r['ret_6m_pct']:+.1f}%")
             elif r["ret_3m_pct"] is not None:
                 reasons.append(f"최근 3개월 {r['ret_3m_pct']:+.1f}%")
             if r["above_ma200"]:
-                reasons.append("200일 평균선 위 상승 추세")
+                reasons.append("200일 평균선 위")
             if r["near_52w_pct"] is not None and r["near_52w_pct"] >= 90:
-                reasons.append(f"52주 최고가의 {r['near_52w_pct']:.0f}% 수준")
-            if r["vol_60d_pct"] is not None and r["vol_60d_pct"] <= 25:
+                reasons.append(f"52주 최고가의 {r['near_52w_pct']:.0f}%")
+            if r["vol_60d_pct"] is not None and r["vol_60d_pct"] <= 30:
                 reasons.append(f"낮은 출렁임(연 {r['vol_60d_pct']:.0f}%)")
             r["reasons"] = reasons[:3]
 
@@ -568,10 +726,14 @@ def _score_and_explain(preset_id: str, rows: list[dict[str, Any]]) -> list[dict[
             base = _blend([(p_rsi[i], 0.50), (p_ibs[i], 0.35), (p_1m[i], 0.15)]) or 0.0
             trend_adj = 15.0 if r["above_ma200"] else -22.0
             r["score"] = round(max(0.0, min(100.0, base + trend_adj)), 1)
+            rsi_ok = r["rsi2"] is not None and r["rsi2"] <= 25.0
+            ibs_ok = r["ibs"] is not None and r["ibs"] <= 0.25
+            r["matched"] = bool(r["above_ma200"] and (rsi_ok or ibs_ok))
+            r["match_label"] = "★ 과매도 반등 충족" if r["matched"] else "근접 후보"
             reasons = []
-            reasons.append("장기 상승 추세(200일선 위)" if r["above_ma200"] else "주의: 200일선 아래")
+            reasons.append("장기 상승(200일선 위)" if r["above_ma200"] else "주의: 200일선 아래")
             if r["rsi2"] is not None:
-                tag = "과매도 바닥권" if r["rsi2"] <= 20 else "단기 눌림" if r["rsi2"] <= 40 else "중립"
+                tag = "과매도 바닥권" if r["rsi2"] <= 20 else "단기 눌림" if r["rsi2"] <= 35 else "중립"
                 reasons.append(f"RSI(2) {r['rsi2']:.1f} ({tag})")
             if r["ibs"] is not None:
                 reasons.append(f"하루 위치(IBS) {r['ibs']:.2f}")
@@ -587,11 +749,13 @@ def _score_and_explain(preset_id: str, rows: list[dict[str, Any]]) -> list[dict[
             base = _blend([(p_f5[i], 0.30), (p_i5[i], 0.30), (p_f20[i], 0.15), (p_i20[i], 0.15), (p_tr[i], 0.10)]) or 0.0
             both_5 = (r.get("flow_5d_for") or 0) > 0 and (r.get("flow_5d_inst") or 0) > 0
             both_20 = (r.get("flow_20d_for") or 0) > 0 and (r.get("flow_20d_inst") or 0) > 0
-            bonus = (12.0 if both_5 else 0.0) + (6.0 if both_20 else 0.0)
+            bonus = (14.0 if both_5 else 0.0) + (8.0 if both_20 else 0.0)
             r["score"] = round(max(0.0, min(100.0, base + bonus)), 1)
+            r["matched"] = bool(both_5 or both_20)
+            r["match_label"] = "★ 외인·기관 쌍끌이" if r["matched"] else "단독 수급/관망"
             reasons = []
             if both_5:
-                reasons.append("최근 5일 외국인·기관 동시 순매수(쌍끌이)")
+                reasons.append("최근 5일 외국인·기관 동시 순매수")
             elif (r.get("flow_5d_for") or 0) > 0:
                 reasons.append("최근 5일 외국인 순매수")
             elif (r.get("flow_5d_inst") or 0) > 0:
@@ -614,6 +778,12 @@ def _score_and_explain(preset_id: str, rows: list[dict[str, Any]]) -> list[dict[
             trades = int(r.get("fit_trades") or 0)
             pen = -25.0 if trades < 2 else (-10.0 if trades < 4 else 0.0)
             r["score"] = round(max(0.0, min(100.0, base + pen)), 1)
+            r["matched"] = bool(
+                trades >= 3
+                and (r.get("fit_return_pct") or 0.0) > 0.0
+                and (r.get("fit_sharpe") or 0.0) >= 0.5
+            )
+            r["match_label"] = "★ 전략 궁합 우수" if r["matched"] else "근접 후보"
             reasons = []
             if r.get("fit_return_pct") is not None:
                 reasons.append(f"최근 2년 전략 수익 {r['fit_return_pct']:+.1f}%")
@@ -628,9 +798,12 @@ def _score_and_explain(preset_id: str, rows: list[dict[str, Any]]) -> list[dict[
         p_per = _pct_ranks([r["per"] if (r["per"] is not None and r["per"] > 0) else None for r in rows], higher_is_better=False)
         for i, r in enumerate(rows):
             if p_roe[i] is None or p_per[i] is None:
-                r["score"] = round(_blend([(p_roe[i], 0.5), (p_per[i], 0.5)]) or 0.0, 1) * 0.5
+                r["score"] = round((_blend([(p_roe[i], 0.5), (p_per[i], 0.5)]) or 0.0) * 0.4, 1)
+                r["matched"] = False
             else:
                 r["score"] = round((p_roe[i] + p_per[i]) / 2.0, 1)
+                r["matched"] = bool(r["per"] is not None and 0 < r["per"] <= 20.0 and r["roe"] is not None and r["roe"] >= 12.0)
+            r["match_label"] = "★ 마법공식 우량" if r["matched"] else "근접 후보"
             reasons = []
             if r["roe"] is not None:
                 reasons.append(f"ROE {r['roe']:.1f}% ({'돈 잘 버는 우량주' if r['roe'] >= 15 else '수익성 양호'})")
@@ -639,7 +812,7 @@ def _score_and_explain(preset_id: str, rows: list[dict[str, Any]]) -> list[dict[
             if r["pbr"] is not None:
                 reasons.append(f"PBR {r['pbr']:.2f}배")
             if not reasons:
-                reasons.append("재무 지표 없음 (개별 우량주 묶음 권장)")
+                reasons.append("재무 지표 없음 (개별 기업 묶음 권장)")
             r["reasons"] = reasons[:3]
 
     elif preset_id == "dividend_lowvol":
@@ -648,8 +821,12 @@ def _score_and_explain(preset_id: str, rows: list[dict[str, Any]]) -> list[dict[
         p_tr = _pct_ranks([r["ret_12m_pct"] if r["ret_12m_pct"] is not None else r["ret_6m_pct"] for r in rows], higher_is_better=True)
         for i, r in enumerate(rows):
             base = _blend([(p_div[i], 0.50), (p_vol[i], 0.35), (p_tr[i], 0.15)]) or 0.0
-            pen = -15.0 if (r["dividend_yield"] is None or r["dividend_yield"] <= 0) else 0.0
+            pen = -20.0 if (r["dividend_yield"] is None or r["dividend_yield"] <= 0) else 0.0
             r["score"] = round(max(0.0, min(100.0, base + pen)), 1)
+            div = r["dividend_yield"] or 0.0
+            vol = r["vol_60d_pct"] if r["vol_60d_pct"] is not None else 99.0
+            r["matched"] = bool(div >= 2.5 and vol <= 35.0)
+            r["match_label"] = "★ 고배당·저변동 충족" if r["matched"] else "근접 후보"
             reasons = []
             if r["dividend_yield"] is not None and r["dividend_yield"] > 0:
                 reasons.append(f"연 배당률 {r['dividend_yield']:.2f}%")
@@ -672,6 +849,13 @@ def _score_and_explain(preset_id: str, rows: list[dict[str, Any]]) -> list[dict[
             mom_s = _blend([(p_m6[i], 0.45), (p_m12[i], 0.35), (p_vol[i], 0.20)])
             score = _blend([(val_s, 1.0), (qual_s, 1.0), (mom_s, 1.0)]) or 0.0
             r["score"] = round(score, 1)
+            r["matched"] = bool(
+                (r["per"] is not None and r["per"] > 0)
+                and (r["roe"] is not None and r["roe"] >= 10.0)
+                and (r["above_ma200"] or (r["ret_6m_pct"] or 0.0) > 0)
+                and score >= 60.0
+            )
+            r["match_label"] = "★ 3박자 우량 충족" if r["matched"] else "근접 후보"
             reasons = []
             if val_s is not None and val_s >= 60 and r["per"] is not None:
                 reasons.append(f"저평가(PER {r['per']:.1f}배)")
@@ -686,7 +870,8 @@ def _score_and_explain(preset_id: str, rows: list[dict[str, Any]]) -> list[dict[
                     reasons.append(f"6개월 {r['ret_6m_pct']:+.1f}%")
             r["reasons"] = reasons[:3]
 
-    rows.sort(key=lambda r: (r["score"], r.get("ret_6m_pct") or -9999.0), reverse=True)
+    # Put genuine condition matches first, then sort by score descending
+    rows.sort(key=lambda r: (1 if r.get("matched") else 0, r["score"], r.get("ret_6m_pct") or -9999.0), reverse=True)
     for idx, r in enumerate(rows, 1):
         r["rank"] = idx
     return rows
@@ -701,7 +886,8 @@ def run_screen(
     custom_symbols: Optional[list[str]] = None,
     strategy_id: Optional[str] = None,
     exclude_warnings: bool = True,
-    top_n: int = 15,
+    strict_only: bool = False,
+    top_n: int = 20,
 ) -> dict[str, Any]:
     preset = SCREENER_PRESETS.get(preset_id)
     if preset is None:
@@ -718,52 +904,77 @@ def run_screen(
         if getattr(fit_cls, "timeframe", "1d") != "1d":
             raise ApiError(400, "daily_strategy_only", "전략 궁합 발굴은 일봉 전략(스윙·일봉 단타)만 지원합니다")
 
-    candidates = _resolve_candidates(market, universe_id, custom_symbols)
-    provider = get_provider(market)
     is_mock = current_app.config["MARKET_PROVIDERS"][market.value] != "toss"
+    uni_norm, candidates = _resolve_candidates(market, universe_id, custom_symbols, is_mock=is_mock)
+    syms = [s for s, _ in candidates]
+    name_map = dict(candidates)
 
-    # Fetch 2.3 years for strategy_fit, 1.3 years otherwise
-    lookback_days = int((850 if fit_cls else 480) * 86400)
-    fetch_from = int(time.time() - lookback_days)
     d = cost_defaults(market)
     costs = Costs(commission_pct=d["commission_pct"], tax_pct=d["tax_pct"], slippage_pct=d["slippage_pct"])
     capital = d["capital"]
+    t0 = time.time()
 
-    # Fetch fundamentals up front if needed (1 batch request for US, concurrent for KR)
+    # 1) Fetch daily OHLCV bars fast without hammering Toss Open API rate limits
+    bars_map: dict[str, Bars] = {}
+    if is_mock:
+        provider = get_provider(market)
+        fetch_from = int(time.time() - (850 if fit_cls else 480) * 86400)
+        for sym in syms:
+            try:
+                candles = provider.get_history(market, sym, Interval.D1, fetch_from)
+                b = Bars.from_candles(candles)
+                if len(b) >= 40:
+                    bars_map[sym] = b
+            except Exception:
+                continue
+        data_source = "연습용 가상 데이터"
+    else:
+        bar_count = 520 if fit_cls else 320
+        bars_map = sdata.fetch_public_bars(market.value, syms, count=bar_count)
+        # Polite Toss fallback for up to 5 missing custom/exotic tickers
+        missing_syms = [s for s in syms if s not in bars_map][:5]
+        if missing_syms:
+            provider = get_provider(market)
+            fetch_from = int(time.time() - (850 if fit_cls else 480) * 86400)
+            for sym in missing_syms:
+                try:
+                    candles = provider.get_history(market, sym, Interval.D1, fetch_from)
+                    b = Bars.from_candles(candles)
+                    if len(b) >= 40:
+                        bars_map[sym] = b
+                except Exception:
+                    continue
+        data_source = "네이버 금융 공개 시세" if market == Market.KR else "Yahoo Finance 공개 시세"
+
+    # 2) Fetch fundamentals if needed (cached 6h)
     fundamentals_map: dict[str, dict[str, Any]] = {}
     fundamentals_source: Optional[str] = None
     if preset["needs_fundamentals"]:
-        fundamentals_map = fund_mod.get_fundamentals(market.value, [s for s, _ in candidates], use_mock=is_mock)
+        fundamentals_map = fund_mod.get_fundamentals(market.value, list(bars_map.keys()), use_mock=is_mock)
         sources = {v.get("source") for v in fundamentals_map.values() if v.get("source") and v.get("source") != "unavailable"}
         fundamentals_source = next(iter(sources), "unavailable")
 
-    t0 = time.time()
+    # 3) Fetch KR foreign+institution flows if needed (fast Naver batch, cached 10m)
+    flows_map: dict[str, dict[str, Any]] = {}
+    if preset_id == "smart_money":
+        if is_mock:
+            flows_map = {s: _mock_flow(s) for s in bars_map}
+        else:
+            flows_map = sdata.fetch_kr_flows(list(bars_map.keys()))
 
-    def _scan_one(pair: tuple[str, str]) -> dict[str, Any]:
-        sym, name = pair
-        warn_labels: list[str] = []
-        if not is_mock and market == Market.KR:
-            try:
-                warn_labels = [w["label"] for w in extras.warnings(market, sym)]
-            except Exception:
-                warn_labels = []
-        if exclude_warnings and warn_labels:
-            return {"_excluded_warning": True, "symbol": sym, "warnings": warn_labels}
-
-        try:
-            candles = provider.get_history(market, sym, Interval.D1, fetch_from)
-            bars = Bars.from_candles(candles)
-        except Exception:
-            return {"_skipped": True, "symbol": sym}
-
-        if len(bars) < 40 or bars.close[-1] <= 0:
-            return {"_skipped": True, "symbol": sym}
-
+    # 4) Compute indicators & optional strategy-fit per symbol
+    rows: list[dict[str, Any]] = []
+    skipped = 0
+    for sym in syms:
+        bars = bars_map.get(sym)
+        if bars is None or len(bars) < 40 or bars.close[-1] <= 0:
+            skipped += 1
+            continue
         stats = _compute_price_stats(bars)
         f = fundamentals_map.get(sym) or {}
         row: dict[str, Any] = {
             "symbol": sym,
-            "name": name,
+            "name": name_map.get(sym, sym),
             "price": round(stats["price"], 2),
             "change_1d_pct": _safe_float(stats["change_1d_pct"]),
             "ret_1m_pct": _safe_float(stats["ret_1m_pct"]),
@@ -781,71 +992,82 @@ def run_screen(
             "roe": f.get("roe"),
             "dividend_yield": f.get("dividend_yield"),
             "market_cap": f.get("market_cap"),
-            "warnings": warn_labels,
+            "warnings": [],
+            "matched": False,
+            "match_label": "",
             "score": 0.0,
             "reasons": [],
         }
-
         if preset_id == "smart_money":
-            if is_mock:
-                mf = _mock_flow(sym)
-                row.update(flow_5d_for=mf["f5"], flow_5d_inst=mf["i5"], flow_20d_for=mf["f20"],
-                           flow_20d_inst=mf["i20"], foreign_delta_pct=mf["f_delta"])
-            else:
-                try:
-                    recs = extras.investor_flow(sym, 20).get("records") or []
-                    f5 = sum((r.get("foreigner") or 0) for r in recs[:5])
-                    i5 = sum((r.get("institution") or 0) for r in recs[:5])
-                    f20 = sum((r.get("foreigner") or 0) for r in recs[:20])
-                    i20 = sum((r.get("institution") or 0) for r in recs[:20])
-                    h_now = recs[0].get("foreign_holding_pct") if recs else None
-                    h_old = recs[-1].get("foreign_holding_pct") if len(recs) >= 2 else None
-                    f_delta = round(h_now - h_old, 2) if (h_now is not None and h_old is not None) else None
-                    row.update(flow_5d_for=f5, flow_5d_inst=i5, flow_20d_for=f20, flow_20d_inst=i20, foreign_delta_pct=f_delta)
-                except Exception:
-                    row.update(flow_5d_for=None, flow_5d_inst=None, flow_20d_for=None, flow_20d_inst=None, foreign_delta_pct=None)
-
+            fl = flows_map.get(sym) or {}
+            row.update(
+                flow_5d_for=fl.get("flow_5d_for"),
+                flow_5d_inst=fl.get("flow_5d_inst"),
+                flow_20d_for=fl.get("flow_20d_for"),
+                flow_20d_inst=fl.get("flow_20d_inst"),
+                foreign_delta_pct=fl.get("foreign_delta_pct"),
+            )
         if fit_cls is not None:
             row.update(_run_strategy_fit(bars, fit_cls, capital, costs))
+        rows.append(row)
 
-        return row
+    scored = _score_and_explain(preset_id, rows)
+    if strict_only:
+        scored = [r for r in scored if r.get("matched")]
 
-    workers = 1 if is_mock else min(4, len(candidates))
-    if workers == 1:
-        raw_rows = [_scan_one(c) for c in candidates]
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = [pool.submit(copy_current_request_context(_scan_one), c) for c in candidates]
-            raw_rows = [f.result() for f in futs]
+    # 5) Polite Toss warnings check ONLY on top finalists (never hammers Toss rate limits!)
+    limit = max(1, min(int(top_n), 40))
+    excluded_warnings: list[str] = []
+    final_items: list[dict[str, Any]] = []
+    check_cap = limit + 10
+    checked = 0
+    for r in scored:
+        if len(final_items) >= limit:
+            break
+        if not is_mock and market == Market.KR and checked < check_cap:
+            checked += 1
+            try:
+                wlabels = [w["label"] for w in extras.warnings(market, r["symbol"])]
+                r["warnings"] = wlabels
+                if exclude_warnings and wlabels:
+                    excluded_warnings.append(r["symbol"])
+                    continue
+            except Exception:
+                pass
+        final_items.append(r)
 
-    excluded_warnings = [r["symbol"] for r in raw_rows if r.get("_excluded_warning")]
-    skipped = sum(1 for r in raw_rows if r.get("_skipped"))
-    valid_rows = [r for r in raw_rows if not r.get("_excluded_warning") and not r.get("_skipped")]
+    for idx, r in enumerate(final_items, 1):
+        r["rank"] = idx
 
-    scored = _score_and_explain(preset_id, valid_rows)
-    limit = max(1, min(int(top_n), len(scored))) if scored else 0
+    matched_total = sum(1 for r in scored if r.get("matched") and r["symbol"] not in excluded_warnings)
 
     notices: list[str] = []
     if is_mock:
         notices.append("현재 연습용 가상 데이터로 발굴 결과를 보여주고 있습니다. [설정]에서 토스증권 API 키를 연결하면 실제 시장 데이터로 스캔합니다.")
-    if preset["needs_fundamentals"] and universe_id in ("kr_etf", "us_etf"):
-        notices.append("ETF는 기업 재무제표(PER·PBR·ROE)가 없어 재무 점수가 비어 있을 수 있습니다. 가치·마법공식 발굴은 '대표 우량주' 묶음을 권장합니다.")
+    if preset["needs_fundamentals"] and uni_norm in ("kr_etf", "us_etf"):
+        notices.append("ETF는 기업 재무제표(PER·PBR·ROE)가 없어 재무 점수가 비어 있을 수 있습니다. 가치·마법공식 발굴은 개별 기업 묶음을 권장합니다.")
     if preset["needs_fundamentals"] and fundamentals_source == "unavailable":
         notices.append("외부 재무 데이터 서버 응답이 지연되어 가격 지표 위주로 계산되었습니다. 잠시 후 다시 시도해 주세요.")
+    if skipped > 0 and len(rows) == 0:
+        notices.append("시세 데이터를 불러오지 못한 종목이 많아 결과가 비어 있습니다. 잠시 후 다시 시도해 주세요.")
+    if strict_only and not final_items:
+        notices.append("오늘 시장에서 엄격한 조건을 완벽히 충족한 종목이 없습니다. '조건 완벽 충족 종목만 보기' 체크를 풀면 가장 근접한 상위 후보를 볼 수 있습니다.")
 
     return {
         "market": market.value,
         "currency": "KRW" if market == Market.KR else "USD",
         "preset": preset_id,
-        "universe": universe_id,
+        "universe": uni_norm,
         "strategy": fit_cls.id if fit_cls else preset["recommended_strategy"],
         "recommended_portfolio": preset["recommended_portfolio"],
         "scanned": len(candidates),
-        "passed": len(scored),
+        "passed": len(rows),
+        "matched_count": matched_total,
         "skipped": skipped,
         "excluded_warnings": excluded_warnings,
+        "data_source": data_source,
         "fundamentals_source": fundamentals_source,
         "elapsed_sec": round(time.time() - t0, 2),
         "notices": notices,
-        "items": scored[:limit],
+        "items": final_items,
     }

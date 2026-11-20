@@ -86,6 +86,7 @@ interface Form {
   screenerStrategy: string
   screenerTopN: number
   screenerExcludeWarnings: boolean
+  screenerStrictOnly: boolean
 }
 
 const DEFAULT_FORM: Form = {
@@ -111,11 +112,12 @@ const DEFAULT_FORM: Form = {
   portfolioParams: {},
   portfolioAssets: {},
   screenerPreset: 'momentum_quality',
-  screenerUniverse: { KR: 'kr_bluechip', US: 'us_bluechip' },
+  screenerUniverse: { KR: 'kr_all_150', US: 'us_sp100' },
   screenerCustom: { KR: '005930, 000660, 005380, 105560', US: 'AAPL, MSFT, NVDA, GOOGL' },
   screenerStrategy: 'rsi2',
-  screenerTopN: 15,
+  screenerTopN: 20,
   screenerExcludeWarnings: true,
+  screenerStrictOnly: false,
 }
 
 const loadForm = (): Form => {
@@ -213,7 +215,10 @@ export default function QuantPage() {
 
   const scPreset = screenerPresets.find((p) => p.id === form.screenerPreset) ?? screenerPresets[0]
   const scUniverses = screenerUniverses[form.market] ?? []
-  const scUniverse = form.screenerUniverse?.[form.market] ?? scUniverses[0]?.id ?? (form.market === 'KR' ? 'kr_bluechip' : 'us_bluechip')
+  const savedUni = form.screenerUniverse?.[form.market]
+  const scUniverse =
+    (savedUni && (scUniverses.length === 0 || scUniverses.some((u) => u.id === savedUni)) ? savedUni : scUniverses[0]?.id) ??
+    (form.market === 'KR' ? 'kr_all_150' : 'us_sp100')
   const scCustom = form.screenerCustom?.[form.market] ?? ''
 
   const pModel = portfolioModels.find((m) => m.id === form.portfolioModel) ?? portfolioModels[0]
@@ -267,6 +272,7 @@ export default function QuantPage() {
           symbols: scUniverse === 'custom' ? scCustom : undefined,
           strategy: scPreset?.uses_strategy ? form.screenerStrategy : undefined,
           exclude_warnings: form.screenerExcludeWarnings,
+          strict_only: form.screenerStrictOnly,
           top_n: form.screenerTopN,
         })
         setResults((s) => ({ ...s, screener: r }))
@@ -575,7 +581,15 @@ export default function QuantPage() {
 
             <fieldset className="costs">
               <legend>발굴 옵션</legend>
-              {num('상위 표시 종목 수', form.screenerTopN, (v) => set('screenerTopN', Math.max(1, Math.min(30, v))), 1)}
+              {num('상위 표시 종목 수', form.screenerTopN, (v) => set('screenerTopN', Math.max(1, Math.min(40, v))), 1)}
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={form.screenerStrictOnly}
+                  onChange={(e) => set('screenerStrictOnly', e.target.checked)}
+                />
+                <span>조건 완벽 충족 종목만 보기 (★ 필터)</span>
+              </label>
               <label className="check">
                 <input
                   type="checkbox"
