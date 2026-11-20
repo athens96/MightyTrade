@@ -5,7 +5,9 @@ from flask import Blueprint, g, jsonify, request
 from ..auth import otp
 from ..auth.decorators import login_required
 from ..errors import ApiError
+from ..market.models import Market
 from ..storage import get_store
+from ..trading import orders as trading
 from ..users.repository import now_iso
 from . import toss_account
 
@@ -42,12 +44,15 @@ def create_oco():
         return jsonify(dry_run=True, payload=built["payload"], checks=built["checks"])
 
     otp.verify(g.user, str(body.get("otp_code", "")))
+    trading.check_limits(g.user["id"], Market(built["market"]), built["checks"]["order_value"])
     result = toss_account.submit_oco(built)
-    get_store().put("orders", built["payload"]["clientOrderId"], {
-        "user_id": g.user["id"], "kind": "conditional_oco", "payload": built["payload"],
-        "result": result, "created_at": now_iso(),
+    p = built["payload"]
+    get_store().put("orders", p["clientOrderId"], {
+        "user_id": g.user["id"], "kind": "conditional_oco", "source": "manual_oco",
+        "market": built["market"], "symbol": p["symbol"], "side": "SELL",
+        "payload": p, "result": result, "date": trading.kst_today(), "created_at": now_iso(),
     })
-    return jsonify(dry_run=False, payload=built["payload"], checks=built["checks"], result=result)
+    return jsonify(dry_run=False, payload=p, checks=built["checks"], result=result)
 
 
 @bp.delete("/conditional-orders/<order_id>")

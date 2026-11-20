@@ -96,7 +96,32 @@ def test_api_oco_live_requires_fresh_otp_then_posts(session, toss, app):
     assert len(posts) == 1 and posts[0][4] == 7  # account header
     with app.app_context():
         from app.storage import get_store
-        assert get_store().find("orders", lambda o: o["kind"] == "conditional_oco")  # audit trail
+        rows = get_store().find("orders", lambda o: o["kind"] == "conditional_oco")
+        assert rows and rows[0]["date"]  # audit trail with KST date for daily limit counting
+    assert c.get("/api/trading/status").json["today_orders"] == 1
+
+
+def test_api_oco_enforces_order_value_limit(session, toss, app):
+    import time
+    c, totp = session
+    app.config["TRADING_MAX_ORDER_KRW"] = 500_000  # OCO is 5 * 182,300 = 911,500
+    r = c.post("/api/account/conditional-orders/oco", json={**OCO, "dry_run": False, "otp_code": totp.at(time.time() + 30)})
+    assert r.status_code == 400 and r.json["error"] == "order_value_limit"
+    assert not [x for x in toss.calls if x[0] == "POST"]
+
+
+def test_api_oco_enforces_daily_limit(session, toss, app):
+    import time
+    c, totp = session
+    app.config["TRADING_MAX_ORDERS_PER_DAY"] = 1
+    with app.app_context():
+        from app.storage import get_store
+        from app.trading.orders import kst_today
+        uid = get_store().find("users")[0]["id"]
+        get_store().put("orders", "existing", {"user_id": uid, "date": kst_today()})
+    r = c.post("/api/account/conditional-orders/oco", json={**OCO, "dry_run": False, "otp_code": totp.at(time.time() + 30)})
+    assert r.status_code == 429 and r.json["error"] == "daily_order_limit"
+    assert not [x for x in toss.calls if x[0] == "POST"]
 
 
 def test_api_summary(session, toss):

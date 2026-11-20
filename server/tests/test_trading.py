@@ -108,3 +108,22 @@ def test_cancel_without_unlock_modify_needs_unlock(session, toss):
     assert c.post("/api/trading/orders/o-1/modify", json={"price": 12.345}).status_code == 200
     payload = [x for x in toss.calls if x[1] == "/api/v1/orders/o-1/modify"][0][3]
     assert payload == {"orderType": "LIMIT", "price": "12.35"}  # US: no quantity on modify
+
+
+def test_modify_enforces_krx_price_limits_and_order_value_cap(session, toss, app):
+    c, totp = session
+    c.post("/api/trading/unlock", json={"otp_code": totp.at(time.time() + 30)})
+    toss.routes[("GET", "/api/v1/orders/o-kr")] = {
+        "orderId": "o-kr", "symbol": "005930", "currency": "KRW", "orderType": "LIMIT", "quantity": "10",
+    }
+    toss.routes[("POST", "/api/v1/orders/o-kr/modify")] = {"orderId": "o-kr-2"}
+    # Outside KRX price limits (127,700 ~ 236,900)
+    r = c.post("/api/trading/orders/o-kr/modify", json={"price": 300000, "quantity": 10})
+    assert r.status_code == 400 and r.json["error"] == "order_invalid" and "상·하한가" in r.json["message"]
+    # Exceeds per-order KRW limit
+    app.config["TRADING_MAX_ORDER_KRW"] = 1_000_000
+    r = c.post("/api/trading/orders/o-kr/modify", json={"price": 182300, "quantity": 10})
+    assert r.status_code == 400 and r.json["error"] == "order_value_limit"
+    # Within limits -> succeeds
+    r = c.post("/api/trading/orders/o-kr/modify", json={"price": 182300, "quantity": 5})
+    assert r.status_code == 200 and r.json["result"]["orderId"] == "o-kr-2"

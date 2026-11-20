@@ -74,14 +74,19 @@ def today_order_count(uid: str) -> int:
     return len(get_store().find("orders", lambda o: o.get("user_id") == uid and o.get("date") == today))
 
 
-def check_limits(uid: str, market: Market, value: float) -> None:
+def check_order_value(market: Market, value: float) -> None:
     cfg = current_app.config
-    if today_order_count(uid) >= cfg["TRADING_MAX_ORDERS_PER_DAY"]:
-        raise ApiError(429, "daily_order_limit", f"오늘 주문 한도({cfg['TRADING_MAX_ORDERS_PER_DAY']}건)에 도달했습니다")
     cap = cfg["TRADING_MAX_ORDER_KRW"] if market == Market.KR else cfg["TRADING_MAX_ORDER_USD"]
     if value > cap:
         unit = "원" if market == Market.KR else "달러"
         raise ApiError(400, "order_value_limit", f"주문 1건 한도({cap:,.0f}{unit})를 넘습니다")
+
+
+def check_limits(uid: str, market: Market, value: float) -> None:
+    cfg = current_app.config
+    if today_order_count(uid) >= cfg["TRADING_MAX_ORDERS_PER_DAY"]:
+        raise ApiError(429, "daily_order_limit", f"오늘 주문 한도({cfg['TRADING_MAX_ORDERS_PER_DAY']}건)에 도달했습니다")
+    check_order_value(market, value)
 
 
 # ------------------------------------------------------------------ build / send
@@ -243,14 +248,41 @@ def modify(order_id: str, body: dict) -> dict:
     _check_id(order_id)
     current = get_order(order_id)
     m = "KR" if current.get("currency") == "KRW" else "US"
+    market = Market(m)
+    symbol = current.get("symbol")
     order_type = str(body.get("order_type", current.get("orderType", "LIMIT"))).upper()
+    if order_type not in ("LIMIT", "MARKET"):
+        raise ApiError(400, "invalid_order_type")
     payload: dict = {"orderType": order_type}
+    price: Optional[float] = None
     if order_type == "LIMIT":
-        payload["price"] = fmt_price(m, round_price(m, _num(body.get("price"), "가격")))
+        price = round_price(m, _num(body.get("price"), "가격"))
+        payload["price"] = fmt_price(m, price)
     if m == "KR":
         q = _num(body.get("quantity", current.get("quantity")), "수량")
         if q != int(q):
             raise ApiError(400, "invalid_quantity", "수량은 정수여야 합니다")
+        qty = float(int(q))
         payload["quantity"] = str(int(q))
+    else:
+        qty = float(current.get("quantity") or 0)
+
     client, seq = _account()
+    if market == Market.KR and price is not None and symbol:
+        lim = normalize(client.request("GET", "/api/v1/price-limits", params={"symbol": symbol}) or {})
+        up, lo = lim.get("upperLimitPrice"), lim.get("lowerLimitPrice")
+        if (up and price > up) or (lo and price < lo):
+            raise ApiError(400, "order_invalid", f"가격이 오늘 상·하한가({lo or 0:,.0f} ~ {up or 0:,.0f}) 밖입니다")
+
+    est_price = price
+    if est_price is None:
+        if symbol:
+            prices = client.request("GET", "/api/v1/prices", params={"symbols": symbol}) or []
+            if prices and prices[0].get("lastPrice") is not None:
+                est_price = float(prices[0]["lastPrice"])
+        if est_price is None:
+            est_price = float(current.get("price") or 0)
+    if qty > 0 and est_price > 0:
+        check_order_value(market, qty * est_price)
+
     return normalize(client.request("POST", f"/api/v1/orders/{order_id}/modify", json=payload, account_seq=seq) or {})

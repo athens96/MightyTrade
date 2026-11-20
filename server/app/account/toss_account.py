@@ -171,7 +171,7 @@ def build_oco(body: dict) -> dict:
         "stop_loss_pct": (sl_trigger / current - 1) * 100,
         "rounded": {"take_profit": [tp_trigger, tp_price], "stop_loss": [sl_trigger, sl_price]},
     }
-    return {"payload": payload, "checks": checks, "account_seq": seq}
+    return {"market": m, "payload": payload, "checks": checks, "account_seq": seq}
 
 
 def submit_oco(built: dict) -> dict:
