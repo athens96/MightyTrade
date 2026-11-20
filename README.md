@@ -32,6 +32,15 @@ server/app/
 │   ├── aggregate.py       1m→5m/15m/1h, 1d→1w 봉 집계
 │   ├── providers/         mock / toss(시세·차트·검색) / investing(TODO)
 │   └── routes.py          /api/market/candles, /quote, /search
+├── quant/               퀀트 연구 (백테스트)
+│   ├── indicators.py      지표 계산 (클라이언트 TS와 동일 결과, shared/fixtures로 검증)
+│   ├── engine.py          백테스트 엔진: 종가 판단 → 다음 봉 체결, 시장가/스톱, 수수료·세금·슬리피지
+│   ├── metrics.py         CAGR, MDD, 샤프/소르티노/칼마, 승률, 손익비 …
+│   ├── optimize.py        파라미터 격자 탐색 (최소 매매 수, 주변 평균으로 안정성 평가)
+│   ├── walkforward.py     워크포워드 검증 (롤링/누적, 검증 구간만 이어붙인 수익곡선, WFE)
+│   ├── montecarlo.py      매매 부트스트랩/셔플 → 수익률·MDD 분포, 손실 확률
+│   ├── strategies/        전략 (백테스트·실전 공용 인터페이스): 이평 크로스, 변동성 돌파, RSI(2), 볼린저, 터틀
+│   └── routes.py          /api/quant/strategies, /defaults, /backtest, /optimize, /walkforward, /montecarlo
 └── trading/             주문·자동주문 (스텁, 501 응답)
     ├── models.py          Order, OrderRequest, Position
     ├── brokers/           Broker 인터페이스, TossBroker(TODO)
@@ -104,6 +113,12 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 - 데이터는 본인 투자 목적으로만 사용 가능 (제3자 재배포 금지).
 - 봉은 1m/1d만 제공 → 5m/15m/1h는 1분봉 최대 2000개로 집계(1h는 약 30여 개 봉), 1w는 일봉으로 집계.
 
+## 퀀트 랩 (백테스트)
+
+- 새 전략 추가: `server/app/quant/strategies/`에 `Strategy`를 상속한 클래스(`prepare` / `on_bar`)를 만들고 `strategies/__init__.py`의 `STRATEGIES`에 등록. 화면에는 자동으로 나타남.
+- 체결 규칙: 바 i 종가에 판단한 주문은 바 i+1에서만 체결(미래 정보 차단). 롱 전용, 한 번에 한 포지션, 정수 주식.
+- 지표를 바꾸면 `cd server && .venv/bin/python -m app.quant.fixtures`로 fixture 재생성 → 서버·클라이언트 테스트가 두 구현의 일치를 검증.
+
 ## 저장소 교체 (파일 DB → Supabase 등)
 
 비즈니스 코드는 `get_store()`만 사용. `storage/base.py`의 `Store`를 구현한 클래스를 추가하고 `STORAGE_BACKEND`로 선택하면 됨. 컬렉션: `users`, `watchlists`, `settings`, `orders`, `strategies`.
@@ -122,5 +137,8 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 - [ ] 미국 종목 영문명 검색 (`/stocks/all`에 englishName 없음 → `/stocks` 배치 조회 필요)
 - [ ] investing.com 데이터 수집 방식 결정 (공식 API 없음 — 이용약관 확인 필요)
 - [ ] 주문 API (검증 → 리스크 체크 → 브로커 → 저장)
-- [ ] 자동주문 스케줄러 (gunicorn과 별도 프로세스)
+- [x] 퀀트 랩 1단계: 단일 종목 일봉 백테스트 + 전략 5개
+- [x] 퀀트 2단계: 파라미터 최적화 히트맵, 워크포워드, 몬테카를로
+- [ ] 퀀트 3단계: ETF 자산배분/듀얼모멘텀 (포트폴리오, 리밸런싱)
+- [ ] 자동주문 스케줄러 (gunicorn과 별도 프로세스, quant/strategies 재사용)
 - [ ] 저장소 백엔드 결정 (Supabase 유력)

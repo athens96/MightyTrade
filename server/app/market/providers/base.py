@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 
 from ..models import Candle, Instrument, Interval, Market, Quote
@@ -19,6 +20,11 @@ class MarketDataProvider(ABC):
 
     @abstractmethod
     def get_quote(self, market: Market, symbol: str) -> Quote: ...
+
+    def get_history(self, market: Market, symbol: str, interval: Interval, start: int) -> list[Candle]:
+        """Candles from `start` (unix seconds, 0 = as far back as available) to now, ascending."""
+        limit = 6000 if not start else min(max(int((time.time() - start) / interval.seconds) + 10, 50), 6000)
+        return self.get_candles(market, symbol, interval, limit)
 
     def search(self, market: Market, query: str) -> list[Instrument]:
         raise NotImplementedError(f"{self.name}: search not implemented")

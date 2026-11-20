@@ -1,40 +1,15 @@
-"""Auto-trading building blocks (not wired yet).
+"""Auto-trading (not wired yet).
 
-Planned flow:
-  scheduler (APScheduler or a separate worker process)
-    -> for each enabled user strategy: fetch candles via market registry
-    -> Strategy.evaluate() -> Signal
-    -> risk checks (max position, daily loss limit, market hours)
-    -> Broker.place_order()
-    -> persist to `orders` collection + notify
+Strategies live in app/quant/strategies and are shared with the backtester:
+    strategy.prepare(bars); orders = strategy.on_bar(len(bars) - 1, ctx)
 
-Run the scheduler as a separate process from gunicorn so multiple web workers
-don't fire the same strategy twice.
+Planned live flow:
+  scheduler (separate process from gunicorn, so web workers don't fire twice)
+    -> per enabled user strategy: load latest candles with that user's Toss key
+    -> prepare() + on_bar(last bar) -> orders
+    -> risk checks (max position, daily loss limit, market hours, dry-run mode)
+    -> Broker.place_order() -> persist to `orders` + notify
 """
-from __future__ import annotations
+from ...quant.strategies import STRATEGIES, Strategy
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Optional
-
-from ...market.models import Candle
-from ..models import Side
-
-
-@dataclass
-class Signal:
-    side: Side
-    quantity: float
-    price: Optional[float] = None
-    reason: str = ""
-
-
-class Strategy(ABC):
-    name = "base"
-
-    def __init__(self, params: dict):
-        self.params = params
-
-    @abstractmethod
-    def evaluate(self, candles: list[Candle]) -> Optional[Signal]:
-        """Return a Signal to trade, or None to do nothing."""
+__all__ = ["STRATEGIES", "Strategy"]

@@ -17,6 +17,8 @@ from .base import MarketDataProvider
 
 PAGE_SIZE = 200          # Toss max candles per call
 MAX_PAGES = 10           # caps 1m-derived bars (e.g. 1h ≈ 2000 min of trading)
+HISTORY_MAX_PAGES = 40   # backtest history: up to 8000 daily bars (~30 years)
+HISTORY_TTL = 300
 CANDLE_TTL = {"1m": 10, "1d": 60}   # seconds, in-process cache
 STOCK_LIST_TTL = 12 * 3600
 SEARCH_LIMIT = 30
@@ -108,6 +110,35 @@ class TossProvider(MarketDataProvider):
         factor = interval.seconds // 60
         minutes = self._fetch_base(symbol, "1m", min((limit + 1) * factor, PAGE_SIZE * MAX_PAGES))
         return resample_intraday(minutes, interval.seconds)[-limit:]
+
+    def get_history(self, market: Market, symbol: str, interval: Interval, start: int) -> list[Candle]:
+        """Daily bars back to `start` (0 = all available, capped), for backtests."""
+        self._check(market, symbol)
+        if interval != Interval.D1:
+            raise ApiError(400, "unsupported_interval", "백테스트는 현재 일봉만 지원합니다")
+        key = (_uid(), symbol, "1d-history", start // 86400)
+        now = time.time()
+        with self._lock:
+            hit = self._candle_cache.get(key)
+            if hit and hit[0] > now:
+                return hit[1]
+        client = get_toss_client()
+        out: list[Candle] = []
+        before: Optional[str] = None
+        for _ in range(HISTORY_MAX_PAGES):
+            params: dict[str, Any] = {"symbol": symbol, "interval": "1d", "count": PAGE_SIZE}
+            if before:
+                params["before"] = before
+            result = client.request("GET", "/api/v1/candles", params=params) or {}
+            page = [_to_candle(c, "1d") for c in result.get("candles", [])]
+            out.extend(page)
+            before = result.get("nextBefore")
+            if not before or not page or min(c.time for c in page) <= start:
+                break
+        candles = sorted({c.time: c for c in out}.values(), key=lambda c: c.time)
+        with self._lock:
+            self._candle_cache[key] = (now + HISTORY_TTL, candles)
+        return candles
 
     def get_quote(self, market: Market, symbol: str) -> Quote:
         self._check(market, symbol)
