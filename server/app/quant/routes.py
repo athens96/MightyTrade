@@ -5,13 +5,13 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from ..auth.decorators import login_required
 from ..errors import ApiError
 from ..market.models import Interval, Market
 from ..market.registry import get_provider
-from . import portfolio, screener, worker
+from . import portfolio, screener, screener_data, worker
 from .data import cost_defaults
 from .engine import Backtester, Bars, Costs, buy_and_hold
 from .metrics import performance
@@ -85,12 +85,20 @@ def _strategy(cls: type, params: dict) -> Strategy:
 
 
 def _load(s: Setup, warmup: int) -> tuple:
-    """Fetch bars covering the period + warm-up. Supports 1d history and intraday (5m/15m) candles."""
+    """Fetch bars covering the period + warm-up. Uses fast public history/intraday when live (Toss fallback)."""
     tf = getattr(s.cls, "timeframe", "1d")
+    is_mock = current_app.config["MARKET_PROVIDERS"][s.market.value] != "toss"
     if tf != "1d":
         interval = Interval(tf)
-        candles = get_provider(s.market).get_candles(s.market, s.symbol, interval, limit=400)
-        bars = Bars.from_candles(candles)
+        bars: Optional[Bars] = None
+        candles = []
+        if not is_mock:
+            bars = screener_data.fetch_public_intraday(s.market.value, s.symbol, tf)
+            if bars is not None:
+                candles = screener_data.bars_to_candles(bars)
+        if bars is None:
+            candles = get_provider(s.market).get_candles(s.market, s.symbol, interval, limit=400)
+            bars = Bars.from_candles(candles)
         start = warmup
         if start >= len(bars) - 1:
             raise ApiError(400, "not_enough_data", "분봉 백테스트에 필요한 데이터가 부족합니다")
@@ -99,14 +107,22 @@ def _load(s: Setup, warmup: int) -> tuple:
     start_ts = 0 if days is None else int(time.time() - days * 86400)
     # extra calendar days so indicators are warmed up at the start date (~1.5 calendar days per trading day)
     fetch_from = 0 if days is None else int(start_ts - (warmup * 1.6 + 15) * 86400)
-    candles = get_provider(s.market).get_history(s.market, s.symbol, Interval.D1, fetch_from)
-    bars = Bars.from_candles(candles)
-    first = next((i for i, t in enumerate(bars.time) if t >= start_ts), len(bars))
+    bars_d: Optional[Bars] = None
+    candles_d = []
+    if not is_mock:
+        pub = screener_data.fetch_public_history(s.market.value, [s.symbol], period=s.period)
+        bars_d = pub.get(s.symbol)
+        if bars_d is not None:
+            candles_d = screener_data.bars_to_candles(bars_d)
+    if bars_d is None:
+        candles_d = get_provider(s.market).get_history(s.market, s.symbol, Interval.D1, fetch_from)
+        bars_d = Bars.from_candles(candles_d)
+    first = next((i for i, t in enumerate(bars_d.time) if t >= start_ts), len(bars_d))
     start = max(first, warmup)
-    if start >= len(bars) - 1:
+    if start >= len(bars_d) - 1:
         raise ApiError(400, "not_enough_data", "백테스트에 필요한 데이터가 부족합니다")
     warn = ["start_adjusted"] if start > first and days is not None else []
-    return candles, bars, start, warn
+    return candles_d, bars_d, start, warn
 
 
 def _context(s: Setup, bars: Bars, start: int) -> dict:
@@ -211,6 +227,12 @@ def walkforward():
     """body = backtest fields + x/y ranges + objective + is_years + oos_months + mode (rolling|anchored)."""
     body = request.get_json(silent=True) or {}
     s = _setup(body)
+    if getattr(s.cls, "timeframe", "1d") != "1d":
+        raise ApiError(
+            400,
+            "daily_strategy_only",
+            "워크포워드는 수년 단위 검증이므로 일봉(스윙·일봉 단타) 전략에서만 사용할 수 있습니다. 분봉 단타 전략은 [백테스트 · 최적화 · 몬테카를로]를 이용해 주세요.",
+        )
     x, y, objective, min_trades, base, items = _grid_inputs(s, body)
     is_years = _num(body, "is_years", 3, 0.5, 20)
     oos_months = _num(body, "oos_months", 12, 1, 60)
@@ -303,11 +325,16 @@ def portfolio_backtest():
     start_ts = 0 if days is None else int(time.time() - days * 86400)
     warm = model.warmup(params)
     fetch_from = 0 if days is None else int(start_ts - (warm * 1.6 + 20) * 86400)
-    provider = get_provider(market)
-    bars_by_sym = {
-        a["symbol"]: Bars.from_candles(provider.get_history(market, a["symbol"], Interval.D1, fetch_from))
-        for a in assets
-    }
+    is_mock = current_app.config["MARKET_PROVIDERS"][market.value] != "toss"
+    syms = [a["symbol"] for a in assets]
+    bars_by_sym: dict[str, Bars] = {}
+    if not is_mock:
+        bars_by_sym = screener_data.fetch_public_history(market.value, syms, period=period)
+    missing = [s for s in syms if s not in bars_by_sym]
+    if missing:
+        provider = get_provider(market)
+        for sym in missing:
+            bars_by_sym[sym] = Bars.from_candles(provider.get_history(market, sym, Interval.D1, fetch_from))
     res = worker.run_portfolio(bars_by_sym, model.id, assets, params, rebalance, drift_pct, capital, costs, start_ts)
     warn_codes = res.pop("warnings", [])
     return jsonify(

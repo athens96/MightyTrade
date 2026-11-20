@@ -254,3 +254,13 @@ def test_validate_assets_enforces_canary_and_core_roles():
             {"symbol": "SHY", "role": "defensive", "weight": 0},
         ], portfolio.PORTFOLIO_MODELS["laa"])
     assert "고정" in str(e2.value)
+
+
+def test_align_bars_matches_different_time_of_day_timestamps():
+    # Yahoo US open timestamp (14:30 UTC) vs Toss midnight timestamp (00:00 UTC) on identical calendar dates
+    day0 = 1_700_006_400  # 2023-11-15 00:00:00 UTC
+    b_toss = Bars([day0 + i * DAY for i in range(10)], [100] * 10, [101] * 10, [99] * 10, [100] * 10, [1000] * 10)
+    b_yahoo = Bars([day0 + i * DAY + 14 * 3600 + 1800 for i in range(10)], [50] * 10, [51] * 10, [49] * 10, [50] * 10, [1000] * 10)
+    times, opens, closes = portfolio.align_bars({"A": b_toss, "B": b_yahoo})
+    assert len(times) == 10
+    assert len(opens["A"]) == 10 and len(closes["B"]) == 10

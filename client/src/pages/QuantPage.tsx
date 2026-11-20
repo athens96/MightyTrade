@@ -21,7 +21,7 @@ import {
   type StrategyParam,
   type WalkForwardResult,
 } from '../api/quant'
-import type { Market, WatchItem } from '../api/types'
+import type { Instrument, Market, WatchItem } from '../api/types'
 import { MOBILE, useMediaQuery } from '../hooks/useMediaQuery'
 import BacktestView from '../components/quant/BacktestView'
 import { FeatureGuideBox, StrategyGuideBox } from '../components/GuideBox'
@@ -151,6 +151,8 @@ export default function QuantPage() {
   })
   const [objectives, setObjectives] = useState<Record<string, string>>({})
   const [watchlist, setWatchlist] = useState<WatchItem[]>([])
+  const [symQuery, setSymQuery] = useState('')
+  const [symHits, setSymHits] = useState<Instrument[]>([])
   const [costs, setCosts] = useState<CostDefaults | null>(null)
   const [running, setRunning] = useState(false)
   const isMobile = useMediaQuery(MOBILE)
@@ -195,8 +197,22 @@ export default function QuantPage() {
 
   useEffect(() => {
     setCosts(null)
+    setSymQuery('')
+    setSymHits([])
     quantApi.defaults(form.market).then(setCosts).catch((e) => setError(e.message))
   }, [form.market])
+
+  useEffect(() => {
+    const q = symQuery.trim()
+    if (!q) {
+      setSymHits([])
+      return
+    }
+    const t = setTimeout(() => {
+      marketApi.search(form.market, q).then((r) => setSymHits(r.items.slice(0, 8))).catch(() => setSymHits([]))
+    }, 220)
+    return () => clearTimeout(t)
+  }, [form.market, symQuery])
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm((f) => ({ ...f, [key]: value }))
   const meta = strategies.find((s) => s.id === form.strategy) ?? strategies[0]
@@ -212,6 +228,8 @@ export default function QuantPage() {
   const gridMode = form.mode === 'optimize' || form.mode === 'walkforward'
   const isPortfolio = form.mode === 'portfolio'
   const isScreener = form.mode === 'screener'
+  const isIntraday = !isPortfolio && !isScreener && !!meta && meta.timeframe !== '1d'
+  const wfBlockedByIntraday = form.mode === 'walkforward' && isIntraday
 
   const scPreset = screenerPresets.find((p) => p.id === form.screenerPreset) ?? screenerPresets[0]
   const scUniverses = screenerUniverses[form.market] ?? []
@@ -426,15 +444,41 @@ export default function QuantPage() {
         {!isPortfolio && !isScreener && (
           <>
             <label>
-              <span>종목</span>
+              <span>종목 코드</span>
               <input list="quant-watchlist" value={form.symbol} onChange={(e) => set('symbol', e.target.value.toUpperCase())} />
               <datalist id="quant-watchlist">
                 {items.map((w) => (
                   <option key={w.symbol} value={w.symbol}>{w.name}</option>
                 ))}
               </datalist>
-              <span className="muted small">{items.find((w) => w.symbol === form.symbol)?.name ?? '관심종목에서 고르거나 코드를 입력'}</span>
+              <span className="muted small">{items.find((w) => w.symbol === form.symbol)?.name ?? '관심종목에서 고르거나 아래에서 이름으로 검색'}</span>
             </label>
+            <div className="quant-search">
+              <input
+                type="search"
+                value={symQuery}
+                placeholder={form.market === 'KR' ? '종목 이름으로 검색 (예: 삼성전자, KODEX)' : '종목·영문명 검색 (예: Apple, NVIDIA)'}
+                onChange={(e) => setSymQuery(e.target.value)}
+              />
+              {symHits.length > 0 && (
+                <ul className="search-results">
+                  {symHits.map((it) => (
+                    <li key={it.symbol}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          set('symbol', it.symbol)
+                          setSymQuery('')
+                          setSymHits([])
+                        }}
+                      >
+                        <b>{it.name}</b> <span className="muted small">{it.symbol}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
             <label>
               <span>전략</span>
@@ -695,16 +739,28 @@ export default function QuantPage() {
 
         {!isScreener && (
           <>
-            <label>
-              <span>기간 (일봉)</span>
-              <div className="tabs">
-                {PERIODS.map((p) => (
-                  <button type="button" key={p.id} className={p.id === form.period ? 'active' : ''} onClick={() => set('period', p.id)}>
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </label>
+            {isIntraday ? (
+              <p className="muted small">
+                <b>분봉 데이터 ({meta?.timeframe})</b>: 최근 약 60거래일 분봉을 자동 조회하며, 장 마감 직전에 당일 전량 청산합니다.
+              </p>
+            ) : (
+              <label>
+                <span>기간 (일봉)</span>
+                <div className="tabs">
+                  {PERIODS.map((p) => (
+                    <button type="button" key={p.id} className={p.id === form.period ? 'active' : ''} onClick={() => set('period', p.id)}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </label>
+            )}
+
+            {wfBlockedByIntraday && (
+              <p className="warn small">
+                워크포워드는 수년 단위 검증이므로 일봉 전략에서만 사용할 수 있습니다. 분봉 단타 전략은 [백테스트 · 최적화 · 몬테카를로] 탭을 이용해 주세요.
+              </p>
+            )}
 
             {costs && (
               <fieldset className="costs">
@@ -712,7 +768,22 @@ export default function QuantPage() {
                 {num(`초기 자본 (${costs.currency})`, costs.capital, (v) => setCosts({ ...costs, capital: v }), 1)}
                 {num('수수료 % (매수·매도 각각)', costs.commission_pct, (v) => setCosts({ ...costs, commission_pct: v }), 0.001,
                   costs.commission_source === 'toss' ? '· 내 토스 계좌 수수료' : '· 기본값')}
-                {num('매도 세금 %', costs.tax_pct, (v) => setCosts({ ...costs, tax_pct: v }), 0.01, form.market === 'KR' ? '· 증권거래세, 현재 세율 확인' : '')}
+                <label>
+                  <span>
+                    매도 세금 %{' '}
+                    {form.market === 'KR' && (
+                      <span className="muted small">
+                        {isPortfolio ? '· 국내 ETF는 증권거래세 0% 면제 ' : '· 증권거래세, ETF는 0% '}
+                        {costs.tax_pct > 0 && (
+                          <button type="button" className="link" onClick={() => setCosts({ ...costs, tax_pct: 0 })}>
+                            [0% 적용]
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </span>
+                  <input type="number" step={0.01} value={costs.tax_pct} onChange={(e) => setCosts({ ...costs, tax_pct: Number(e.target.value) })} />
+                </label>
                 {num('슬리피지 % (체결마다)', costs.slippage_pct, (v) => setCosts({ ...costs, slippage_pct: v }), 0.01)}
               </fieldset>
             )}
@@ -723,6 +794,7 @@ export default function QuantPage() {
           type="submit"
           disabled={
             running ||
+            wfBlockedByIntraday ||
             (isScreener
               ? !scPreset || (scPreset.kr_only && form.market !== 'KR')
               : !costs || (isPortfolio ? (!pModel || pAssets.length < 2) : (!meta || !form.symbol.trim())))
@@ -748,7 +820,7 @@ export default function QuantPage() {
         )}
         {form.mode === 'walkforward' && results.walkforward && (
           <WalkForwardView result={results.walkforward} title={titleOf(results.walkforward)}
-                           objectiveLabel={objectives[results.walkforward.objective] ?? results.walkforward.objective} />
+                           objectiveLabel={objectives[results.walkforward.objective] ?? results.walkforward.objective} onPick={pickParams} />
         )}
         {form.mode === 'montecarlo' && results.montecarlo && <MonteCarloView result={results.montecarlo} title={titleOf(results.montecarlo)} />}
         {form.mode === 'portfolio' && results.portfolio && (

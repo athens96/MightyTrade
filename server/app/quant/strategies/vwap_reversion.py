@@ -58,19 +58,22 @@ class VwapBandReversion(Strategy):
 
     def on_bar(self, i: int, ctx: Context) -> list:
         pos = ctx.position
+        # Orders decided at bar i fill at bar i+1 open: trigger EOD flatten when bar i+1 is the final bar of the session.
+        next_is_last = i + 2 < len(self.b) and self.sess[i + 2] != self.sess[i]
         next_is_new_sess = i + 1 < len(self.b) and self.sess[i + 1] != self.sess[i]
+        near_eod = next_is_last or next_is_new_sess
         vwap, sd = self.vwap[i], self.sd[i]
         c = self.b.close[i]
 
         if pos.is_open:
-            if next_is_new_sess:
+            if near_eod:
                 return [Order("sell", reason="장 마감 전 당일 청산")]
             if vwap is not None and c >= vwap:
                 return [Order("sell", reason="VWAP 중심선 회복 익절")]
             stop = pos.entry_price * (1.0 - self.p["stop_pct"] / 100.0)
             return [Order("sell", kind="stop", stop=stop, reason=f"VWAP 손절 (-{self.p['stop_pct']:g}%)")]
 
-        if next_is_new_sess or self.bar_in_sess[i] < self.p["min_bars"]:
+        if near_eod or self.bar_in_sess[i] < self.p["min_bars"]:
             return []
         if vwap is None or sd is None or sd <= 0:
             return []

@@ -14,11 +14,12 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import requests
 
+from ..market.models import Candle
 from .engine import Bars
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -198,7 +199,14 @@ def _fetch_us_bars_one(symbol: str, range_str: str) -> Optional[Bars]:
             if raw_adj and idx < len(raw_adj) and raw_adj[idx] and raw_adj[idx] > 0:
                 ratio = raw_adj[idx] / c
                 o, h, lo, c = o * ratio, h * ratio, lo * ratio, raw_adj[idx]
-            times.append(int(t))
+            # Normalize daily bar timestamp to UTC midnight of its trading date (matches Toss/Naver)
+            d_utc = datetime.fromtimestamp(int(t), timezone.utc).date()
+            day_ts = calendar.timegm(d_utc.timetuple())
+            if times and times[-1] == day_ts:
+                # Deduplicate occasional trailing live/summary bar on the same date
+                opens[-1], highs[-1], lows[-1], closes[-1], vols[-1] = float(o), float(h), float(lo), float(c), float(v)
+                continue
+            times.append(day_ts)
             opens.append(float(o))
             highs.append(float(h))
             lows.append(float(lo))
@@ -209,6 +217,127 @@ def _fetch_us_bars_one(symbol: str, range_str: str) -> Optional[Bars]:
         return Bars(times, opens, highs, lows, closes, vols)
     except Exception:
         return None
+
+
+def _fetch_us_intraday_one(ysym: str, interval: str, range_str: str = "60d") -> Optional[Bars]:
+    try:
+        r = requests.get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}",
+            params={"range": range_str, "interval": interval},
+            headers={"User-Agent": USER_AGENT},
+            timeout=HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            return None
+        res_list = (r.json().get("chart") or {}).get("result") or []
+        if not res_list:
+            return None
+        res = res_list[0]
+        raw_t = res.get("timestamp") or []
+        quote = ((res.get("indicators") or {}).get("quote") or [{}])[0]
+        raw_o = quote.get("open") or []
+        raw_h = quote.get("high") or []
+        raw_l = quote.get("low") or []
+        raw_c = quote.get("close") or []
+        raw_v = quote.get("volume") or []
+        times, opens, highs, lows, closes, vols = [], [], [], [], [], []
+        for idx, t in enumerate(raw_t):
+            c = raw_c[idx] if idx < len(raw_c) else None
+            if c is None or c <= 0:
+                continue
+            o = raw_o[idx] if idx < len(raw_o) and raw_o[idx] else c
+            h = raw_h[idx] if idx < len(raw_h) and raw_h[idx] else max(o, c)
+            lo = raw_l[idx] if idx < len(raw_l) and raw_l[idx] else min(o, c)
+            v = raw_v[idx] if idx < len(raw_v) and raw_v[idx] is not None else 0.0
+            ts = int(t)
+            if times and times[-1] >= ts:
+                continue
+            times.append(ts)
+            opens.append(float(o))
+            highs.append(float(h))
+            lows.append(float(lo))
+            closes.append(float(c))
+            vols.append(float(v))
+        if len(times) < 20:
+            return None
+        return Bars(times, opens, highs, lows, closes, vols)
+    except Exception:
+        return None
+
+
+def bars_to_candles(bars: Bars) -> list[Candle]:
+    return [
+        Candle(time=t, open=o, high=h, low=lo, close=c, volume=v)
+        for t, o, h, lo, c, v in zip(bars.time, bars.open, bars.high, bars.low, bars.close, bars.volume)
+    ]
+
+
+PERIOD_KR_COUNT = {"1y": 550, "3y": 1100, "5y": 1650, "10y": 3000, "max": 6000}
+PERIOD_US_RANGE = {"1y": "2y", "3y": "5y", "5y": "10y", "10y": "max", "max": "max"}
+
+
+def fetch_public_history(market: str, symbols: list[str], *, period: str = "5y") -> dict[str, Bars]:
+    """Batch-fetch multi-year daily OHLCV bars for backtesting & portfolios (cached 10m)."""
+    now = time.time()
+    kr_count = PERIOD_KR_COUNT.get(period, 1650)
+    us_range = PERIOD_US_RANGE.get(period, "10y")
+    cache_tag = kr_count if market == "KR" else (hash(us_range) & 0xFFFF)
+    out: dict[str, Bars] = {}
+    missing: list[str] = []
+
+    with _lock:
+        for sym in symbols:
+            hit = _bars_cache.get((market, sym, cache_tag))
+            if hit and hit[0] > now:
+                out[sym] = hit[1]
+            else:
+                missing.append(sym)
+
+    if missing:
+        def _worker(sym: str) -> tuple[str, Optional[Bars]]:
+            b = _fetch_kr_bars_one(sym, kr_count) if market == "KR" else _fetch_us_bars_one(sym, us_range)
+            return sym, b
+
+        workers = min(12, len(missing))
+        if workers == 1:
+            fetched = [_worker(missing[0])]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                fetched = list(pool.map(_worker, missing))
+
+        with _lock:
+            if len(_bars_cache) > MAX_BARS_CACHE:
+                _bars_cache.clear()
+            for sym, b in fetched:
+                if b is not None:
+                    _bars_cache[(market, sym, cache_tag)] = (now + BARS_TTL, b)
+                    out[sym] = b
+
+    return out
+
+
+def fetch_public_intraday(market: str, symbol: str, interval: str = "15m") -> Optional[Bars]:
+    """Fetch up to 60 trading days of 5m/15m intraday bars from Yahoo Finance (cached 5m)."""
+    now = time.time()
+    key = (market, f"{symbol}:{interval}", 60)
+    with _lock:
+        hit = _bars_cache.get(key)
+        if hit and hit[0] > now:
+            return hit[1]
+
+    b: Optional[Bars] = None
+    if market == "US":
+        b = _fetch_us_intraday_one(symbol.replace(".", "-"), interval, "60d")
+    else:
+        # Try KOSPI (.KS) first, then KOSDAQ (.KQ)
+        b = _fetch_us_intraday_one(f"{symbol}.KS", interval, "60d")
+        if b is None:
+            b = _fetch_us_intraday_one(f"{symbol}.KQ", interval, "60d")
+
+    if b is not None:
+        with _lock:
+            _bars_cache[key] = (now + 300, b)
+    return b
 
 
 def fetch_public_bars(market: str, symbols: list[str], *, count: int = 320) -> dict[str, Bars]:

@@ -76,10 +76,12 @@ class OpeningRangeBreakout(Strategy):
 
     def on_bar(self, i: int, ctx: Context) -> list:
         pos = ctx.position
-        # Flatten right before session roll (no overnight holding).
+        # Orders decided at bar i fill at bar i+1 open: trigger EOD flatten when bar i+1 is the final bar of the session.
+        next_is_last = i + 2 < len(self.b) and self.sess[i + 2] != self.sess[i]
         next_is_new_sess = i + 1 < len(self.b) and self.sess[i + 1] != self.sess[i]
+        near_eod = next_is_last or next_is_new_sess or self.is_eod[i]
         if pos.is_open:
-            if next_is_new_sess or self.is_eod[i]:
+            if near_eod:
                 return [Order("sell", reason="장 마감 전 당일 청산")]
             oh, ol = self.or_high[i], self.or_low[i]
             rng = (oh - ol) if (oh is not None and ol is not None and oh > ol) else pos.entry_price * 0.01
@@ -89,7 +91,7 @@ class OpeningRangeBreakout(Strategy):
                 return [Order("sell", reason=f"ORB 목표 익절 ({self.p['target_rr']:g}R)")]
             return [Order("sell", kind="stop", stop=stop, reason=f"ORB 손절 ({self.p['stop_ratio']:g}R)")]
 
-        if next_is_new_sess or self.is_eod[i]:
+        if near_eod:
             return []
         oh, ol = self.or_high[i], self.or_low[i]
         if oh is None or ol is None or oh <= ol:

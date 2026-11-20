@@ -322,6 +322,9 @@ b.plain { color: #e6edf3; }
 .match-badge { display: inline-block; margin-left: 5px; font-size: 10.5px; padding: 1px 6px; border-radius: 6px; background: #12361f; color: #3fb950; font-weight: 600; white-space: nowrap; }
 .quant-form textarea { width: 100%; box-sizing: border-box; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font-family: inherit; font-size: 12px; resize: vertical; }
 .quant-form label.check { flex-direction: row; align-items: center; gap: 6px; cursor: pointer; }
+.quant-search { position: relative; }
+.quant-search input { width: 100%; box-sizing: border-box; font-size: 12px; }
+.quant-search .search-results { position: relative; max-height: 180px; margin-top: 4px; }
 
 /* ======================================================================
    Responsive. Desktop rules above stay as-is; these only kick in on

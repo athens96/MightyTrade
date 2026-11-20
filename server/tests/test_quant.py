@@ -220,3 +220,39 @@ def test_api_rejects_bad_input(session):
     assert session.post("/api/quant/backtest", json={**bad, "strategy": "nope"}).json["error"] == "unknown_strategy"
     r = session.post("/api/quant/backtest", json={**bad, "params": {}, "commission_pct": 50})
     assert r.json["error"] == "out_of_range"
+
+    # Walk-forward rejects intraday strategies with clear guidance
+    r_wf = session.post("/api/quant/walkforward", json={
+        "market": "US", "symbol": "AAPL", "strategy": "orb_breakout",
+        "x": {"key": "open_bars", "start": 1, "stop": 3, "step": 1},
+    })
+    assert r_wf.status_code == 400 and r_wf.json["error"] == "daily_strategy_only"
+
+
+def test_intraday_daytrade_strategies_flatten_same_session():
+    """ORB (15m) and VWAP (5m) must close before session roll — never hold overnight."""
+    # Build 4 realistic 15m sessions (26 bars per day, 18h overnight gap between days)
+    times, opens, highs, lows, closes, vols = [], [], [], [], [], []
+    base_t = 1_700_000_000
+    for day in range(4):
+        day_start = base_t + day * DAY
+        for b in range(26):
+            t = day_start + b * 900
+            px = 100.0 + (b * 0.4 if b >= 2 else 0.1 * (b % 2))
+            if b == 6:
+                px = 96.0  # dip below VWAP
+            times.append(t)
+            opens.append(px)
+            highs.append(px + 0.6)
+            lows.append(px - 0.6)
+            closes.append(px + 0.2)
+            vols.append(1000.0)
+    bars = Bars(times, opens, highs, lows, closes, vols)
+    sess = dict(zip(times, ind.session_buckets(times)))
+    for sid in ("orb_breakout", "vwap_reversion"):
+        s = STRATEGIES[sid]()
+        r = Backtester(bars, s, 100_000, NO_COST, s.warmup()).run()
+        closed = [tr for tr in r["trades"] if not tr["open"]]
+        assert closed, f"{sid} should trade on synthetic intraday sessions"
+        for tr in closed:
+            assert sess[tr["entry_time"]] == sess[tr["exit_time"]], f"{sid} held overnight: {tr}"

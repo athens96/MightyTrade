@@ -1,4 +1,4 @@
-import type { Market } from '../../api/types'
+import type { Interval, Market } from '../../api/types'
 import type { Metrics } from '../../api/quant'
 import { priceFormatter } from '../chart/format'
 
@@ -26,8 +26,9 @@ const ROWS: { key: keyof Metrics; label: string; kind: Kind; help: string; trade
   { key: 'exposure_pct', label: '시장 노출', kind: 'pctAbs', help: '전체 기간 중 주식을 보유한 비율', tradeOnly: true },
 ]
 
-export default function MetricsTable({ strategy, benchmark, market }: { strategy: Metrics; benchmark: Metrics; market: Market }) {
+export default function MetricsTable({ strategy, benchmark, market, interval = '1d' }: { strategy: Metrics; benchmark: Metrics; market: Market; interval?: Interval }) {
   const money = priceFormatter(market)
+  const barUnit = interval === '1d' || interval === '1w' ? '일' : '봉'
   const fmt = (v: number | null | undefined, kind: Kind) => {
     if (v === null || v === undefined) return '-'
     switch (kind) {
@@ -40,7 +41,7 @@ export default function MetricsTable({ strategy, benchmark, market }: { strategy
       case 'days':
         return `${v.toLocaleString()}일`
       case 'bars':
-        return `${v.toFixed(1)}일`
+        return `${v.toFixed(1)}${barUnit}`
       case 'money':
         return money(v)
       case 'count':

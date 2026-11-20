@@ -52,7 +52,7 @@ export default function BacktestView({ result, title }: { result: BacktestResult
         <p key={w} className="warn">{w}</p>
       ))}
       <div className="result-grid">
-        <MetricsTable strategy={result.metrics} benchmark={result.benchmark} market={result.market} />
+        <MetricsTable strategy={result.metrics} benchmark={result.benchmark} market={result.market} interval={result.interval} />
         <EquityChart points={result.equity} market={result.market} />
       </div>
       <div className="quant-price-chart">
@@ -67,7 +67,7 @@ export default function BacktestView({ result, title }: { result: BacktestResult
           logScale
         />
       </div>
-      <TradesTable trades={result.trades} market={result.market} />
+      <TradesTable trades={result.trades} market={result.market} interval={result.interval} />
     </>
   )
 }

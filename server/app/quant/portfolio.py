@@ -1121,14 +1121,24 @@ def validate_assets(market: str, raw_assets: Any, model: PortfolioModel) -> list
 
 
 def align_bars(bars_by_symbol: dict[str, Bars]) -> tuple[list[int], dict[str, list[float]], dict[str, list[float]]]:
-    """Intersect trading dates across all symbols. Returns (times, opens_by_sym, closes_by_sym)."""
-    maps: dict[str, dict[int, tuple[float, float]]] = {}
+    """Intersect trading calendar dates across all symbols (robust across providers/timezones)."""
+    import calendar as _cal
+
+    maps: dict[str, dict[str, tuple[float, float]]] = {}
+    day_ts: dict[str, int] = {}
     for sym, b in bars_by_symbol.items():
-        maps[sym] = {t: (o, c) for t, o, c in zip(b.time, b.open, b.close)}
-    common = sorted(set.intersection(*(set(m.keys()) for m in maps.values()))) if maps else []
-    opens = {sym: [maps[sym][t][0] for t in common] for sym in bars_by_symbol}
-    closes = {sym: [maps[sym][t][1] for t in common] for sym in bars_by_symbol}
-    return common, opens, closes
+        m: dict[str, tuple[float, float]] = {}
+        for t, o, c in zip(b.time, b.open, b.close):
+            d = _day_str(t)
+            m[d] = (o, c)
+            if d not in day_ts:
+                day_ts[d] = _cal.timegm(datetime.strptime(d, "%Y-%m-%d").timetuple())
+        maps[sym] = m
+    common_days = sorted(set.intersection(*(set(m.keys()) for m in maps.values()))) if maps else []
+    times = [day_ts[d] for d in common_days]
+    opens = {sym: [maps[sym][d][0] for d in common_days] for sym in bars_by_symbol}
+    closes = {sym: [maps[sym][d][1] for d in common_days] for sym in bars_by_symbol}
+    return times, opens, closes
 
 
 # ------------------------------------------------------------------ backtest engine
@@ -1226,16 +1236,17 @@ def run_portfolio_backtest(
         if reason is not None and j + 1 < len(times):
             pending_target = (tgt_w, reason)
 
-    # Benchmark: equal-weight buy-and-hold across the same aligned assets
-    eq_w = 1.0 / len(syms)
+    # Benchmark: equal-weight buy-and-hold across investable (non-canary) assets
+    bench_syms = [a["symbol"] for a in assets if a.get("role") != "canary"] or syms
+    eq_w = 1.0 / len(bench_syms)
     bh_qty = {}
     bh_cash = capital
-    for s in syms:
+    for s in bench_syms:
         px = closes[s][start] * (1.0 + slip) * (1.0 + comm)
         q = math.floor(capital * eq_w / px) if px > 0 else 0
         bh_qty[s] = q
         bh_cash -= q * px
-    bench = [bh_cash + sum(bh_qty[s] * closes[s][j] for s in syms) for j in range(start, len(times))]
+    bench = [bh_cash + sum(bh_qty[s] * closes[s][j] for s in bench_syms) for j in range(start, len(times))]
 
     seg_times = times[start:]
     latest_target = model.target_weights(closes, len(times) - 1, assets, params)

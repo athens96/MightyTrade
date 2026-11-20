@@ -12,12 +12,31 @@ function efficiencyNote(e: number | null) {
   return '처음 보는 구간에서는 손실 — 이 전략·범위는 신뢰하기 어려움'
 }
 
-export default function WalkForwardView({ result, title, objectiveLabel }: { result: WalkForwardResult; title: string; objectiveLabel: string }) {
+export default function WalkForwardView({
+  result,
+  title,
+  objectiveLabel,
+  onPick,
+}: {
+  result: WalkForwardResult
+  title: string
+  objectiveLabel: string
+  onPick?: (p: Record<string, number>) => void
+}) {
   const e = result.efficiency
+  const latestParams = [...result.windows].reverse().find((w) => w.params)?.params ?? null
   return (
     <>
       <div className="result-head">
-        <h3>{title} · 워크포워드 검증</h3>
+        <div className="account-head">
+          <h3>{title} · 워크포워드 검증</h3>
+          <div className="spacer" />
+          {onPick && latestParams && (
+            <button className="primary" onClick={() => onPick(latestParams)} title="가장 최근 검증 구간에서 선택된 설정으로 전체 백테스트를 실행합니다">
+              최신 구간 설정으로 백테스트 →
+            </button>
+          )}
+        </div>
         <span className="muted">
           {result.mode === 'rolling' ? '롤링' : '누적'} · 학습 {result.is_years}년 → 검증 {result.oos_months}개월 × {result.windows.length}구간 ·
           목표 {objectiveLabel} · {result.elapsed_sec}초

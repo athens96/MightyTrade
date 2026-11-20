@@ -1,3 +1,5 @@
+import { useNavigate } from 'react-router-dom'
+import { PREFILL_KEY } from '../../api/autotrade'
 import type { MonteCarloResult } from '../../api/quant'
 import { day } from './BacktestView'
 import FanChart from './FanChart'
@@ -7,11 +9,20 @@ import Histogram from './Histogram'
 const P = ['p5', 'p25', 'p50', 'p75', 'p95'] as const
 
 export default function MonteCarloView({ result, title }: { result: MonteCarloResult; title: string }) {
+  const navigate = useNavigate()
   const o = result.original
+  const makeBot = () => {
+    sessionStorage.setItem(PREFILL_KEY, JSON.stringify({ market: result.market, symbol: result.symbol, strategy: result.strategy, params: result.params }))
+    navigate('/auto')
+  }
   return (
     <>
       <div className="result-head">
-        <h3>{title} · 몬테카를로</h3>
+        <div className="account-head">
+          <h3>{title} · 몬테카를로</h3>
+          <div className="spacer" />
+          <button className="primary" onClick={makeBot} title="모의 모드로 시작합니다">이 설정으로 봇 만들기 →</button>
+        </div>
         <span className="muted">
           {day(result.period.start)} ~ {day(result.period.end)} · 청산 매매 {result.trades}회 ·{' '}
           {result.method === 'bootstrap' ? '부트스트랩(복원 추출)' : '순서 섞기'} {result.runs.toLocaleString()}회
@@ -63,7 +74,7 @@ export default function MonteCarloView({ result, title }: { result: MonteCarloRe
           <tr>
             <td>연수익률</td>
             {P.map((p) => <td key={p}>{fmtMetric('cagr_pct', result.cagr_pct[p])}</td>)}
-            <td>-</td>
+            <td>{fmtMetric('cagr_pct', result.backtest_metrics.cagr_pct)}</td>
           </tr>
           <tr>
             <td>최대 낙폭</td>
