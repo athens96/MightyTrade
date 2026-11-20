@@ -12,7 +12,11 @@ import {
   type PortfolioAsset,
   type PortfolioBacktestResult,
   type PortfolioModelMeta,
+  type PortfolioRole,
   type RebalanceMode,
+  type ScreenerPresetMeta,
+  type ScreenerResult,
+  type ScreenerUniverseMeta,
   type StrategyMeta,
   type StrategyParam,
   type WalkForwardResult,
@@ -24,10 +28,18 @@ import { FeatureGuideBox, StrategyGuideBox } from '../components/GuideBox'
 import MonteCarloView from '../components/quant/MonteCarloView'
 import OptimizeView from '../components/quant/OptimizeView'
 import PortfolioView from '../components/quant/PortfolioView'
+import ScreenerView from '../components/quant/ScreenerView'
 import WalkForwardView from '../components/quant/WalkForwardView'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
 
-type Mode = 'backtest' | 'optimize' | 'walkforward' | 'montecarlo' | 'portfolio'
+type Mode = 'backtest' | 'optimize' | 'walkforward' | 'montecarlo' | 'portfolio' | 'screener'
+
+const ROLE_LABELS: Record<PortfolioRole, string> = {
+  offensive: '공격',
+  defensive: '방어',
+  canary: '감시병',
+  core: '고정',
+}
 
 const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: 'backtest', label: '백테스트', hint: '설정 하나로 과거 성과 확인' },
@@ -35,6 +47,7 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: 'walkforward', label: '워크포워드', hint: '처음 보는 기간에도 통하는지 검증' },
   { id: 'montecarlo', label: '몬테카를로', hint: '매매 순서·구성의 운을 제거' },
   { id: 'portfolio', label: '포트폴리오', hint: '다중 ETF 자산배분·리밸런싱 검증' },
+  { id: 'screener', label: '종목 발굴', hint: '퀀트 데이터로 유망 종목 자동 추출' },
 ]
 const PERIODS: { id: Period; label: string }[] = [
   { id: '1y', label: '1년' },
@@ -67,6 +80,12 @@ interface Form {
   portfolioDriftPct: number
   portfolioParams: Record<string, Record<string, number>>
   portfolioAssets: Record<string, PortfolioAsset[]>
+  screenerPreset: string
+  screenerUniverse: Record<Market, string>
+  screenerCustom: Record<Market, string>
+  screenerStrategy: string
+  screenerTopN: number
+  screenerExcludeWarnings: boolean
 }
 
 const DEFAULT_FORM: Form = {
@@ -91,6 +110,12 @@ const DEFAULT_FORM: Form = {
   portfolioDriftPct: 5,
   portfolioParams: {},
   portfolioAssets: {},
+  screenerPreset: 'momentum_quality',
+  screenerUniverse: { KR: 'kr_bluechip', US: 'us_bluechip' },
+  screenerCustom: { KR: '005930, 000660, 005380, 105560', US: 'AAPL, MSFT, NVDA, GOOGL' },
+  screenerStrategy: 'rsi2',
+  screenerTopN: 15,
+  screenerExcludeWarnings: true,
 }
 
 const loadForm = (): Form => {
@@ -116,6 +141,9 @@ export default function QuantPage() {
   const [form, setForm] = useState<Form>(loadForm)
   const [strategies, setStrategies] = useState<StrategyMeta[]>([])
   const [portfolioModels, setPortfolioModels] = useState<PortfolioModelMeta[]>([])
+  const [screenerPresets, setScreenerPresets] = useState<ScreenerPresetMeta[]>([])
+  const [screenerUniverses, setScreenerUniverses] = useState<Record<Market, ScreenerUniverseMeta[]>>({ KR: [], US: [] })
+  const [dailyStrategies, setDailyStrategies] = useState<{ id: string; name: string }[]>([])
   const [rebalModes, setRebalModes] = useState<Record<RebalanceMode, string>>({
     monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈 시',
   })
@@ -132,6 +160,7 @@ export default function QuantPage() {
     walkforward?: WalkForwardResult
     montecarlo?: MonteCarloResult
     portfolio?: PortfolioBacktestResult
+    screener?: ScreenerResult
   }>({})
 
   useEffect(() => {
@@ -147,6 +176,14 @@ export default function QuantPage() {
       .then(({ items, rebalance_modes }) => {
         setPortfolioModels(items)
         setRebalModes(rebalance_modes)
+      })
+      .catch(() => undefined)
+    quantApi
+      .screenerPresets()
+      .then(({ presets, universes, daily_strategies }) => {
+        setScreenerPresets(presets)
+        setScreenerUniverses(universes)
+        setDailyStrategies(daily_strategies)
       })
       .catch(() => undefined)
     marketApi.watchlist().then(({ items }) => setWatchlist(items)).catch(() => undefined)
@@ -172,11 +209,18 @@ export default function QuantPage() {
   const yKey = form.yKey[sid] ?? meta?.params[1]?.key ?? ''
   const gridMode = form.mode === 'optimize' || form.mode === 'walkforward'
   const isPortfolio = form.mode === 'portfolio'
+  const isScreener = form.mode === 'screener'
+
+  const scPreset = screenerPresets.find((p) => p.id === form.screenerPreset) ?? screenerPresets[0]
+  const scUniverses = screenerUniverses[form.market] ?? []
+  const scUniverse = form.screenerUniverse?.[form.market] ?? scUniverses[0]?.id ?? (form.market === 'KR' ? 'kr_bluechip' : 'us_bluechip')
+  const scCustom = form.screenerCustom?.[form.market] ?? ''
 
   const pModel = portfolioModels.find((m) => m.id === form.portfolioModel) ?? portfolioModels[0]
   const pMid = pModel?.id ?? ''
   const pKey = `${pMid}:${form.market}`
   const pAssets: PortfolioAsset[] = form.portfolioAssets[pKey] ?? pModel?.presets[form.market] ?? []
+  const pAllowedRoles: PortfolioRole[] = pModel?.allowed_roles ?? ['offensive', 'defensive']
   const pParams = useMemo(() => {
     const saved = form.portfolioParams[pMid] ?? {}
     return Object.fromEntries((pModel?.params ?? []).map((p) => [p.key, saved[p.key] ?? p.default]))
@@ -191,22 +235,49 @@ export default function QuantPage() {
   const setRange = (p: StrategyParam, field: 'start' | 'stop' | 'step', v: number) =>
     setForm((f) => ({ ...f, ranges: { ...f.ranges, [sid]: { ...(f.ranges[sid] ?? {}), [p.key]: { ...rangeOf(p), [field]: v } } } }))
 
-  const base = (overrideParams?: Record<string, number>): BacktestRequest | null =>
-    meta && costs
-      ? {
-          market: form.market,
-          symbol: form.symbol.trim().toUpperCase(),
-          strategy: meta.id,
-          params: overrideParams ?? params,
-          period: form.period,
-          capital: costs.capital,
-          commission_pct: costs.commission_pct,
-          tax_pct: costs.tax_pct,
-          slippage_pct: costs.slippage_pct,
-        }
-      : null
+  const base = (overrideParams?: Record<string, number>, overrideSymbol?: string, overrideStrategy?: string): BacktestRequest | null => {
+    const stratId = overrideStrategy ?? meta?.id
+    if (!stratId || !costs) return null
+    const stratMeta = strategies.find((s) => s.id === stratId) ?? meta
+    const stratParams = overrideParams ?? (overrideStrategy && stratMeta
+      ? Object.fromEntries(stratMeta.params.map((p) => [p.key, (form.params[stratId] ?? {})[p.key] ?? p.default]))
+      : params)
+    return {
+      market: form.market,
+      symbol: (overrideSymbol ?? form.symbol).trim().toUpperCase(),
+      strategy: stratId,
+      params: stratParams,
+      period: form.period,
+      capital: costs.capital,
+      commission_pct: costs.commission_pct,
+      tax_pct: costs.tax_pct,
+      slippage_pct: costs.slippage_pct,
+    }
+  }
 
-  const execute = async (mode: Mode, overrideParams?: Record<string, number>) => {
+  const execute = async (mode: Mode, overrideParams?: Record<string, number>, overrideSymbol?: string, overrideStrategy?: string) => {
+    if (mode === 'screener') {
+      setRunning(true)
+      setError('')
+      try {
+        const r = await quantApi.screenerRun({
+          market: form.market,
+          preset: scPreset?.id ?? form.screenerPreset,
+          universe: scUniverse,
+          symbols: scUniverse === 'custom' ? scCustom : undefined,
+          strategy: scPreset?.uses_strategy ? form.screenerStrategy : undefined,
+          exclude_warnings: form.screenerExcludeWarnings,
+          top_n: form.screenerTopN,
+        })
+        setResults((s) => ({ ...s, screener: r }))
+        if (isMobile) setFormOpen(false)
+      } catch (err) {
+        setError((err as Error).message)
+      } finally {
+        setRunning(false)
+      }
+      return
+    }
     if (mode === 'portfolio') {
       if (!pModel || !costs) return
       setRunning(true)
@@ -234,7 +305,7 @@ export default function QuantPage() {
       }
       return
     }
-    const req = base(overrideParams)
+    const req = base(overrideParams, overrideSymbol, overrideStrategy)
     if (!req || !meta) return
     setRunning(true)
     setError('')
@@ -276,6 +347,24 @@ export default function QuantPage() {
     execute('backtest', { ...params, ...p })
   }
 
+  // From the screener: jump straight to backtest or portfolio mode with extracted picks.
+  const backtestFromScreener = (sym: string, stratId: string) => {
+    setForm((f) => ({ ...f, mode: 'backtest', symbol: sym, strategy: stratId }))
+    execute('backtest', undefined, sym, stratId)
+  }
+  const portfolioFromScreener = (assets: PortfolioAsset[], modelId: string) => {
+    const targetModel = portfolioModels.find((m) => m.id === modelId) ?? portfolioModels[0]
+    const mid = targetModel?.id ?? modelId
+    const nextKey = `${mid}:${form.market}`
+    setForm((f) => ({
+      ...f,
+      mode: 'portfolio',
+      portfolioModel: mid,
+      portfolioRebalance: targetModel?.default_rebalance ?? 'monthly',
+      portfolioAssets: { ...f.portfolioAssets, [nextKey]: assets },
+    }))
+  }
+
   const items = watchlist.filter((w) => w.market === form.market)
   const symbolName = (sym: string) => items.find((w) => w.symbol === sym)?.name ?? sym
   const titleOf = (r: { symbol: string; strategy: string }) =>
@@ -314,14 +403,21 @@ export default function QuantPage() {
               type="button"
               key={m}
               className={m === form.market ? 'active' : ''}
-              onClick={() => setForm((f) => ({ ...f, market: m, symbol: watchlist.find((w) => w.market === m)?.symbol ?? f.symbol }))}
+              onClick={() =>
+                setForm((f) => ({
+                  ...f,
+                  market: m,
+                  symbol: watchlist.find((w) => w.market === m)?.symbol ?? f.symbol,
+                  screenerPreset: m !== 'KR' && f.screenerPreset === 'smart_money' ? 'momentum_quality' : f.screenerPreset,
+                }))
+              }
             >
               {m === 'KR' ? '국내' : '미국'}
             </button>
           ))}
         </div>
 
-        {!isPortfolio && (
+        {!isPortfolio && !isScreener && (
           <>
             <label>
               <span>종목</span>
@@ -400,9 +496,10 @@ export default function QuantPage() {
                     <input value={a.symbol} placeholder={form.market === 'KR' ? '069500' : 'SPY'}
                            onChange={(e) => setPAssets(pAssets.map((x, i) => (i === idx ? { ...x, symbol: e.target.value.toUpperCase() } : x)))} />
                     {pModel.uses_roles && (
-                      <select value={a.role} onChange={(e) => setPAssets(pAssets.map((x, i) => (i === idx ? { ...x, role: e.target.value as 'offensive' | 'defensive' } : x)))}>
-                        <option value="offensive">공격</option>
-                        <option value="defensive">방어</option>
+                      <select value={a.role} onChange={(e) => setPAssets(pAssets.map((x, i) => (i === idx ? { ...x, role: e.target.value as PortfolioRole } : x)))}>
+                        {pAllowedRoles.map((role) => (
+                          <option key={role} value={role}>{ROLE_LABELS[role]}</option>
+                        ))}
                       </select>
                     )}
                     {pModel.uses_weights && (
@@ -414,8 +511,8 @@ export default function QuantPage() {
                   </div>
                 ))}
                 <div className="tabs">
-                  <button type="button" disabled={pAssets.length >= 12}
-                          onClick={() => setPAssets([...pAssets, { symbol: '', role: 'offensive', weight: 10 }])}>+ 종목 추가</button>
+                  <button type="button" disabled={pAssets.length >= 16}
+                          onClick={() => setPAssets([...pAssets, { symbol: '', role: pAllowedRoles[0] ?? 'offensive', weight: 10 }])}>+ 종목 추가</button>
                   <button type="button" onClick={() => setPAssets(pModel.presets[form.market] ?? [])}>기본 프리셋</button>
                 </div>
               </div>
@@ -423,7 +520,75 @@ export default function QuantPage() {
           </>
         )}
 
-        {meta && !gridMode && !isPortfolio && (
+        {isScreener && scPreset && (
+          <>
+            <label>
+              <span>종목 발굴 방식</span>
+              <select value={scPreset.id} onChange={(e) => set('screenerPreset', e.target.value)}>
+                {screenerPresets.map((p) => (
+                  <option key={p.id} value={p.id} disabled={p.kr_only && form.market !== 'KR'}>
+                    {p.name}{p.kr_only && form.market !== 'KR' ? ' (국내 전용)' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="muted small strategy-desc">
+              <b>[종목 발굴]</b> {scPreset.theory}<br />{scPreset.description}
+            </p>
+            <StrategyGuideBox theory={scPreset.theory} guide={scPreset.guide} />
+
+            <label>
+              <span>후보 종목 묶음</span>
+              <select
+                value={scUniverse}
+                onChange={(e) => setForm((f) => ({ ...f, screenerUniverse: { ...f.screenerUniverse, [f.market]: e.target.value } }))}
+              >
+                {scUniverses.map((u) => (
+                  <option key={u.id} value={u.id}>{u.name}</option>
+                ))}
+              </select>
+              <span className="muted small">{scUniverses.find((u) => u.id === scUniverse)?.description}</span>
+            </label>
+
+            {scUniverse === 'custom' && (
+              <label>
+                <span>직접 입력 종목 코드 (쉼표 구분, 최대 30개)</span>
+                <textarea
+                  rows={3}
+                  value={scCustom}
+                  placeholder={form.market === 'KR' ? '005930, 000660, 005380' : 'AAPL, MSFT, NVDA, GOOGL'}
+                  onChange={(e) => setForm((f) => ({ ...f, screenerCustom: { ...f.screenerCustom, [f.market]: e.target.value.toUpperCase() } }))}
+                />
+              </label>
+            )}
+
+            {scPreset.uses_strategy && (
+              <label>
+                <span>궁합을 테스트할 전략 (일봉)</span>
+                <select value={form.screenerStrategy} onChange={(e) => set('screenerStrategy', e.target.value)}>
+                  {dailyStrategies.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+            <fieldset className="costs">
+              <legend>발굴 옵션</legend>
+              {num('상위 표시 종목 수', form.screenerTopN, (v) => set('screenerTopN', Math.max(1, Math.min(30, v))), 1)}
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={form.screenerExcludeWarnings}
+                  onChange={(e) => set('screenerExcludeWarnings', e.target.checked)}
+                />
+                <span>투자경고·단기과열·정리매매 종목 자동 제외</span>
+              </label>
+            </fieldset>
+          </>
+        )}
+
+        {meta && !gridMode && !isPortfolio && !isScreener && (
           <div className="params">
             {meta.params.map((p) => (
               <label className="param" key={p.key}>
@@ -514,34 +679,48 @@ export default function QuantPage() {
           </fieldset>
         )}
 
-        <label>
-          <span>기간 (일봉)</span>
-          <div className="tabs">
-            {PERIODS.map((p) => (
-              <button type="button" key={p.id} className={p.id === form.period ? 'active' : ''} onClick={() => set('period', p.id)}>
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </label>
+        {!isScreener && (
+          <>
+            <label>
+              <span>기간 (일봉)</span>
+              <div className="tabs">
+                {PERIODS.map((p) => (
+                  <button type="button" key={p.id} className={p.id === form.period ? 'active' : ''} onClick={() => set('period', p.id)}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </label>
 
-        {costs && (
-          <fieldset className="costs">
-            <legend>자본 · 비용</legend>
-            {num(`초기 자본 (${costs.currency})`, costs.capital, (v) => setCosts({ ...costs, capital: v }), 1)}
-            {num('수수료 % (매수·매도 각각)', costs.commission_pct, (v) => setCosts({ ...costs, commission_pct: v }), 0.001,
-              costs.commission_source === 'toss' ? '· 내 토스 계좌 수수료' : '· 기본값')}
-            {num('매도 세금 %', costs.tax_pct, (v) => setCosts({ ...costs, tax_pct: v }), 0.01, form.market === 'KR' ? '· 증권거래세, 현재 세율 확인' : '')}
-            {num('슬리피지 % (체결마다)', costs.slippage_pct, (v) => setCosts({ ...costs, slippage_pct: v }), 0.01)}
-          </fieldset>
+            {costs && (
+              <fieldset className="costs">
+                <legend>자본 · 비용</legend>
+                {num(`초기 자본 (${costs.currency})`, costs.capital, (v) => setCosts({ ...costs, capital: v }), 1)}
+                {num('수수료 % (매수·매도 각각)', costs.commission_pct, (v) => setCosts({ ...costs, commission_pct: v }), 0.001,
+                  costs.commission_source === 'toss' ? '· 내 토스 계좌 수수료' : '· 기본값')}
+                {num('매도 세금 %', costs.tax_pct, (v) => setCosts({ ...costs, tax_pct: v }), 0.01, form.market === 'KR' ? '· 증권거래세, 현재 세율 확인' : '')}
+                {num('슬리피지 % (체결마다)', costs.slippage_pct, (v) => setCosts({ ...costs, slippage_pct: v }), 0.01)}
+              </fieldset>
+            )}
+          </>
         )}
 
-        <button type="submit" disabled={running || !costs || (isPortfolio ? (!pModel || pAssets.length < 2) : (!meta || !form.symbol.trim()))}>
-          {running ? '계산 중…' : `${MODES.find((m) => m.id === form.mode)?.label} 실행`}
+        <button
+          type="submit"
+          disabled={
+            running ||
+            (isScreener
+              ? !scPreset || (scPreset.kr_only && form.market !== 'KR')
+              : !costs || (isPortfolio ? (!pModel || pAssets.length < 2) : (!meta || !form.symbol.trim())))
+          }
+        >
+          {running ? (isScreener ? '종목 스캔 중…' : '계산 중…') : `${MODES.find((m) => m.id === form.mode)?.label} 실행`}
         </button>
         {error && <p className="error">{error}</p>}
         <p className="muted small">
-          신호는 그날 종가로 판단하고 다음 날 체결합니다 (시장가는 다음 날 시가, 돌파 주문은 장중 기준가). 과거 성과가 미래 수익을 보장하지 않습니다.
+          {isScreener
+            ? '추출 결과는 과거 가격·수급·재무 데이터를 바탕으로 한 참고 점수입니다. 최종 매수 전 최신 뉴스와 백테스트를 함께 확인하세요.'
+            : '신호는 그날 종가로 판단하고 다음 날 체결합니다 (시장가는 다음 날 시가, 돌파 주문은 장중 기준가). 과거 성과가 미래 수익을 보장하지 않습니다.'}
         </p>
       </form>
 
@@ -560,6 +739,14 @@ export default function QuantPage() {
         {form.mode === 'montecarlo' && results.montecarlo && <MonteCarloView result={results.montecarlo} title={titleOf(results.montecarlo)} />}
         {form.mode === 'portfolio' && results.portfolio && (
           <PortfolioView result={results.portfolio} model={portfolioModels.find((m) => m.id === results.portfolio?.model)} />
+        )}
+        {form.mode === 'screener' && results.screener && (
+          <ScreenerView
+            result={results.screener}
+            preset={screenerPresets.find((p) => p.id === results.screener?.preset)}
+            onBacktest={backtestFromScreener}
+            onPortfolio={portfolioFromScreener}
+          />
         )}
       </section>
     </div>

@@ -117,6 +117,7 @@ def test_api_portfolio_models_and_backtest(session):
     r = session.get("/api/quant/portfolio/models")
     assert r.status_code == 200
     assert {m["id"] for m in r.json["items"]} == set(portfolio.PORTFOLIO_MODELS)
+    assert len(r.json["items"]) == 12
     assert all({"background", "setup", "execution", "caution"} <= set(m["guide"]) for m in r.json["items"])
     rb = session.post("/api/quant/portfolio/backtest", json={
         "market": "US", "model": "all_weather", "period": "3y", "rebalance": "quarterly",
@@ -125,3 +126,131 @@ def test_api_portfolio_models_and_backtest(session):
     body = rb.json
     assert body["model"] == "all_weather" and body["equity"] and body["rebalances"]
     assert set(body["current_weights"]) == {"SPY", "TLT", "IEF", "GLD", "DBC"}
+
+
+def test_daa_scales_protection_by_canary_count():
+    assets = [
+        {"symbol": "C1", "name": "Canary1", "role": "canary", "weight": 0},
+        {"symbol": "C2", "name": "Canary2", "role": "canary", "weight": 0},
+        {"symbol": "O1", "name": "Off1", "role": "offensive", "weight": 0},
+        {"symbol": "O2", "name": "Off2", "role": "offensive", "weight": 0},
+        {"symbol": "D1", "name": "Def1", "role": "defensive", "weight": 0},
+    ]
+    # 1 bad canary out of 2 -> 50% defensive, 50% split across top 2 offensive
+    closes = {
+        "C1": [100 * (1.001 ** i) for i in range(260)],
+        "C2": [100 * (0.998 ** i) for i in range(260)],
+        "O1": [100 * (1.002 ** i) for i in range(260)],
+        "O2": [100 * (1.0015 ** i) for i in range(260)],
+        "D1": [100 * (1.0003 ** i) for i in range(260)],
+    }
+    w_half = portfolio._daa_weights(closes, 259, assets, {"top_offensive": 2, "canary_threshold": 2})
+    assert w_half["D1"] == pytest.approx(0.5)
+    assert w_half["O1"] == pytest.approx(0.25)
+    assert w_half["O2"] == pytest.approx(0.25)
+
+    # Both canaries bad -> 100% defensive
+    closes["C1"] = [100 * (0.998 ** i) for i in range(260)]
+    w_full = portfolio._daa_weights(closes, 259, assets, {"top_offensive": 2, "canary_threshold": 2})
+    assert w_full["D1"] == pytest.approx(1.0)
+    assert w_full["O1"] == 0.0
+
+
+def test_baa_switches_to_defensive_and_avoids_falling_bonds():
+    assets = [
+        {"symbol": "C1", "name": "Canary", "role": "canary", "weight": 0},
+        {"symbol": "O1", "name": "Off", "role": "offensive", "weight": 0},
+        {"symbol": "BIL", "name": "Cash", "role": "defensive", "weight": 0},
+        {"symbol": "DBC", "name": "Cmdty", "role": "defensive", "weight": 0},
+        {"symbol": "TLT", "name": "FallBond", "role": "defensive", "weight": 0},
+    ]
+    closes = {
+        "C1": [100 * (0.999 ** i) for i in range(260)],
+        "O1": [100 * (1.001 ** i) for i in range(260)],
+        "BIL": [100 * (1.0002 ** i) for i in range(260)],
+        "DBC": [100 * (1.0005 ** i) for i in range(260)],
+        "TLT": [100 * (0.998 ** i) for i in range(260)],  # negative SMA12 -> replaced by top defensive (DBC)
+    }
+    w = portfolio._baa_weights(closes, 259, assets, {"top_offensive": 1, "top_defensive": 3})
+    assert w["O1"] == 0.0
+    assert w["TLT"] == 0.0
+    assert w["DBC"] == pytest.approx(2 / 3)
+    assert w["BIL"] == pytest.approx(1 / 3)
+
+
+def test_laa_keeps_core_75_and_switches_25_sleeve_by_trend():
+    assets = portfolio.PORTFOLIO_MODELS["laa"].presets["US"]
+    # Bull trend on SPY -> 25% QQQ, 0% SHY
+    bull = {
+        "SPY": [100 * (1.001 ** i) for i in range(220)],
+        "IEF": [100.0] * 220,
+        "GLD": [100.0] * 220,
+        "QQQ": [100.0] * 220,
+        "SHY": [100.0] * 220,
+    }
+    wb = portfolio._laa_weights(bull, 219, assets, {"trend_days": 200})
+    assert wb == {"SPY": 0.25, "IEF": 0.25, "GLD": 0.25, "QQQ": 0.25, "SHY": 0.0}
+
+    # Bear trend on SPY -> 0% QQQ, 25% SHY
+    bear = {**bull, "SPY": [100 * (0.998 ** i) for i in range(220)]}
+    wr = portfolio._laa_weights(bear, 219, assets, {"trend_days": 200})
+    assert wr == {"SPY": 0.25, "IEF": 0.25, "GLD": 0.25, "QQQ": 0.0, "SHY": 0.25}
+
+
+def test_hrp_avoids_double_counting_correlated_assets():
+    assets = [
+        {"symbol": "SPY", "name": "S&P", "role": "offensive", "weight": 0},
+        {"symbol": "QQQ", "name": "NDX", "role": "offensive", "weight": 0},
+        {"symbol": "TLT", "name": "Bond", "role": "defensive", "weight": 0},
+    ]
+    # SPY & QQQ move nearly identically; TLT is orthogonal with same amplitude
+    n = 120
+    spy = [100.0]
+    qqq = [100.0]
+    tlt = [100.0]
+    for i in range(1, n):
+        r_eq = 0.015 * math.sin(i * 0.7)
+        r_bd = 0.015 * math.cos(i * 1.9)
+        spy.append(spy[-1] * (1 + r_eq))
+        qqq.append(qqq[-1] * (1 + r_eq * 0.99 + 0.0005 * math.cos(i)))
+        tlt.append(tlt[-1] * (1 + r_bd))
+    w = portfolio._hrp_weights({"SPY": spy, "QQQ": qqq, "TLT": tlt}, n - 1, assets, {"vol_window": 80})
+    assert sum(w.values()) == pytest.approx(1.0)
+    # TLT should receive ~50% while SPY + QQQ share the other ~50% (~25% each)
+    assert w["TLT"] > 0.42
+    assert w["SPY"] < 0.32 and w["QQQ"] < 0.32
+
+
+def test_sector_rotation_picks_uptrend_and_parks_downtrend_in_defensive():
+    assets = [
+        {"symbol": "XLK", "name": "Tech", "role": "offensive", "weight": 0},
+        {"symbol": "XLE", "name": "Energy", "role": "offensive", "weight": 0},
+        {"symbol": "XLF", "name": "Fin", "role": "offensive", "weight": 0},
+        {"symbol": "SHY", "name": "Cash", "role": "defensive", "weight": 0},
+    ]
+    closes = {
+        "XLK": [100 * (1.002 ** i) for i in range(220)],   # strong uptrend
+        "XLE": [100 * (0.998 ** i) for i in range(220)],   # downtrend
+        "XLF": [100 * (0.999 ** i) for i in range(220)],   # downtrend
+        "SHY": [100 * (1.0001 ** i) for i in range(220)],  # cash
+    }
+    w = portfolio._sector_rotation_weights(closes, 219, assets, {"lookback": 126, "ma_days": 200, "top_n": 2})
+    assert w["XLK"] == pytest.approx(0.5)
+    assert w["SHY"] == pytest.approx(0.5)
+    assert w["XLE"] == 0.0 and w["XLF"] == 0.0
+
+
+def test_validate_assets_enforces_canary_and_core_roles():
+    with pytest.raises(Exception) as e1:
+        portfolio.validate_assets("US", [
+            {"symbol": "SPY", "role": "offensive", "weight": 0},
+            {"symbol": "SHY", "role": "defensive", "weight": 0},
+        ], portfolio.PORTFOLIO_MODELS["daa"])
+    assert "감시병" in str(e1.value)
+
+    with pytest.raises(Exception) as e2:
+        portfolio.validate_assets("US", [
+            {"symbol": "QQQ", "role": "offensive", "weight": 0},
+            {"symbol": "SHY", "role": "defensive", "weight": 0},
+        ], portfolio.PORTFOLIO_MODELS["laa"])
+    assert "고정" in str(e2.value)

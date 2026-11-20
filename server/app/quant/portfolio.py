@@ -25,7 +25,8 @@ REBALANCE_MODES = {
     "drift": "비중 편차 이탈 시",
 }
 MIN_ASSETS = 2
-MAX_ASSETS = 12
+MAX_ASSETS = 16
+VALID_ROLES = ("offensive", "defensive", "canary", "core")
 
 
 def _day_str(t: int) -> str:
@@ -157,7 +158,7 @@ def _vaa_weights(closes: dict[str, list[float]], i: int, assets: list[dict], par
     dfn = [a["symbol"] for a in assets if a.get("role") == "defensive"]
     if not off:
         off = [a["symbol"] for a in assets]
-    off_scores = [( _vaa_score(closes[s], i), s) for s in off]
+    off_scores = [(_vaa_score(closes[s], i), s) for s in off]
     out: dict[str, float] = {a["symbol"]: 0.0 for a in assets}
     if all(sc > 0 for sc, _ in off_scores):
         picks = sorted(off_scores, reverse=True)[: min(top_off, len(off_scores))]
@@ -167,6 +168,234 @@ def _vaa_weights(closes: dict[str, list[float]], i: int, assets: list[dict], par
     elif dfn:
         best_def = max((_vaa_score(closes[s], i), s) for s in dfn)[1]
         out[best_def] = 1.0
+    return out
+
+
+def _sma12_ratio(cs: list[float], i: int) -> float:
+    """Keller & Keuning SMA12 ratio: current close / average of current + last 12 monthly closes - 1."""
+    if i < 252:
+        return -math.inf
+    pts = [cs[i - k * 21] for k in range(13)]
+    avg = sum(pts) / len(pts)
+    return cs[i] / avg - 1.0 if avg > 0 else -math.inf
+
+
+def _daa_weights(closes: dict[str, list[float]], i: int, assets: list[dict], params: dict) -> dict[str, float]:
+    top_off = max(1, int(params["top_offensive"]))
+    threshold = max(1, int(params["canary_threshold"]))
+    canaries = [a["symbol"] for a in assets if a.get("role") == "canary"]
+    off = [a["symbol"] for a in assets if a.get("role") == "offensive"]
+    dfn = [a["symbol"] for a in assets if a.get("role") == "defensive"]
+    if not off:
+        off = [a["symbol"] for a in assets if a.get("role") != "defensive"]
+    if not canaries:
+        canaries = off
+
+    bad = sum(1 for s in canaries if _vaa_score(closes[s], i) <= 0)
+    b_cap = min(threshold, max(1, len(canaries)))
+    protect = min(1.0, bad / b_cap)
+
+    out: dict[str, float] = {a["symbol"]: 0.0 for a in assets}
+    if protect > 0 and dfn:
+        best_def = max((_vaa_score(closes[s], i), s) for s in dfn)[1]
+        out[best_def] = protect
+    off_w = 1.0 - (protect if dfn else 0.0)
+    if off_w > 0 and off:
+        picks = sorted(((_vaa_score(closes[s], i), s) for s in off), reverse=True)[: min(top_off, len(off))]
+        each = off_w / len(picks)
+        for _, sym in picks:
+            out[sym] = out.get(sym, 0.0) + each
+    return out
+
+
+def _baa_weights(closes: dict[str, list[float]], i: int, assets: list[dict], params: dict) -> dict[str, float]:
+    top_off = max(1, int(params["top_offensive"]))
+    top_def = max(1, int(params["top_defensive"]))
+    canaries = [a["symbol"] for a in assets if a.get("role") == "canary"]
+    off = [a["symbol"] for a in assets if a.get("role") == "offensive"]
+    dfn = [a["symbol"] for a in assets if a.get("role") == "defensive"]
+    if not canaries:
+        canaries = off
+
+    out: dict[str, float] = {a["symbol"]: 0.0 for a in assets}
+    if canaries and all(_vaa_score(closes[s], i) > 0 for s in canaries) and off:
+        picks = sorted(((_sma12_ratio(closes[s], i), s) for s in off), reverse=True)[: min(top_off, len(off))]
+        each = 1.0 / len(picks)
+        for _, sym in picks:
+            out[sym] = each
+    elif dfn:
+        ranked_def = sorted(((_sma12_ratio(closes[s], i), s) for s in dfn), reverse=True)
+        picks = ranked_def[: min(top_def, len(ranked_def))]
+        # Best defensive asset acts as cash-safe fallback when another defensive pick is below its 12m avg
+        safest = ranked_def[0][1]
+        each = 1.0 / len(picks)
+        for ratio, sym in picks:
+            target = sym if ratio >= 0 else safest
+            out[target] = out.get(target, 0.0) + each
+    return out
+
+
+def _laa_weights(closes: dict[str, list[float]], i: int, assets: list[dict], params: dict) -> dict[str, float]:
+    trend_days = max(20, int(params["trend_days"]))
+    cores = [a for a in assets if a.get("role") == "core"]
+    off = [a["symbol"] for a in assets if a.get("role") == "offensive"]
+    dfn = [a["symbol"] for a in assets if a.get("role") == "defensive"]
+
+    out: dict[str, float] = {a["symbol"]: 0.0 for a in assets}
+    core_sum = sum(max(float(a.get("weight") or 0.0), 0.0) for a in cores)
+    if core_sum >= 100.0 and cores:
+        for a in cores:
+            out[a["symbol"]] = max(float(a.get("weight") or 0.0), 0.0) / core_sum
+        return out
+
+    for a in cores:
+        out[a["symbol"]] = max(float(a.get("weight") or 0.0), 0.0) / 100.0
+    timing_w = max(0.0, 1.0 - core_sum / 100.0)
+    if timing_w <= 0:
+        return out
+
+    # Use first core asset (typically SPY / KOSPI200) as broad market trend gauge
+    gauge = cores[0]["symbol"] if cores else (off[0] if off else assets[0]["symbol"])
+    cs = closes[gauge]
+    if i >= trend_days:
+        sma = sum(cs[i - trend_days + 1 : i + 1]) / trend_days
+        bull = cs[i] > sma
+    else:
+        bull = True
+
+    sleeve = off if (bull and off) else (dfn or off)
+    if sleeve:
+        each = timing_w / len(sleeve)
+        for s in sleeve:
+            out[s] = out.get(s, 0.0) + each
+    return out
+
+
+def _hrp_weights(closes: dict[str, list[float]], i: int, assets: list[dict], params: dict) -> dict[str, float]:
+    """Pure-Python Hierarchical Risk Parity (López de Prado) with tree-aligned recursive bisection."""
+    syms = [a["symbol"] for a in assets]
+    n = len(syms)
+    if n == 1:
+        return {syms[0]: 1.0}
+    w = max(10, int(params["vol_window"]))
+    start = max(1, i - w + 1)
+
+    rets: list[list[float]] = []
+    for s in syms:
+        cs = closes[s]
+        rets.append([cs[k] / cs[k - 1] - 1.0 if cs[k - 1] > 0 else 0.0 for k in range(start, i + 1)])
+    m = len(rets[0])
+    if m < 3:
+        return {s: 1.0 / n for s in syms}
+
+    means = [sum(r) / m for r in rets]
+    cov = [[0.0] * n for _ in range(n)]
+    for a in range(n):
+        for b in range(a, n):
+            v = sum((rets[a][t] - means[a]) * (rets[b][t] - means[b]) for t in range(m)) / (m - 1)
+            if a == b:
+                v = max(v, 1e-8)
+            cov[a][b] = cov[b][a] = v
+
+    dist = [[0.0] * n for _ in range(n)]
+    for a in range(n):
+        for b in range(a + 1, n):
+            corr = max(-1.0, min(1.0, cov[a][b] / math.sqrt(cov[a][a] * cov[b][b])))
+            d = math.sqrt(max(0.0, 0.5 * (1.0 - corr)))
+            dist[a][b] = dist[b][a] = d
+
+    # Single-linkage agglomerative clustering storing binary merge tree
+    nodes: list[dict[str, Any]] = [{"leaves": [k], "left": None, "right": None} for k in range(n)]
+    while len(nodes) > 1:
+        best_d = math.inf
+        bi, bj = 0, 1
+        for a in range(len(nodes)):
+            for b in range(a + 1, len(nodes)):
+                d = min(dist[u][v] for u in nodes[a]["leaves"] for v in nodes[b]["leaves"])
+                if d < best_d:
+                    best_d, bi, bj = d, a, b
+        merged = {
+            "leaves": nodes[bi]["leaves"] + nodes[bj]["leaves"],
+            "left": nodes[bi],
+            "right": nodes[bj],
+        }
+        nodes.pop(bj)
+        nodes[bi] = merged
+
+    def cluster_var(idxs: list[int]) -> float:
+        iv = [1.0 / cov[k][k] for k in idxs]
+        s_iv = sum(iv) or 1.0
+        cw = [x / s_iv for x in iv]
+        total = 0.0
+        for p, kp in enumerate(idxs):
+            for q, kq in enumerate(idxs):
+                total += cw[p] * cw[q] * cov[kp][kq]
+        return max(total, 1e-10)
+
+    weights = [1.0] * n
+
+    def bisect(node: dict[str, Any]) -> None:
+        if node["left"] is None or node["right"] is None:
+            return
+        l_leaves = node["left"]["leaves"]
+        r_leaves = node["right"]["leaves"]
+        vl, vr = cluster_var(l_leaves), cluster_var(r_leaves)
+        alpha = 1.0 - vl / (vl + vr) if (vl + vr) > 0 else 0.5
+        for k in l_leaves:
+            weights[k] *= alpha
+        for k in r_leaves:
+            weights[k] *= 1.0 - alpha
+        bisect(node["left"])
+        bisect(node["right"])
+
+    bisect(nodes[0])
+    total_w = sum(weights) or 1.0
+    return {syms[k]: weights[k] / total_w for k in range(n)}
+
+
+def _sector_rotation_weights(closes: dict[str, list[float]], i: int, assets: list[dict], params: dict) -> dict[str, float]:
+    lb = max(20, int(params["lookback"]))
+    ma_days = max(20, int(params["ma_days"]))
+    top_n = max(1, int(params["top_n"]))
+    off = [a["symbol"] for a in assets if a.get("role", "offensive") != "defensive"]
+    dfn = [a["symbol"] for a in assets if a.get("role") == "defensive"]
+    if not off:
+        off = [a["symbol"] for a in assets]
+
+    def ret_of(sym: str) -> float:
+        cs = closes[sym]
+        return cs[i] / cs[i - lb] - 1.0 if i >= lb and cs[i - lb] > 0 else -math.inf
+
+    def risk_adj_score(sym: str) -> float:
+        r = ret_of(sym)
+        if not math.isfinite(r):
+            return -math.inf
+        cs = closes[sym]
+        vw = min(60, lb)
+        start = max(1, i - vw + 1)
+        rs = [cs[k] / cs[k - 1] - 1.0 for k in range(start, i + 1) if cs[k - 1] > 0]
+        if len(rs) < 2:
+            return r
+        mu = sum(rs) / len(rs)
+        vol = math.sqrt(sum((x - mu) ** 2 for x in rs) / (len(rs) - 1)) * math.sqrt(252)
+        return r / max(vol, 0.05)
+
+    def above_ma(sym: str) -> bool:
+        cs = closes[sym]
+        if i < ma_days:
+            return True
+        return cs[i] > sum(cs[i - ma_days + 1 : i + 1]) / ma_days
+
+    ranked_off = sorted(((risk_adj_score(s), s) for s in off), reverse=True)
+    best_def = max(((ret_of(s), s) for s in dfn), default=(0.0, None))[1] if dfn else None
+    picks = ranked_off[: min(top_n, len(ranked_off))]
+    slice_w = 1.0 / len(picks) if picks else 0.0
+    out: dict[str, float] = {a["symbol"]: 0.0 for a in assets}
+    for _, sym in picks:
+        if ret_of(sym) > 0 and above_ma(sym):
+            out[sym] = out.get(sym, 0.0) + slice_w
+        elif best_def is not None:
+            out[best_def] = out.get(best_def, 0.0) + slice_w
     return out
 
 
@@ -182,6 +411,7 @@ class PortfolioModel:
         warmup_fn: Callable[[dict], int],
         *,
         uses_roles: bool = False,
+        allowed_roles: tuple[str, ...] = ("offensive", "defensive"),
         uses_weights: bool = False,
         params: Optional[list[Param]] = None,
         presets: Optional[dict[str, list[dict]]] = None,
@@ -196,6 +426,7 @@ class PortfolioModel:
         self.fn = fn
         self.warmup_fn = warmup_fn
         self.uses_roles = uses_roles
+        self.allowed_roles = allowed_roles
         self.uses_weights = uses_weights
         self.params = params or []
         self.presets = presets or {}
@@ -220,6 +451,7 @@ class PortfolioModel:
             "description": self.description,
             "guide": self.guide,
             "uses_roles": self.uses_roles,
+            "allowed_roles": list(self.allowed_roles),
             "uses_weights": self.uses_weights,
             "default_rebalance": self.default_rebalance,
             "params": [asdict(p) for p in self.params],
@@ -505,6 +737,339 @@ PORTFOLIO_MODELS: dict[str, PortfolioModel] = {
                 ],
             },
         ),
+        PortfolioModel(
+            "daa",
+            "DAA 방어적 자산배분",
+            "켈러 & 큐닝 · 감시병 2명의 건강 상태에 따라 0% → 50% → 100% 단계별 대피",
+            "감시병(신흥국·채권)이 1개 꺾이면 절반만 대피, 2개 다 꺾이면 안전 채권으로 100% 피신합니다",
+            "VAA의 업그레이드 버전입니다. VAA가 0% 아니면 100%로 극단적으로 갈아타서 잦은 매매가 생기는 단점을 고쳤습니다. "
+            "따로 정한 '감시병(카나리아) 2종'만 지켜보다가 1종이 아프면 돈의 절반(50%)만 안전 채권으로 옮기고, 2종 다 아프면 100% 대피해 훨씬 부드럽게 움직입니다.",
+            _daa_weights,
+            lambda p: 253,
+            uses_roles=True,
+            allowed_roles=("offensive", "defensive", "canary"),
+            params=[
+                Param("top_offensive", "공격 상위 종목 수", 2, 1, 6),
+                Param("canary_threshold", "100% 대피 감시병 수", 2, 1, 4),
+            ],
+            default_rebalance="monthly",
+            guide={
+                "background": (
+                    "VAA를 만든 켈러와 큐닝이 2018년에 발표한 개량형 전략(Defensive Asset Allocation)입니다. "
+                    "VAA는 공격 자산 중 하나만 꺾여도 100% 통째로 갈아타기 때문에 시장이 잠깐 흔들릴 때 헛걸음(수수료·손실)이 잦았습니다. "
+                    "DAA는 실제 투자할 종목과 '경보용 감시병(신흥국 주식·미국 종합채권)'을 분리하고, 감시병이 1개 꺾이면 50%만 대피, 2개 다 꺾이면 100% 대피하는 "
+                    "'단계적 방어' 방식을 도입해 훨씬 안정적으로 수익을 지키도록 만들었습니다."
+                ),
+                "setup": [
+                    "감시병(canary): 기본 프리셋처럼 경기 변화에 민감한 신흥국(VWO)과 미국 채권(BND) 2종을 두는 것이 원작 공식입니다.",
+                    "공격(offensive): 미국주식·나스닥·소형주·선진국·금·리츠 등 4~8개 ETF를 넣어두면, 안전한 달에 상위 2종(top_offensive)을 자동으로 뽑아 투자합니다.",
+                    "방어(defensive): 위기 때 피신할 단기채·중기채·장기채 중 요즘 가장 잘 버티는 1종으로 자동 대피합니다.",
+                    "100% 대피 감시병 수(기본 2): 감시병이 2개일 때 2로 두면 '0개=공격 100%, 1개=반반(50:50), 2개=방어 100%'로 작동합니다.",
+                ],
+                "execution": [
+                    "매월 첫 거래일 장 시작 1분 뒤, 감시병 종목들의 최근 흐름 점수(1·3·6·12개월 가중 점수)를 확인합니다.",
+                    "감시병이 모두 플러스(+)면 공격 자산 중 1~2등에 100% 투자합니다.",
+                    "감시병 중 1개만 마이너스(-)면 50%는 공격 상위 종목, 50%는 방어 1등 채권에 나누어 담습니다.",
+                    "감시병이 2개 이상 마이너스면 공격 종목을 모두 팔고 방어 1등 채권으로 100% 대피합니다.",
+                ],
+                "caution": "감시병 종목 자체는 신호 확인용이라 매수하지 않습니다. 최소 1년 이상 상장된 ETF만 목록에 넣어야 점수가 정확히 계산됩니다.",
+            },
+            presets={
+                "US": [
+                    {"symbol": "VWO", "name": "신흥국 주식 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "BND", "name": "미국 종합채권 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "SPY", "name": "미국 S&P500", "role": "offensive", "weight": 0},
+                    {"symbol": "QQQ", "name": "미국 나스닥100", "role": "offensive", "weight": 0},
+                    {"symbol": "IWM", "name": "미국 소형주", "role": "offensive", "weight": 0},
+                    {"symbol": "VEA", "name": "선진국 주식", "role": "offensive", "weight": 0},
+                    {"symbol": "GLD", "name": "금", "role": "offensive", "weight": 0},
+                    {"symbol": "VNQ", "name": "미국 리츠", "role": "offensive", "weight": 0},
+                    {"symbol": "SHY", "name": "단기국채 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "IEF", "name": "중기국채 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "TLT", "name": "장기국채 (방어)", "role": "defensive", "weight": 0},
+                ],
+                "KR": [
+                    {"symbol": "360750", "name": "미국 S&P500 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "148070", "name": "국고채10년 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "069500", "name": "KODEX 200", "role": "offensive", "weight": 0},
+                    {"symbol": "133690", "name": "미국 나스닥100", "role": "offensive", "weight": 0},
+                    {"symbol": "229200", "name": "코스닥150", "role": "offensive", "weight": 0},
+                    {"symbol": "132030", "name": "골드선물", "role": "offensive", "weight": 0},
+                    {"symbol": "114260", "name": "국고채3년 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "153130", "name": "단기채권 (방어)", "role": "defensive", "weight": 0},
+                ],
+            },
+        ),
+        PortfolioModel(
+            "baa",
+            "BAA 대담한 자산배분",
+            "켈러 & 큐닝 (2022) · 금리 급등기에도 단기채·원자재로 피하는 최신 방어 모델",
+            "감시병 4종이 모두 좋을 때만 공격 투자, 1개라도 꺾이면 1년 평균보다 강한 안전자산 3곳으로 대피합니다",
+            "2022년처럼 금리가 급등해 주식과 장기채가 동시에 떨어지는 위기까지 대비해 만들어진 최신 인기 모델(Bold Asset Allocation)입니다. "
+            "감시병 4종 중 하나라도 경고등이 켜지면, 안전자산 후보(초단기채·물가연동채·원자재·중기채 등) 중 최근 1년 평균보다 강한 3종목으로 분산 대피합니다.",
+            _baa_weights,
+            lambda p: 253,
+            uses_roles=True,
+            allowed_roles=("offensive", "defensive", "canary"),
+            params=[
+                Param("top_offensive", "공격 상위 종목 수", 1, 1, 4),
+                Param("top_defensive", "방어 분산 종목 수", 3, 1, 5),
+            ],
+            default_rebalance="monthly",
+            guide={
+                "background": (
+                    "켈러와 큐닝이 2022년 발표한 최신 동적 자산배분(BAA)입니다. 기존 올웨더나 60/40이 '금리 급등 + 물가 상승' 시기에 채권마저 떨어지며 흔들렸던 약점을 해결했습니다. "
+                    "① 감시병 4종(미국·선진국·신흥국·종합채권)으로 위험을 빠르게 감지하고, ② 종목을 고를 때는 '현재 가격 ÷ 지난 12개월 평균 가격' 공식을 씁니다. "
+                    "③ 특히 위기 때 도망갈 방어 자산에 초단기채(현금성)·물가연동채·원자재까지 포함해 3곳에 나누어 담고, 그중에서도 1년 평균 아래로 빠진 채권은 가장 강한 안전자산으로 대체해 방어력을 극대화합니다."
+                ),
+                "setup": [
+                    "감시병(canary): 미국(SPY)·선진국(VEA)·신흥국(VWO)·미국채권(BND) 4종이 원작 기준입니다.",
+                    "공격(offensive): 나스닥(QQQ)·미국전체(VTI)·해외주식(VXUS)·리츠(VNQ) 등 성장력이 강한 ETF를 넣습니다.",
+                    "방어(defensive): 초단기채(BIL)·물가채(TIP)·원자재(DBC)·중기채(IEF)·장기채(TLT)·회사채(LQD)처럼 성격이 다른 안전자산 4~6종을 넣으세요.",
+                    "공격 상위 종목 수: 공격형(G4)은 1개 집중, 균형형(G12)은 2~3개 분산을 권장합니다. 방어 분산은 3개가 원작 기본값입니다.",
+                ],
+                "execution": [
+                    "매월 첫 거래일 장 시작 1분 뒤, 감시병 4종의 최근 흐름 점수(13612W)를 먼저 검사합니다.",
+                    "감시병 4종이 모두 플러스(+)면 공격 자산 중 '현재가 ÷ 12개월 평균가'가 가장 높은 종목에 투자합니다.",
+                    "감시병 중 1개라도 0 이하면 공격 종목을 전량 매도하고, 방어 자산 상위 3종에 1/3씩 나누어 투자합니다. (단, 12개월 평균보다 떨어진 방어 종목 몫은 1등 안전자산으로 몰아줍니다.)",
+                ],
+                "caution": "방어 자산에 단기채·원자재까지 포함되어 있어 위기 방어력은 뛰어나지만, 상승장이 갑자기 시작될 때는 한 달 늦게 올라탈 수 있습니다.",
+            },
+            presets={
+                "US": [
+                    {"symbol": "SPY", "name": "미국주식 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "VEA", "name": "선진국 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "VWO", "name": "신흥국 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "BND", "name": "미국채권 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "QQQ", "name": "미국 나스닥100", "role": "offensive", "weight": 0},
+                    {"symbol": "VTI", "name": "미국 전체주식", "role": "offensive", "weight": 0},
+                    {"symbol": "VXUS", "name": "글로벌 해외주식", "role": "offensive", "weight": 0},
+                    {"symbol": "VNQ", "name": "미국 리츠", "role": "offensive", "weight": 0},
+                    {"symbol": "BIL", "name": "초단기국채 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "TIP", "name": "물가연동채 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "DBC", "name": "원자재 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "IEF", "name": "중기국채 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "TLT", "name": "장기국채 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "LQD", "name": "회사채 (방어)", "role": "defensive", "weight": 0},
+                ],
+                "KR": [
+                    {"symbol": "069500", "name": "KODEX 200 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "360750", "name": "미국 S&P500 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "148070", "name": "국고채10년 (감시병)", "role": "canary", "weight": 0},
+                    {"symbol": "133690", "name": "미국 나스닥100", "role": "offensive", "weight": 0},
+                    {"symbol": "229200", "name": "코스닥150", "role": "offensive", "weight": 0},
+                    {"symbol": "132030", "name": "골드선물", "role": "offensive", "weight": 0},
+                    {"symbol": "153130", "name": "단기채권 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "114260", "name": "국고채3년 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "261220", "name": "WTI원유 (방어)", "role": "defensive", "weight": 0},
+                    {"symbol": "305080", "name": "미국채10년선물 (방어)", "role": "defensive", "weight": 0},
+                ],
+            },
+        ),
+        PortfolioModel(
+            "laa",
+            "LAA 게으른 자산배분",
+            "켈러 & 브룩스 · 75%는 가만히 두고, 25%만 시장 분위기에 따라 갈아타기",
+            "75%(주식·채권·금 각 25%)는 고정하고, 나머지 25%만 상승장엔 나스닥·하락장엔 단기채로 바꿉니다",
+            "매달 전부 갈아타는 게 번거롭고 수수료가 아까운 분들을 위한 '게으른 자산배분(Lethargic Asset Allocation)'입니다. "
+            "전체 돈의 75%는 든든한 기본 자산(미국주식·채권·금)에 편하게 묶어두고, 딱 25%만 시장이 200일 평균선 위일 때 나스닥(공격), 아래일 때 단기채(방어)로 옮깁니다.",
+            _laa_weights,
+            lambda p: int(p["trend_days"]) + 1,
+            uses_roles=True,
+            allowed_roles=("core", "offensive", "defensive"),
+            uses_weights=True,
+            params=[Param("trend_days", "시장 추세 기준선 (일)", 200, 50, 300)],
+            default_rebalance="monthly",
+            guide={
+                "background": (
+                    "켈러와 브룩스가 제안한 '게으른 자산배분(LAA)' 전략입니다. 이름처럼 '최소한의 매매로 최대한 편하게' 장기 수익을 내는 게 목표입니다. "
+                    "자산의 75%는 어떤 경제 상황에서도 균형을 잡는 영구 고정 자산(미국 대형주 25% + 중기국채 25% + 금 25%)에 두어 계좌를 단단히 받치고, "
+                    "남은 25%만 대표 지수(첫 번째 고정 자산)가 장기 추세선(200일 평균선) 위에 있으면 성장주(나스닥), 아래에 있으면 안전한 단기채(현금성)로 바꿔 추가 수익과 하락장 방어를 동시에 챙깁니다."
+                ),
+                "setup": [
+                    "고정 자산(core): 기본 3종(주식 25% + 국채 25% + 금 25% = 합계 75%). 첫 번째 고정 자산이 '상승장/하락장'을 판별하는 기준 지수 역할을 합니다.",
+                    "공격(offensive) · 방어(defensive): 비중 칸은 0으로 두세요. 고정 자산 합계(75%)를 뺀 나머지 25%가 상승장엔 공격, 하락장엔 방어로 자동 배정됩니다.",
+                    "시장 추세 기준선(기본 200일): 1년 가까이 되는 200일 평균선이 가장 검증된 표준값입니다.",
+                    "리밸런싱 주기: 매월 초 확인을 권장합니다. 실제로 바뀌는 달이 1년에 1~2번뿐이라 매매가 매우 적습니다.",
+                ],
+                "execution": [
+                    "매월 첫 거래일 장 시작 1분 뒤, 첫 번째 고정 자산(예: S&P500) 가격이 최근 200일 평균선 위인지 아래인지 확인합니다.",
+                    "200일선 위(상승장)면 '고정 자산 75% + 공격(나스닥) 25%'를 목표 비율로 잡습니다.",
+                    "200일선 아래(하락장)면 공격 종목을 팔아 '고정 자산 75% + 방어(단기채) 25%'로 바꿉니다.",
+                ],
+                "caution": "75%가 고정 자산이라 하락장에서도 방어가 되지만, 200일선 근처에서 주가가 위아래로 살짝씩 넘나들 때는 25% 몫이 몇 달 연속 바뀔 수 있습니다.",
+            },
+            presets={
+                "US": [
+                    {"symbol": "SPY", "name": "미국 S&P500 (고정·기준)", "role": "core", "weight": 25},
+                    {"symbol": "IEF", "name": "미국 중기국채 (고정)", "role": "core", "weight": 25},
+                    {"symbol": "GLD", "name": "금 (고정)", "role": "core", "weight": 25},
+                    {"symbol": "QQQ", "name": "나스닥100 (상승장 25%)", "role": "offensive", "weight": 0},
+                    {"symbol": "SHY", "name": "단기국채 (하락장 25%)", "role": "defensive", "weight": 0},
+                ],
+                "KR": [
+                    {"symbol": "360750", "name": "미국 S&P500 (고정·기준)", "role": "core", "weight": 25},
+                    {"symbol": "148070", "name": "국고채10년 (고정)", "role": "core", "weight": 25},
+                    {"symbol": "132030", "name": "골드선물 (고정)", "role": "core", "weight": 25},
+                    {"symbol": "133690", "name": "미국 나스닥100 (상승장 25%)", "role": "offensive", "weight": 0},
+                    {"symbol": "153130", "name": "단기채권 (하락장 25%)", "role": "defensive", "weight": 0},
+                ],
+            },
+        ),
+        PortfolioModel(
+            "permanent",
+            "영구 포트폴리오 (25×4)",
+            "해리 브라운 · 주식·장기채·금·현금(단기채) 딱 4등분으로 어떤 위기에도 버티기",
+            "주식 25% · 장기국채 25% · 금 25% · 초단기채(현금성) 25%를 똑같이 나누어 유지합니다",
+            "1980년대 투자 저술가 해리 브라운이 만든 가장 단순하고 마음 편한 방어형 분산 투자입니다. "
+            "호황엔 주식, 불황엔 장기채, 물가 폭등엔 금, 현금 부족·금리 급등엔 초단기채가 각각 계좌를 지켜주도록 정확히 25%씩 4등분합니다.",
+            _fixed_weights,
+            lambda p: 2,
+            uses_weights=True,
+            default_rebalance="yearly",
+            guide={
+                "background": (
+                    "해리 브라운(Harry Browne)이 '평생 신경 쓰지 않고 들고 갈 수 있는 포트폴리오'로 고안한 영구 포트폴리오입니다. "
+                    "올웨더와 비슷한 경제 4계절 원리이지만 훨씬 단순합니다. ① 경기 호황 → 주식(25%), ② 경기 침체 → 장기국채(25%), "
+                    "③ 물가 상승·화폐 가치 하락 → 금(25%), ④ 금리 급등·현금 경색 → 초단기채/현금(25%). "
+                    "특히 안전 현금성 자산이 25%나 들어 있어, 주식 폭락장에서도 체감 손실이 매우 작습니다."
+                ),
+                "setup": [
+                    "기본 비율: 주식 25% · 장기채 25% · 금 25% · 단기채(현금성) 25% 딱 4등분 그대로 쓰시면 됩니다.",
+                    "리밸런싱 주기: '매년 초(1년에 1번)' 또는 '비중 이탈 ±10%(한 종목이 35% 넘거나 15% 밑으로 떨어질 때)'가 해리 브라운 원작 규칙입니다.",
+                    "4종목 모두 25%씩 똑같아서 소액으로도 비율 맞추기가 아주 깔끔합니다.",
+                ],
+                "execution": [
+                    "1년에 한 번(또는 비율이 크게 틀어진 날) 장 시작 1분 뒤 4개 자산의 현재 비율을 확인합니다.",
+                    "많이 올라서 25%를 넘긴 자산을 먼저 일부 팔아 이익을 챙깁니다.",
+                    "그 현금으로 25%보다 줄어든 자산을 싸게 사서 다시 정확히 25%씩 4등분으로 되돌립니다.",
+                ],
+                "caution": "현금성 단기채와 금이 절반(50%)을 차지하므로, 주식 대세 상승장에서는 수익률이 다소 답답하게 느껴질 수 있습니다. '크게 잃지 않는 꾸준함'이 목표인 분께 추천합니다.",
+            },
+            presets={
+                "US": [
+                    {"symbol": "SPY", "name": "미국 S&P500", "role": "offensive", "weight": 25},
+                    {"symbol": "TLT", "name": "미국 장기국채", "role": "defensive", "weight": 25},
+                    {"symbol": "GLD", "name": "금", "role": "defensive", "weight": 25},
+                    {"symbol": "SHY", "name": "초단기국채 (현금성)", "role": "defensive", "weight": 25},
+                ],
+                "KR": [
+                    {"symbol": "069500", "name": "KODEX 200", "role": "offensive", "weight": 25},
+                    {"symbol": "148070", "name": "국고채10년", "role": "defensive", "weight": 25},
+                    {"symbol": "132030", "name": "골드선물", "role": "defensive", "weight": 25},
+                    {"symbol": "153130", "name": "단기채권 (현금성)", "role": "defensive", "weight": 25},
+                ],
+            },
+        ),
+        PortfolioModel(
+            "hrp",
+            "HRP 계층적 위험 분산",
+            "로페스 데 프라도 (2016) · 비슷하게 움직이는 종목끼리 묶어서 중복 위험 차단",
+            "출렁임 크기뿐 아니라 '같이 떨어지는 성질'까지 계산해 비슷한 종목에 돈이 쏠리지 않게 자동 배분합니다",
+            "기존 리스크 패리티에서 한 단계 더 진화한 최신 분산 투자 이론(Hierarchical Risk Parity)입니다. "
+            "예를 들어 S&P500과 나스닥100은 거의 쌍둥이처럼 같이 움직이는데, 이 전략은 둘을 자동으로 한 묶음(그룹)으로 인식해 주식에 위험이 두 배로 쏠리는 실수를 막아줍니다.",
+            _hrp_weights,
+            lambda p: int(p["vol_window"]) + 1,
+            params=[Param("vol_window", "상관·변동성 기간 (일)", 60, 20, 252)],
+            default_rebalance="monthly",
+            guide={
+                "background": (
+                    "세계적 퀀트 석학 마르코스 로페스 데 프라도(Marcos López de Prado)가 2016년 발표한 계층적 위험 분산(HRP) 이론입니다. "
+                    "보통 분산 투자를 할 때 S&P500·나스닥100·채권을 넣으면 주식 ETF가 2개라서 자칫 주식 쪽에 돈이 과하게 몰리기 쉽습니다. "
+                    "HRP는 최근 가격 움직임을 보고 '서로 비슷하게 오르내리는 종목끼리' 먼저 그룹(트리)으로 묶은 뒤, 그룹끼리 위험을 똑같이 나누고 "
+                    "그 안에서 다시 종목별로 나누어 주기 때문에 진정한 의미의 균형 분산이 이루어집니다."
+                ),
+                "setup": [
+                    "상관·변동성 측정 기간(기본 60일 = 약 3개월): 최근 3개월 동안 종목들이 서로 얼마나 비슷하게 움직이고 출렁였는지 분석합니다.",
+                    "주식(2종) + 채권(2종) + 금처럼 성격이 겹치는 종목과 다른 종목이 섞여 있을 때 가장 빛을 발합니다.",
+                    "비율을 직접 입력할 필요 없이 매월 초 자동으로 가장 안전한 균형 비율을 계산해 줍니다.",
+                ],
+                "execution": [
+                    "매월 첫 거래일 장 시작 1분 뒤, 최근 60일 수익률로 종목 간 '비슷하게 움직이는 정도(상관관계)'를 계산합니다.",
+                    "가장 비슷하게 움직이는 종목끼리 차례대로 묶어 나무(계층) 구조를 만든 뒤, 위에서 아래로 내려오며 출렁임이 큰 그룹은 적게·잔잔한 그룹은 많이 비율을 배정합니다.",
+                    "계산된 목표 비율보다 많은 종목을 먼저 시장가로 팔고, 부족한 종목을 시장가로 사서 균형을 맞춥니다.",
+                ],
+                "caution": "리스크 패리티와 마찬가지로, 거의 안 움직이는 초단기 예금성 ETF를 함께 넣으면 그쪽으로 비중이 과하게 쏠릴 수 있습니다.",
+            },
+            presets={
+                "US": [
+                    {"symbol": "SPY", "name": "미국 S&P500", "role": "offensive", "weight": 20},
+                    {"symbol": "QQQ", "name": "미국 나스닥100", "role": "offensive", "weight": 20},
+                    {"symbol": "TLT", "name": "장기국채", "role": "defensive", "weight": 20},
+                    {"symbol": "IEF", "name": "중기국채", "role": "defensive", "weight": 20},
+                    {"symbol": "GLD", "name": "금", "role": "defensive", "weight": 20},
+                ],
+                "KR": [
+                    {"symbol": "069500", "name": "KODEX 200", "role": "offensive", "weight": 20},
+                    {"symbol": "360750", "name": "미국 S&P500", "role": "offensive", "weight": 20},
+                    {"symbol": "148070", "name": "국고채10년", "role": "defensive", "weight": 20},
+                    {"symbol": "114260", "name": "국고채3년", "role": "defensive", "weight": 20},
+                    {"symbol": "132030", "name": "골드선물", "role": "defensive", "weight": 20},
+                ],
+            },
+        ),
+        PortfolioModel(
+            "sector_rotation",
+            "섹터·종목 모멘텀 로테이션",
+            "메브 파버 · 요즘 가장 잘나가는 업종(종목) TOP 3로 매달 자동 갈아타기",
+            "여러 섹터·우량주 중 '출렁임 대비 가장 잘 오른 상위 N개'를 고르고, 200일선 아래로 꺾인 몫은 안전 채권으로 대피합니다",
+            "주식 시장은 시기마다 주도하는 업종(반도체·에너지·금융·헬스케어 등)이 계속 바뀝니다. "
+            "이 전략은 매달 여러 섹터 ETF나 우량주 후보군을 채점해서 '흔들림이 적으면서 가장 힘 있게 오르는 상위 3개'로 자동 갈아타고, 상승 추세가 깨진 자리는 단기채에 안전하게 맡겨둡니다.",
+            _sector_rotation_weights,
+            lambda p: max(int(p["lookback"]), int(p["ma_days"])) + 1,
+            uses_roles=True,
+            allowed_roles=("offensive", "defensive"),
+            params=[
+                Param("lookback", "수익률 비교 기간 (일)", 126, 20, 252),
+                Param("ma_days", "상승 추세 확인선 (일)", 200, 20, 252),
+                Param("top_n", "상위 선택 종목 수", 3, 1, 6),
+            ],
+            default_rebalance="monthly",
+            guide={
+                "background": (
+                    "유명 펀드매니저 메브 파버(Meb Faber)의 업종 순환(섹터 로테이션) 이론과 학계의 모멘텀 연구를 결합한 자동 종목 교체 전략입니다. "
+                    "경제 상황에 따라 어떤 해는 기술주, 어떤 해는 에너지·금융·필수소비재가 시장을 이끕니다. "
+                    "단순히 많이 오른 종목만 고르면 롤러코스터 종목이 뽑힐 수 있어, '수익률 ÷ 출렁임(안정성 점수)'으로 부드럽게 잘 오르는 주도주 TOP 3를 뽑고, "
+                    "200일 평균선 아래로 꺾인 종목이 있다면 그 몫만큼 안전 채권으로 대피시켜 하락장 손실을 막습니다."
+                ),
+                "setup": [
+                    "공격(offensive): 기본 프리셋의 미국 8대 업종 ETF(기술·헬스케어·금융·에너지 등)나, [종목 발굴] 탭에서 뽑은 유망 우량주 5~10개를 넣어 자동 교체 후보군으로 쓰세요.",
+                    "방어(defensive): 장이 안 좋을 때 잠시 돈을 맡겨둘 단기국채(SHY / 153130)를 1개 이상 꼭 넣어주세요.",
+                    "수익률 비교 기간(기본 126일 = 약 6개월): 업종 순환 속도에 가장 잘 맞는 기간입니다.",
+                    "상위 선택 종목 수(기본 3개): 1개에 몰빵하는 것보다 2~3개에 나누면 훨씬 안정적입니다.",
+                ],
+                "execution": [
+                    "매월 첫 거래일 장 시작 1분 뒤, 공격 후보군 전체의 최근 6개월 '출렁임 대비 수익률 점수'를 매겨 1등부터 줄 세웁니다.",
+                    "상위 3개 종목을 뽑고, 각각 '최근 6개월 수익률 > 0'이면서 '200일 평균선 위'인지 확인합니다.",
+                    "조건을 통과한 종목은 1/3씩 투자하고, 조건이 깨진 자리(예: 3개 중 1개 탈락)는 방어 채권(단기채)에 대신 넣어둡니다.",
+                    "지난달 들고 있던 종목이 순위에서 밀리면 먼저 전량 매도한 뒤 새로 뽑힌 주도주를 시장가로 매수합니다.",
+                ],
+                "caution": "주도 업종이 한 달도 안 돼 급하게 바뀌는 혼조 장세에서는 갈아탄 직후 주춤할 수 있습니다. 최소 6개월~1년 이상 꾸준히 돌려야 효과가 나타납니다.",
+            },
+            presets={
+                "US": [
+                    {"symbol": "XLK", "name": "기술 (IT)", "role": "offensive", "weight": 0},
+                    {"symbol": "XLV", "name": "헬스케어", "role": "offensive", "weight": 0},
+                    {"symbol": "XLF", "name": "금융", "role": "offensive", "weight": 0},
+                    {"symbol": "XLE", "name": "에너지", "role": "offensive", "weight": 0},
+                    {"symbol": "XLI", "name": "산업재", "role": "offensive", "weight": 0},
+                    {"symbol": "XLY", "name": "경기소비재", "role": "offensive", "weight": 0},
+                    {"symbol": "XLP", "name": "필수소비재", "role": "offensive", "weight": 0},
+                    {"symbol": "XLU", "name": "유틸리티", "role": "offensive", "weight": 0},
+                    {"symbol": "SHY", "name": "단기국채 (방어)", "role": "defensive", "weight": 0},
+                ],
+                "KR": [
+                    {"symbol": "091160", "name": "반도체", "role": "offensive", "weight": 0},
+                    {"symbol": "091170", "name": "은행", "role": "offensive", "weight": 0},
+                    {"symbol": "091180", "name": "자동차", "role": "offensive", "weight": 0},
+                    {"symbol": "102970", "name": "증권", "role": "offensive", "weight": 0},
+                    {"symbol": "244580", "name": "바이오", "role": "offensive", "weight": 0},
+                    {"symbol": "305720", "name": "2차전지산업", "role": "offensive", "weight": 0},
+                    {"symbol": "132030", "name": "골드선물", "role": "offensive", "weight": 0},
+                    {"symbol": "153130", "name": "단기채권 (방어)", "role": "defensive", "weight": 0},
+                ],
+            },
+        ),
     )
 }
 
@@ -525,8 +1090,10 @@ def validate_assets(market: str, raw_assets: Any, model: PortfolioModel) -> list
             raise ApiError(400, "duplicate_symbol", f"중복된 종목입니다: {sym}")
         seen.add(sym)
         role = str(item.get("role") or "offensive").lower()
-        if role not in ("offensive", "defensive"):
-            raise ApiError(400, "invalid_role", "자산 역할은 offensive 또는 defensive여야 합니다")
+        if role not in VALID_ROLES:
+            raise ApiError(400, "invalid_role", f"자산 역할은 {', '.join(VALID_ROLES)} 중 하나여야 합니다")
+        if model.uses_roles and role not in model.allowed_roles:
+            raise ApiError(400, "invalid_role", f"이 모델에서 허용하는 역할은 {', '.join(model.allowed_roles)}입니다")
         try:
             weight = float(item.get("weight", 0.0))
         except (TypeError, ValueError):
@@ -534,13 +1101,22 @@ def validate_assets(market: str, raw_assets: Any, model: PortfolioModel) -> list
         if weight < 0:
             raise ApiError(400, "invalid_weight", f"{sym}: 비중은 0 이상이어야 합니다")
         clean.append({"symbol": sym, "name": str(item.get("name") or sym)[:40], "role": role, "weight": weight})
-    if model.uses_weights and sum(a["weight"] for a in clean) <= 0:
+    if model.uses_weights and not model.uses_roles and sum(a["weight"] for a in clean) <= 0:
         raise ApiError(400, "invalid_weight", "목표 비중 합계는 0보다 커야 합니다")
     if model.uses_roles:
         if not any(a["role"] == "offensive" for a in clean):
             raise ApiError(400, "invalid_assets", "공격(offensive) 자산이 최소 1개 필요합니다")
         if not any(a["role"] == "defensive" for a in clean):
             raise ApiError(400, "invalid_assets", "방어(defensive) 자산이 최소 1개 필요합니다")
+        if "canary" in model.allowed_roles and not any(a["role"] == "canary" for a in clean):
+            raise ApiError(400, "invalid_assets", "감시병(canary) 자산이 최소 1개 필요합니다")
+        if "core" in model.allowed_roles:
+            cores = [a for a in clean if a["role"] == "core"]
+            if not cores:
+                raise ApiError(400, "invalid_assets", "고정(core) 자산이 최소 1개 필요합니다")
+            core_sum = sum(a["weight"] for a in cores)
+            if core_sum <= 0 or core_sum > 100:
+                raise ApiError(400, "invalid_weight", "고정(core) 자산 비중 합계는 0보다 크고 100 이하여야 합니다")
     return clean
 
 

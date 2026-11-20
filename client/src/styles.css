@@ -307,6 +307,21 @@ b.plain { color: #e6edf3; }
 .admin-users td.actions { display: flex; gap: 6px; justify-content: flex-end; }
 .admin-users td.actions button { padding: 3px 10px; font-size: 12px; }
 
+/* Screener */
+.screener-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.score-pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-weight: 600; font-size: 12px; background: #21262d; }
+.score-pill.high { background: #12361f; color: #3fb950; }
+.score-pill.mid { background: #1c2d42; color: #58a6ff; }
+.score-pill.low { background: #2d2619; color: #f0b429; }
+.reason-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.reason-tag { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; white-space: nowrap; }
+.reason-cell { text-align: left !important; }
+.row-btns { display: flex; gap: 4px; justify-content: flex-end; }
+.row-btns button { padding: 3px 8px; font-size: 12px; white-space: nowrap; }
+.warn-badge { display: inline-block; margin-left: 4px; font-size: 10px; padding: 1px 5px; border-radius: 6px; background: #3a2a10; color: #f0b429; }
+.quant-form textarea { width: 100%; box-sizing: border-box; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; font-family: inherit; font-size: 12px; resize: vertical; }
+.quant-form label.check { flex-direction: row; align-items: center; gap: 6px; cursor: pointer; }
+
 /* ======================================================================
    Responsive. Desktop rules above stay as-is; these only kick in on
    narrower screens. Tablet <= 1100px, mobile <= 768px.

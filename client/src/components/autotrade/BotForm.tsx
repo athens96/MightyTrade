@@ -1,9 +1,16 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { Bot, BotCategory, BotInput } from '../../api/autotrade'
 import { marketApi } from '../../api/market'
-import type { PortfolioAsset, PortfolioModelMeta, RebalanceMode, StrategyMeta } from '../../api/quant'
+import type { PortfolioAsset, PortfolioModelMeta, PortfolioRole, RebalanceMode, StrategyMeta } from '../../api/quant'
 import type { Market, WatchItem } from '../../api/types'
 import { StrategyGuideBox } from '../GuideBox'
+
+const ROLE_LABELS: Record<PortfolioRole, string> = {
+  offensive: '공격',
+  defensive: '방어',
+  canary: '감시병',
+  core: '고정',
+}
 
 interface Props {
   strategies: StrategyMeta[]
@@ -251,9 +258,10 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
                          onChange={(e) => setAssets(assets.map((x, i) => (i === idx ? { ...x, symbol: e.target.value.toUpperCase() } : x)))} />
                   {pModel.uses_roles && (
                     <select value={a.role} disabled={holding}
-                            onChange={(e) => setAssets(assets.map((x, i) => (i === idx ? { ...x, role: e.target.value as 'offensive' | 'defensive' } : x)))}>
-                      <option value="offensive">공격</option>
-                      <option value="defensive">방어</option>
+                            onChange={(e) => setAssets(assets.map((x, i) => (i === idx ? { ...x, role: e.target.value as PortfolioRole } : x)))}>
+                      {(pModel.allowed_roles ?? ['offensive', 'defensive']).map((role) => (
+                        <option key={role} value={role}>{ROLE_LABELS[role]}</option>
+                      ))}
                     </select>
                   )}
                   {pModel.uses_weights && (
@@ -268,8 +276,8 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
               ))}
               {!holding && (
                 <div className="tabs">
-                  <button type="button" disabled={assets.length >= 12}
-                          onClick={() => setAssets([...assets, { symbol: '', role: 'offensive', weight: 10 }])}>+ 종목 추가</button>
+                  <button type="button" disabled={assets.length >= 16}
+                          onClick={() => setAssets([...assets, { symbol: '', role: (pModel.allowed_roles ?? ['offensive'])[0], weight: 10 }])}>+ 종목 추가</button>
                   <button type="button" onClick={() => setAssets(pModel.presets[market] ?? [])}>기본 프리셋</button>
                 </div>
               )}

@@ -11,7 +11,7 @@ from ..auth.decorators import login_required
 from ..errors import ApiError
 from ..market.models import Interval, Market
 from ..market.registry import get_provider
-from . import portfolio, worker
+from . import portfolio, screener, worker
 from .data import cost_defaults
 from .engine import Backtester, Bars, Costs, buy_and_hold
 from .metrics import performance
@@ -322,4 +322,38 @@ def portfolio_backtest():
         costs=costs.__dict__,
         warnings=[WARNINGS.get(c, c) for c in warn_codes],
         **res,
+    )
+
+
+# ------------------------------------------------------------------ screener (Quant Stock Discovery)
+@bp.get("/screener/presets")
+@login_required
+def screener_presets():
+    return jsonify(screener.presets_meta())
+
+
+@bp.post("/screener/run")
+@login_required
+def screener_run():
+    body = request.get_json(silent=True) or {}
+    try:
+        market = Market(str(body.get("market", "")).upper())
+    except ValueError:
+        raise ApiError(400, "invalid_market")
+    preset = str(body.get("preset") or "momentum_quality")
+    universe = str(body.get("universe") or ("kr_bluechip" if market == Market.KR else "us_bluechip"))
+    custom = body.get("symbols")
+    if isinstance(custom, str):
+        custom = [s.strip() for s in re.split(r"[\s,;]+", custom) if s.strip()]
+    top_n = int(_num(body, "top_n", 15, 1, 30))
+    return jsonify(
+        screener.run_screen(
+            market,
+            preset,
+            universe,
+            custom_symbols=custom if isinstance(custom, list) else None,
+            strategy_id=body.get("strategy"),
+            exclude_warnings=bool(body.get("exclude_warnings", True)),
+            top_n=top_n,
+        )
     )

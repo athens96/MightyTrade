@@ -240,11 +240,12 @@ export interface MonteCarloResult extends RunContext {
 }
 
 export type RebalanceMode = 'monthly' | 'quarterly' | 'yearly' | 'drift'
+export type PortfolioRole = 'offensive' | 'defensive' | 'canary' | 'core'
 
 export interface PortfolioAsset {
   symbol: string
   name?: string
-  role: 'offensive' | 'defensive'
+  role: PortfolioRole
   weight: number
 }
 
@@ -256,6 +257,7 @@ export interface PortfolioModelMeta {
   description: string
   guide?: StrategyGuide
   uses_roles: boolean
+  allowed_roles?: PortfolioRole[]
   uses_weights: boolean
   default_rebalance: RebalanceMode
   params: StrategyParam[]
@@ -303,6 +305,98 @@ export interface PortfolioBacktestResult {
   current_weights: Record<string, number>
 }
 
+export interface ScreenerPresetMeta {
+  id: string
+  name: string
+  theory: string
+  summary: string
+  description: string
+  guide?: StrategyGuide
+  needs_fundamentals: boolean
+  kr_only: boolean
+  uses_strategy: boolean
+  recommended_strategy: string
+  recommended_portfolio: string
+}
+
+export interface ScreenerUniverseMeta {
+  id: string
+  name: string
+  description: string
+  count: number
+  is_etf: boolean
+}
+
+export interface ScreenerPresetsResponse {
+  presets: ScreenerPresetMeta[]
+  universes: Record<Market, ScreenerUniverseMeta[]>
+  daily_strategies: { id: string; name: string; category: StrategyCategory }[]
+}
+
+export interface ScreenerRunRequest {
+  market: Market
+  preset: string
+  universe: string
+  symbols?: string | string[]
+  strategy?: string
+  exclude_warnings?: boolean
+  top_n?: number
+}
+
+export interface ScreenerRow {
+  rank: number
+  symbol: string
+  name: string
+  price: number
+  change_1d_pct: N
+  ret_1m_pct: N
+  ret_3m_pct: N
+  ret_6m_pct: N
+  ret_12m_pct: N
+  vol_60d_pct: N
+  rsi2: N
+  ibs: N
+  above_ma200: boolean
+  near_52w_pct: N
+  vol_ratio_20d: N
+  per: N
+  pbr: N
+  roe: N
+  dividend_yield: N
+  market_cap: N
+  flow_5d_for?: N
+  flow_5d_inst?: N
+  flow_20d_for?: N
+  flow_20d_inst?: N
+  foreign_delta_pct?: N
+  fit_return_pct?: N
+  fit_cagr_pct?: N
+  fit_mdd_pct?: N
+  fit_sharpe?: N
+  fit_win_rate?: N
+  fit_trades?: number
+  warnings: string[]
+  score: number
+  reasons: string[]
+}
+
+export interface ScreenerResult {
+  market: Market
+  currency: string
+  preset: string
+  universe: string
+  strategy: string
+  recommended_portfolio: string
+  scanned: number
+  passed: number
+  skipped: number
+  excluded_warnings: string[]
+  fundamentals_source: string | null
+  elapsed_sec: number
+  notices: string[]
+  items: ScreenerRow[]
+}
+
 export const quantApi = {
   strategies: () => api<{ items: StrategyMeta[]; objectives: Record<string, string> }>('/quant/strategies'),
   optimize: (req: GridRequest) => api<OptimizeResult>('/quant/optimize', { method: 'POST', json: req }),
@@ -312,4 +406,6 @@ export const quantApi = {
   backtest: (req: BacktestRequest) => api<BacktestResult>('/quant/backtest', { method: 'POST', json: req }),
   portfolioModels: () => api<{ items: PortfolioModelMeta[]; rebalance_modes: Record<RebalanceMode, string> }>('/quant/portfolio/models'),
   portfolioBacktest: (req: PortfolioBacktestRequest) => api<PortfolioBacktestResult>('/quant/portfolio/backtest', { method: 'POST', json: req }),
+  screenerPresets: () => api<ScreenerPresetsResponse>('/quant/screener/presets'),
+  screenerRun: (req: ScreenerRunRequest) => api<ScreenerResult>('/quant/screener/run', { method: 'POST', json: req }),
 }
