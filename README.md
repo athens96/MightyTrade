@@ -41,7 +41,9 @@ client/src/
 ├── api/                 fetch 래퍼 + auth/market/trading API
 ├── auth/AuthContext.tsx 로그인 상태 (anonymous → pending → authenticated)
 ├── lib/secureEnvelope.ts 비밀값 브라우저 측 암호화 (WebCrypto)
-├── components/          Layout, ProtectedRoute, CandleChart(lightweight-charts)
+├── indicators/          기술적 지표 계산(math/calc) + 목록·기본값·설명(registry), vitest 테스트
+├── components/chart/    TradingChart(멀티 패널·범례), IndicatorPanel(지표 선택), BandFill(밴드/구름 채우기)
+├── components/          Layout, ProtectedRoute
 └── pages/               Login, Otp, Dashboard(차트), Orders, AutoTrade, Settings(토스 키)
 ```
 
@@ -73,6 +75,7 @@ cd client
 npm install
 cp .env.example .env        # VITE_GOOGLE_CLIENT_ID 입력
 npm run dev                 # http://localhost:5173
+npm test                    # 지표 계산 테스트
 ```
 
 시세는 기본적으로 `mock` provider(결정적 랜덤 데이터)라 API 연동 전에도 차트가 표시됨.

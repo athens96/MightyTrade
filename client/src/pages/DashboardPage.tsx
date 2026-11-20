@@ -1,12 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { marketApi } from '../api/market'
 import type { Candle, Instrument, Interval, Market, Quote, WatchItem } from '../api/types'
-import CandleChart from '../components/CandleChart'
+import { settingsApi, type Settings } from '../api/settings'
+import IndicatorPanel from '../components/chart/IndicatorPanel'
+import TradingChart from '../components/chart/TradingChart'
+import { DEFAULT_INDICATORS, sanitize, type IndicatorConfig } from '../indicators/registry'
 
 const INTERVALS: Interval[] = ['1m', '5m', '15m', '1h', '1d', '1w']
 const REFRESH_MS = 15_000
+// Enough history for long indicators (MA120, Ichimoku 52+26) while showing ~150 bars.
+const CHART_LIMIT = 500
 
 export default function DashboardPage() {
   const [market, setMarket] = useState<Market>('KR')
@@ -21,6 +26,32 @@ export default function DashboardPage() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<Instrument[]>([])
   const [searching, setSearching] = useState(false)
+  const [indicators, setIndicators] = useState<IndicatorConfig[]>(DEFAULT_INDICATORS)
+  const settingsRef = useRef<Settings | null>(null)
+  const saveTimer = useRef<number | undefined>(undefined)
+
+  // Indicator selection is stored per account in /users/me/settings under chart.indicators.
+  useEffect(() => {
+    settingsApi
+      .get()
+      .then(({ settings }) => {
+        settingsRef.current = settings
+        const chart = (settings.chart ?? {}) as { indicators?: unknown }
+        if (chart.indicators !== undefined) setIndicators(sanitize(chart.indicators))
+      })
+      .catch(() => (settingsRef.current = {}))
+  }, [])
+
+  const changeIndicators = (next: IndicatorConfig[]) => {
+    setIndicators(next)
+    window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      const base = settingsRef.current ?? {}
+      const merged = { ...base, chart: { ...((base.chart as object) ?? {}), indicators: next } }
+      settingsRef.current = merged
+      settingsApi.put(merged).catch((e) => setError(e.message))
+    }, 600)
+  }
 
   useEffect(() => {
     marketApi.watchlist().then(({ items }) => setWatchlist(items)).catch((e) => setError(e.message))
@@ -39,7 +70,7 @@ export default function DashboardPage() {
     let cancelled = false
     const load = () =>
       Promise.all([
-        marketApi.candles(selected.market, selected.symbol, interval),
+        marketApi.candles(selected.market, selected.symbol, interval, CHART_LIMIT),
         marketApi.quote(selected.market, selected.symbol),
       ])
         .then(([c, q]) => {
@@ -175,6 +206,7 @@ export default function DashboardPage() {
             </span>
           )}
           <div className="spacer" />
+          <IndicatorPanel value={indicators} onChange={changeIndicators} />
           <div className="tabs">
             {INTERVALS.map((i) => (
               <button key={i} className={i === interval ? 'active' : ''} onClick={() => setChartInterval(i)}>
@@ -190,7 +222,13 @@ export default function DashboardPage() {
         ) : (
           error && <p className="error">{error}</p>
         )}
-        <CandleChart candles={candles} intraday={interval !== '1d' && interval !== '1w'} />
+        <TradingChart
+          candles={candles}
+          market={selected?.market ?? market}
+          interval={interval}
+          indicators={indicators}
+          viewKey={`${selected?.market}:${selected?.symbol}:${interval}`}
+        />
         <p className="muted small">data: {provider}</p>
       </section>
     </div>

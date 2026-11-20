@@ -49,3 +49,23 @@ button.danger { border-color: #f85149; color: #f85149; }
 .form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #8b949e; }
 .form input { width: 100%; font-size: 14px; letter-spacing: normal; }
 .form button { align-self: flex-start; }
+.chart-wrap { position: relative; flex: 1; min-height: 420px; }
+.chart-wrap .chart { position: absolute; inset: 0; min-height: 0; }
+.legend { position: absolute; left: 8px; z-index: 3; pointer-events: none; font-size: 12px; line-height: 1.6; text-shadow: 0 0 3px #111418, 0 0 3px #111418; }
+.legend-row { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.legend-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.legend-name { color: #8b949e; font-weight: 600; }
+.indicator-panel { position: relative; }
+.indicator-panel .badge { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 8px; background: #30363d; font-size: 11px; }
+.indicator-dropdown { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 380px; max-height: 70vh; overflow-y: auto; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 8px 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.indicator-dropdown h4 { margin: 10px 0 6px; font-size: 13px; }
+.indicator-item { border-radius: 6px; padding: 4px 6px; }
+.indicator-item.on { background: #1c2129; }
+.indicator-head { display: flex; justify-content: space-between; align-items: center; }
+.indicator-head label { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 13px; }
+.indicator-body { padding: 4px 0 6px 24px; }
+.indicator-body p { margin: 0 0 6px; line-height: 1.5; }
+.params { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.param { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: #8b949e; }
+.param input { width: 72px; font-size: 13px; letter-spacing: normal; padding: 4px 6px; }
+button.link { background: none; border: none; color: #58a6ff; padding: 2px 4px; font-size: 12px; }
