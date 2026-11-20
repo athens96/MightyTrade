@@ -25,6 +25,7 @@ server/app/
 │   ├── decorators.py      @login_required, @pending_required
 │   └── routes.py          /api/auth/*
 ├── integrations/toss/   토스증권 API 클라이언트 (토큰 공유 캐시, 재발급, 429 재시도, 에러 매핑)
+├── account/             계좌: 보유종목·손익·매수가능금액, 조건주문(OCO 익절/손절, 기본 드라이런 + OTP)
 ├── users/               계정별 데이터 (관심종목, 설정, 증권사 API 키)
 ├── market/              시세/차트
 │   ├── models.py          Market(KR/US), Interval, Candle, Quote
@@ -106,6 +107,8 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 
 ## 토스증권 API 주의사항
 
+- 조건주문(OCO)은 실제 주문: 기본은 미리보기(드라이런), 실제 전송은 확인 체크 + 1회용 OTP 필요. 국내는 KRX 정규장에서만 발동.
+
 - 허용 IP 등록 필수 (WTS > 설정 > Open API > 허용 IP 관리). 운영 서버는 고정(예약) 공인 IP 사용.
 - 각 사용자는 자기 토스 WTS의 허용 IP에 **이 서비스 서버의 IP**를 등록해야 함.
 - 클라이언트 키당 유효 토큰은 1개: 새로 발급하면 이전 토큰이 즉시 무효. 서버는 토큰을 저장소에 암호화 캐시해 프로세스 간 공유함.
@@ -133,7 +136,8 @@ WebCrypto는 보안 컨텍스트(HTTPS 또는 localhost)에서만 동작하므�
 ## TODO
 
 - [x] 토스 시세·차트·종목검색 (`TossProvider`)
-- [ ] 토스 계좌 조회 / 주문 (`TossBroker`)
+- [x] 토스 계좌 조회 (보유종목·매수가능금액), 조건주문 OCO 익절/손절
+- [ ] 일반 주문 (`TossBroker`)
 - [ ] 미국 종목 영문명 검색 (`/stocks/all`에 englishName 없음 → `/stocks` 배치 조회 필요)
 - [ ] investing.com 데이터 수집 방식 결정 (공식 API 없음 — 이용약관 확인 필요)
 - [ ] 주문 API (검증 → 리스크 체크 → 브로커 → 저장)

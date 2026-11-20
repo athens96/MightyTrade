@@ -5,7 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import LoginPage from './pages/LoginPage'
 import OtpPage from './pages/OtpPage'
 import DashboardPage from './pages/DashboardPage'
-import OrdersPage from './pages/OrdersPage'
+import AccountPage from './pages/AccountPage'
 import AutoTradePage from './pages/AutoTradePage'
 import SettingsPage from './pages/SettingsPage'
 
@@ -21,7 +21,8 @@ export default function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/quant" element={<Suspense fallback={<div className="placeholder muted">불러오는 중…</div>}><QuantPage /></Suspense>} />
-          <Route path="/orders" element={<OrdersPage />} />
+          <Route path="/account" element={<AccountPage />} />
+          <Route path="/orders" element={<Navigate to="/account" replace />} />
           <Route path="/auto" element={<AutoTradePage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>

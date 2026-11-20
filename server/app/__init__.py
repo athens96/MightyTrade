@@ -24,6 +24,7 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
     from .storage import init_storage
     init_storage(app)
 
+    from .account.routes import bp as account_bp
     from .auth.routes import bp as auth_bp
     from .market.routes import bp as market_bp
     from .quant.routes import bp as quant_bp
@@ -35,6 +36,7 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
     app.register_blueprint(market_bp, url_prefix="/api/market")
     app.register_blueprint(trading_bp, url_prefix="/api/trading")
     app.register_blueprint(quant_bp, url_prefix="/api/quant")
+    app.register_blueprint(account_bp, url_prefix="/api/account")
 
     register_error_handlers(app)
 
