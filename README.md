@@ -56,6 +56,8 @@ client/src/
 
 ## 로컬 실행
 
+`.env` 준비 후 `./scripts/dev.sh` 한 번으로 서버+클라이언트 동시 실행 (Ctrl+C로 둘 다 종료). 개별 실행은 아래 참고.
+
 사전 준비: Google Cloud Console에서 OAuth **웹 클라이언트 ID** 생성, 승인된 JavaScript 원본에 `http://localhost:5173` 추가.
 
 ```bash
@@ -63,7 +65,7 @@ client/src/
 cd server
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 cp .env.example .env        # GOOGLE_CLIENT_ID 입력
-.venv/bin/python wsgi.py    # http://127.0.0.1:5000
+.venv/bin/python wsgi.py    # http://127.0.0.1:5001
 .venv/bin/pytest
 
 # client
