@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# File DB (user data, encrypted secrets)
+server/data/
+
+# OS / tools
+.DS_Store
+.omc/
+*.tsbuildinfo
