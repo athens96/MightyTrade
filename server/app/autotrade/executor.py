@@ -22,6 +22,7 @@ from ..account.toss_account import HIGH_VALUE_KRW, _account, normalize
 from ..errors import ApiError
 from ..market.models import Interval, Market
 from ..market.registry import get_provider
+from ..quant import market_timing
 from ..quant.data import cost_defaults
 from ..quant.engine import Bars, Context, Costs, Order, Position, RiskRules
 from ..quant.strategies import STRATEGIES
@@ -87,6 +88,30 @@ def load(bot: dict, today: str) -> tuple:
     return candles, Bars.from_candles(past), today_bar, strat
 
 
+def _apply_market_timing(bot: dict, today: str, planned: list[Order], holding: bool) -> tuple[list[Order], float, Optional[dict]]:
+    mt = bot.get("market_timing") or {}
+    mode = mt.get("mode") or "off"
+    if mode == "off":
+        return planned, 1.0, None
+    snap = market_timing.current_regime_snapshot(
+        bot["market"],
+        mt.get("benchmark"),
+        int(mt.get("ma_short", 20)),
+        int(mt.get("ma_long", 60)),
+        before_date=today,
+    )
+    reg = snap["regime"]
+    scale = market_timing.buy_scale_for(mode, reg)
+    if mode == "exit_all" and reg == "bear":
+        sells = [o for o in planned if o.side == "sell"]
+        if holding and not sells:
+            sells = [Order("sell", kind="market", reason=f"마켓 타이밍 현금 대피 ({snap['label']})")]
+        return sells, 0.0, snap
+    if scale <= 0.0:
+        return [o for o in planned if o.side != "buy"], 0.0, snap
+    return planned, scale, snap
+
+
 def decide(bot: dict, today: str, loaded: Optional[tuple] = None) -> dict:
     """What the strategy wants to do today, based on bars up to yesterday. No side effects."""
     candles, bars, today_bar, strat = loaded or load(bot, today)
@@ -106,9 +131,12 @@ def decide(bot: dict, today: str, loaded: Optional[tuple] = None) -> dict:
     last = today_bar.close if today_bar else bars.close[-1]
     cash = st["cash"] if bot["mode"] == "paper" else max(bot["capital"] - pos["qty"] * pos["entry_price"], 0.0)
     strat.prepare(bars)
-    planned = strat.on_bar(len(bars) - 1, Context(position, cash, cash + pos["qty"] * last)) or []
+    raw_planned = strat.on_bar(len(bars) - 1, Context(position, cash, cash + pos["qty"] * last)) or []
+    planned, mt_scale, mt_snap = _apply_market_timing(bot, today, raw_planned, pos["qty"] > 0)
+    mt_blocked = any(o.side == "buy" for o in raw_planned) and not any(o.side == "buy" for o in planned)
     return {"date": today, "bar_date": day_of(bars.time[-1]), "orders": planned, "today_bar": today_bar,
-            "candles": candles, "position": pos, "cash": cash, "last": last, "entry_atr": _strategy_atr(strat)}
+            "candles": candles, "position": pos, "cash": cash, "last": last, "entry_atr": _strategy_atr(strat),
+            "mt_scale": mt_scale, "market_regime": mt_snap, "mt_blocked": mt_blocked}
 
 
 def describe(o: Order, today_open: Optional[float]) -> str:
@@ -147,10 +175,12 @@ def decide_intraday(bot: dict, today: str, loaded: Optional[tuple] = None) -> di
     last = latest_bar.close
     cash = st["cash"] if bot["mode"] == "paper" else max(bot["capital"] - pos["qty"] * pos["entry_price"], 0.0)
     strat.prepare(bars)
-    planned = strat.on_bar(len(bars) - 1, Context(position, cash, cash + pos["qty"] * last)) or []
+    raw_planned = strat.on_bar(len(bars) - 1, Context(position, cash, cash + pos["qty"] * last)) or []
+    planned, mt_scale, mt_snap = _apply_market_timing(bot, today, raw_planned, pos["qty"] > 0)
     return {"date": today, "bar_date": datetime.fromtimestamp(bars.time[-1], timezone.utc).strftime("%Y-%m-%d %H:%M"),
             "bar_time": bars.time[-1], "orders": planned, "today_bar": latest_bar, "candles": candles,
-            "position": pos, "cash": cash, "last": last, "entry_atr": _strategy_atr(strat)}
+            "position": pos, "cash": cash, "last": last, "entry_atr": _strategy_atr(strat),
+            "mt_scale": mt_scale, "market_regime": mt_snap, "mt_blocked": False}
 
 
 def preview(bot: dict, today: str) -> dict:
@@ -162,6 +192,7 @@ def preview(bot: dict, today: str) -> dict:
     return {
         "date": today, "bar_date": d["bar_date"], "position": d["position"], "cash": d["cash"],
         "today_open": tb.open if tb else None, "last": d["last"],
+        "market_regime": d.get("market_regime"),
         "orders": [{"side": o.side, "kind": o.kind, "stop": o.stop, "stop_from_open": o.stop_from_open,
                     "limit": o.limit, "qty": o.qty, "reason": o.reason, "text": describe(o, tb.open if tb else None)}
                    for o in d["orders"]],
@@ -250,9 +281,9 @@ def _settle_paper_risk_on_bar(bot: dict, st: dict, bar: Any, bar_date: str, c: C
     return False
 
 
-def _paper_qty(st: dict, o: Order, price: float, c: Costs) -> int:
-    qty = math.floor(st["cash"] / (price * (1 + c.slippage_pct / 100) * (1 + c.commission_pct / 100)))
-    return min(qty, int(o.qty)) if o.qty is not None else qty
+def _paper_qty(st: dict, o: Order, price: float, c: Costs, scale: float = 1.0) -> int:
+    qty = math.floor((st["cash"] * min(1.0, scale)) / (price * (1 + c.slippage_pct / 100) * (1 + c.commission_pct / 100)))
+    return min(qty, int(o.qty * scale)) if o.qty is not None else qty
 
 
 def settle_paper(bot: dict, candles: list, today: str, c: Costs) -> None:
@@ -324,6 +355,9 @@ def run_paper(bot: dict, today: str) -> dict:
             _paper_sell(st, today_bar.open, c, today, reason)
             bots.log(bot, "fill", f"[모의/보호막] {reason} 시가 매도 @ {today_bar.open:,.2f}")
     d = decide(bot, today, loaded)
+    mt_scale = float(d.get("mt_scale", 1.0))
+    if d.get("mt_blocked"):
+        bots.log(bot, "skip", f"[모의] 🚦 마켓 타이밍({(d.get('market_regime') or {}).get('label', '하락장')}) 필터로 신규 매수 중단", "warn")
     o_open = today_bar.open
     est_eq = st["cash"] + st["position"]["qty"] * o_open
     buy_block = protections.check_buy_allowed(bot, st, today, current_equity=est_eq)
@@ -336,7 +370,7 @@ def run_paper(bot: dict, today: str) -> dict:
             continue
         if o.kind == "market":
             if o.side == "buy":
-                qty = _paper_qty(st, o, o_open, c)
+                qty = _paper_qty(st, o, o_open, c, scale=mt_scale)
                 if qty <= 0:
                     bots.log(bot, "skip", "[모의] 자금 부족으로 매수하지 못했습니다", "warn")
                     continue
@@ -702,7 +736,7 @@ def run_live(bot: dict, today: str) -> dict:
                 if not immediate and unsynced_sell > 0:
                     # Conditional / limit buys fill later intraday, after the open market sell settles.
                     cash_bp += unsynced_sell * current * (1 - (c.commission_pct + c.tax_pct) / 100)
-                budget = min(bot_budget, cash_bp)
+                budget = min(bot_budget, cash_bp) * float(d.get("mt_scale", 1.0))
                 est = level or current
                 # market fills can be worse than the last price: keep >=0.5% headroom so Toss doesn't reject
                 headroom = max((c.slippage_pct + c.commission_pct) / 100, LIVE_BUY_HEADROOM)

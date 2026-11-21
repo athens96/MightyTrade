@@ -139,7 +139,8 @@ class Trade:
 
 class Backtester:
     def __init__(self, bars: Bars, strategy: "Strategy", capital: float, costs: Costs, start_index: int,
-                 whole_shares: bool = True, risk: Optional[RiskRules] = None):
+                 whole_shares: bool = True, risk: Optional[RiskRules] = None,
+                 regimes: Optional[list[str]] = None, market_timing_mode: str = "off"):
         if not 0 <= start_index < len(bars) - 1:
             raise ValueError("not enough bars for the backtest period")
         self.b = bars
@@ -149,6 +150,8 @@ class Backtester:
         self.start = start_index
         self.whole_shares = whole_shares
         self.risk = risk or RiskRules()
+        self.regimes = regimes
+        self.market_timing_mode = market_timing_mode
         self.cash = capital
         self.pos = Position()
         self.peak_price = 0.0
@@ -185,15 +188,15 @@ class Backtester:
             raise ValueError(f"unknown order kind {o.kind}")
         return raw * (1 + slip) if o.side == "buy" else raw * (1 - slip)
 
-    def _buy(self, o: Order, j: int) -> None:
-        if self.pos.is_open:
+    def _buy(self, o: Order, j: int, scale: float = 1.0) -> None:
+        if self.pos.is_open or scale <= 0:
             return  # one position at a time (no pyramiding)
         price = self._fill_price(o, j)
         if price is None:
             return
         comm = self.costs.commission_pct / 100
-        affordable = self.cash / (price * (1 + comm))
-        qty = min(o.qty, affordable) if o.qty is not None else affordable
+        affordable = (self.cash * min(1.0, scale)) / (price * (1 + comm))
+        qty = min(o.qty * scale if o.qty is not None else affordable, affordable)
         if self.whole_shares:
             qty = math.floor(qty)
         if qty <= 0:
@@ -258,11 +261,28 @@ class Backtester:
         equity: list[float] = []
         in_market = 0
         for j in range(self.start, len(b)):
+            reg = self.regimes[j] if self.regimes and j < len(self.regimes) else "bull"
+            mt = self.market_timing_mode
+            mt_scale = 1.0
+            if mt in ("block_buy", "exit_all") and reg == "bear":
+                mt_scale = 0.0
+            elif mt == "half_size":
+                mt_scale = 0.5 if reg == "bear" else (0.75 if reg == "caution" else 1.0)
+
             exited_by_risk = self._check_risk_exit(j)
+            if not exited_by_risk and mt == "exit_all" and reg == "bear" and self.pos.is_open:
+                self._sell(Order("sell", kind="market", reason="마켓 타이밍 하락장 현금 대피"), j)
+                exited_by_risk = not self.pos.is_open
+
             for o in pending:  # orders decided at the previous close
-                if exited_by_risk and o.side == "sell":
-                    continue
-                (self._buy if o.side == "buy" else self._sell)(o, j)
+                if o.side == "sell":
+                    if exited_by_risk:
+                        continue
+                    self._sell(o, j)
+                else:
+                    if mt_scale <= 0:
+                        continue
+                    self._buy(o, j, scale=mt_scale)
             if self.pos.is_open:
                 self.peak_price = max(self.peak_price, b.high[j])
                 in_market += 1

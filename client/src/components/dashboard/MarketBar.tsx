@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { marketApi, type IndexQuote, type SessionStatus } from '../../api/market'
+import { marketApi, type IndexQuote, type MarketRegime, type SessionStatus } from '../../api/market'
 
 const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }) : '')
 
@@ -13,12 +13,26 @@ function Status({ name, s }: { name: string; s: SessionStatus }) {
   )
 }
 
-/** KOSPI / KOSDAQ and KR / US session status. Hidden when the market data source isn't Toss. */
+function RegimePill({ r }: { r?: MarketRegime }) {
+  if (!r) return null
+  const tip = `${r.benchmark_name ?? r.benchmark} 종가 ${r.close ?? '-'} · ${r.ma_short}일선 ${r.ma_short_val ?? '-'} / ${r.ma_long}일선 ${r.ma_long_val ?? '-'}`
+  return (
+    <span className="mb-status" title={tip}>
+      <span className="muted">{r.market === 'KR' ? '국내온도' : '미국온도'}</span> <b>{r.label}</b>
+    </span>
+  )
+}
+
+/** KOSPI / KOSDAQ, Market Timing traffic lights, and KR / US session status. */
 export default function MarketBar() {
   const [data, setData] = useState<{ indices: IndexQuote[]; status: Record<'KR' | 'US', SessionStatus> } | null>(null)
+  const [regimes, setRegimes] = useState<{ KR: MarketRegime; US: MarketRegime } | null>(null)
   useEffect(() => {
     let alive = true
-    const load = () => marketApi.overview().then((d) => alive && setData(d)).catch(() => undefined)
+    const load = () => {
+      marketApi.overview().then((d) => alive && setData(d)).catch(() => undefined)
+      marketApi.regimes().then((r) => alive && setRegimes(r)).catch(() => undefined)
+    }
     load()
     const t = window.setInterval(() => document.visibilityState === 'visible' && load(), 30_000)
     return () => {
@@ -26,10 +40,10 @@ export default function MarketBar() {
       window.clearInterval(t)
     }
   }, [])
-  if (!data) return null
+  if (!data && !regimes) return null
   return (
     <div className="market-bar">
-      {data.indices.map((i) => (
+      {data?.indices.map((i) => (
         <span key={i.symbol} className="mb-index">
           <span className="muted">{i.symbol}</span>{' '}
           <b>{i.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b>{' '}
@@ -40,9 +54,11 @@ export default function MarketBar() {
           </span>
         </span>
       ))}
+      <RegimePill r={regimes?.KR} />
+      <RegimePill r={regimes?.US} />
       <div className="spacer" />
-      <Status name="국내" s={data.status.KR} />
-      <Status name="미국" s={data.status.US} />
+      {data && <Status name="국내" s={data.status.KR} />}
+      {data && <Status name="미국" s={data.status.US} />}
     </div>
   )
 }

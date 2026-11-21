@@ -108,3 +108,14 @@ def investor_flow():
 def orderbook():
     market, symbol = _market(), _symbol()
     return jsonify(extras.orderbook(market, symbol))
+
+
+@bp.get("/regimes")
+@login_required
+def regimes():
+    """Market Timing traffic-light status (🟢/🟡/🔴) for KR & US representative indices."""
+    from ..quant import market_timing
+    return jsonify(
+        KR=market_timing.current_regime_snapshot("KR"),
+        US=market_timing.current_regime_snapshot("US"),
+    )

@@ -15,8 +15,22 @@ export interface BookLevel { price: number; volume: number }
 export interface OrderBook { timestamp?: string | null; currency: string; asks: BookLevel[]; bids: BookLevel[] }
 export interface Tick { price: number; volume: number; timestamp: string; currency: string }
 
+export interface MarketRegime {
+  market: Market
+  benchmark: string
+  benchmark_name?: string
+  regime: 'bull' | 'caution' | 'bear'
+  label: string
+  close: number | null
+  ma_short: number
+  ma_long: number
+  ma_short_val: number | null
+  ma_long_val: number | null
+}
+
 export const marketApi = {
   overview: () => api<{ indices: IndexQuote[]; status: Record<'KR' | 'US', SessionStatus> }>('/market/overview'),
+  regimes: () => api<{ KR: MarketRegime; US: MarketRegime }>('/market/regimes'),
   warnings: (market: Market, symbol: string) =>
     api<{ items: StockWarning[] }>(`/market/warnings?${new URLSearchParams({ market, symbol })}`),
   investorFlow: (symbol: string, count = 20) =>

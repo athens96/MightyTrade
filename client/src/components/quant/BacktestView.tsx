@@ -31,7 +31,14 @@ export default function BacktestView({ result, title }: { result: BacktestResult
   const makeBot = () => {
     sessionStorage.setItem(
       PREFILL_KEY,
-      JSON.stringify({ market: result.market, symbol: result.symbol, strategy: result.strategy, params: result.params, risk: result.risk }),
+      JSON.stringify({
+        market: result.market,
+        symbol: result.symbol,
+        strategy: result.strategy,
+        params: result.params,
+        risk: result.risk,
+        market_timing: result.market_timing,
+      }),
     )
     navigate('/auto')
   }

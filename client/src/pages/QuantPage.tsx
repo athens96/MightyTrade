@@ -6,6 +6,7 @@ import {
   type BacktestRequest,
   type BacktestResult,
   type CostDefaults,
+  type MarketTimingMode,
   type MonteCarloResult,
   type OptimizeResult,
   type Period,
@@ -91,6 +92,8 @@ interface Form {
   stopLossPct: number
   takeProfitPct: number
   trailingStopPct: number
+  mtMode: MarketTimingMode
+  mtBenchmark: Record<Market, string>
 }
 
 const DEFAULT_FORM: Form = {
@@ -125,6 +128,8 @@ const DEFAULT_FORM: Form = {
   stopLossPct: 0,
   takeProfitPct: 0,
   trailingStopPct: 0,
+  mtMode: 'off',
+  mtBenchmark: { KR: '069500', US: 'SPY' },
 }
 
 const loadForm = (): Form => {
@@ -281,6 +286,12 @@ export default function QuantPage() {
         stop_loss_pct: form.stopLossPct || 0,
         take_profit_pct: form.takeProfitPct || 0,
         trailing_stop_pct: form.trailingStopPct || 0,
+      },
+      market_timing: {
+        mode: form.mtMode,
+        benchmark: form.mtBenchmark?.[form.market] ?? (form.market === 'KR' ? '069500' : 'SPY'),
+        ma_short: 20,
+        ma_long: 60,
       },
       period: form.period,
       capital: costs.capital,
@@ -704,6 +715,40 @@ export default function QuantPage() {
               {num('공통 손절 (%)', form.stopLossPct, (v) => set('stopLossPct', Math.max(0, Math.min(80, v))), 0.5, undefined, '매수가 대비 이 비율(%)만큼 떨어지면 전략 신호를 기다리지 않고 즉시 손절합니다 (0이면 사용 안 함)')}
               {num('공통 목표 익절 (%)', form.takeProfitPct, (v) => set('takeProfitPct', Math.max(0, Math.min(80, v))), 0.5, undefined, '매수가 대비 이 비율(%)만큼 오르면 목표 수익을 확정하고 즉시 익절합니다 (0이면 사용 안 함)')}
               {num('트레일링 스톱 (%)', form.trailingStopPct, (v) => set('trailingStopPct', Math.max(0, Math.min(80, v))), 0.5, undefined, '매수 후 찍은 최고가 대비 이 비율(%)만큼 되밀리면 수익을 지키며 자동 매도합니다 (0이면 사용 안 함)')}
+            </fieldset>
+            <fieldset className="costs">
+              <legend>🚦 마켓 타이밍 신호등 필터</legend>
+              <label title="코스피·S&P500 대표 지수가 20일·60일 평균선 아래로 무너진 하락장일 때 어떻게 방어할지 고릅니다">
+                <span>하락장 대응 방식</span>
+                <select value={form.mtMode} title="시장 전체가 하락장일 때 대응 방식을 선택합니다" onChange={(e) => set('mtMode', e.target.value as MarketTimingMode)}>
+                  <option value="off">꺼짐 (항상 전략대로 매매)</option>
+                  <option value="block_buy">하락장(🔴)에 신규 매수 중단 (권장)</option>
+                  <option value="half_size">하락장(🔴)에 매수 비중 50% 축소</option>
+                  <option value="exit_all">하락장(🔴) 진입 시 보유 주식도 즉시 현금화</option>
+                </select>
+              </label>
+              {form.mtMode !== 'off' && (
+                <label title="시장 온도를 측정할 대표 지수 ETF를 고릅니다">
+                  <span>기준 시장 지수</span>
+                  <select
+                    value={form.mtBenchmark?.[form.market] ?? (form.market === 'KR' ? '069500' : 'SPY')}
+                    title="시장 온도를 측정할 대표 지수 ETF를 선택합니다"
+                    onChange={(e) => setForm((f) => ({ ...f, mtBenchmark: { ...(f.mtBenchmark ?? { KR: '069500', US: 'SPY' }), [f.market]: e.target.value } }))}
+                  >
+                    {form.market === 'KR' ? (
+                      <>
+                        <option value="069500">KODEX 200 (코스피 대표)</option>
+                        <option value="229200">KODEX 코스닥150 (코스닥 대표)</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="SPY">SPY (미국 S&P500 대표)</option>
+                        <option value="QQQ">QQQ (미국 나스닥100 대표)</option>
+                      </>
+                    )}
+                  </select>
+                </label>
+              )}
             </fieldset>
           </>
         )}

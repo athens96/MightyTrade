@@ -11,7 +11,7 @@ from ..auth.decorators import login_required
 from ..errors import ApiError
 from ..market.models import Interval, Market
 from ..market.registry import get_provider
-from . import portfolio, screener, screener_data, worker
+from . import market_timing, portfolio, screener, screener_data, worker
 from .data import cost_defaults
 from .engine import Backtester, Bars, Costs, RiskRules, buy_and_hold
 from .metrics import performance
@@ -50,6 +50,7 @@ class Setup:
     capital: float
     costs: Costs
     risk: RiskRules
+    market_timing: dict
 
 
 def _setup(body: dict) -> Setup:
@@ -70,6 +71,7 @@ def _setup(body: dict) -> Setup:
         risk = RiskRules.from_dict(body.get("risk"))
     except (TypeError, ValueError) as e:
         raise ApiError(400, "invalid_risk", str(e))
+    mt_cfg = market_timing.validate_market_timing(body.get("market_timing"), market.value)
     d = cost_defaults(market) if "commission_pct" not in body else {}
     return Setup(
         market, symbol, cls, body.get("params") or {}, period,
@@ -80,6 +82,7 @@ def _setup(body: dict) -> Setup:
             slippage_pct=_num(body, "slippage_pct", d.get("slippage_pct", 0), 0, 5),
         ),
         risk=risk,
+        market_timing=mt_cfg,
     )
 
 
@@ -190,12 +193,22 @@ def backtest():
     s = _setup(request.get_json(silent=True) or {})
     strategy = _strategy(s.cls, s.params)
     candles, bars, start, warn = _load(s, strategy.warmup())
-    result = Backtester(bars, strategy, s.capital, s.costs, start, risk=s.risk).run()
+    regimes = None
+    if s.market_timing["mode"] != "off":
+        bench_bars = market_timing.load_benchmark_bars(s.market.value, s.market_timing["benchmark"], bars.time[0])
+        regimes = market_timing.align_regimes_to_bars(
+            bars, bench_bars, s.market_timing["ma_short"], s.market_timing["ma_long"]
+        )
+    result = Backtester(
+        bars, strategy, s.capital, s.costs, start,
+        risk=s.risk, regimes=regimes, market_timing_mode=s.market_timing["mode"],
+    ).run()
     codes = result.pop("warnings") + warn
     return jsonify(
         **_context(s, bars, start),
         params=strategy.p,
         risk=s.risk.to_dict(),
+        market_timing=s.market_timing,
         start_index=start,
         candles=[c.to_dict() for c in candles],
         chart_indicators=strategy.chart_indicators(),

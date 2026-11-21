@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { Bot, BotCategory, BotInput } from '../../api/autotrade'
 import { marketApi } from '../../api/market'
-import type { PortfolioAsset, PortfolioModelMeta, PortfolioRole, RebalanceMode, StrategyMeta } from '../../api/quant'
+import type { MarketTimingMode, PortfolioAsset, PortfolioModelMeta, PortfolioRole, RebalanceMode, StrategyMeta } from '../../api/quant'
 import type { Market, WatchItem } from '../../api/types'
 import { getParamHint } from '../../lib/paramHints'
 import { StrategyGuideBox } from '../GuideBox'
@@ -58,6 +58,8 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
   const [maxLossStreak, setMaxLossStreak] = useState(initial?.guard?.max_consecutive_losses ?? bot?.guard?.max_consecutive_losses ?? 0)
   const [cooldownDays, setCooldownDays] = useState(initial?.guard?.cooldown_days ?? bot?.guard?.cooldown_days ?? 0)
   const [dailyLossPct, setDailyLossPct] = useState(initial?.guard?.daily_loss_limit_pct ?? bot?.guard?.daily_loss_limit_pct ?? 0)
+  const [mtMode, setMtMode] = useState<MarketTimingMode>(initial?.market_timing?.mode ?? bot?.market_timing?.mode ?? 'off')
+  const [mtBench, setMtBench] = useState(initial?.market_timing?.benchmark ?? bot?.market_timing?.benchmark ?? '')
   const [capital, setCapital] = useState(initial?.capital ?? (market === 'KR' ? 1_000_000 : 1_000))
   const [name, setName] = useState(initial?.name ?? '')
   const [watch, setWatch] = useState<WatchItem[]>([])
@@ -154,6 +156,12 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             trailing_stop_pct: trailingStopPct || 0,
           },
           guard,
+          market_timing: {
+            mode: mtMode,
+            benchmark: mtBench || (market === 'KR' ? '069500' : 'SPY'),
+            ma_short: 20,
+            ma_long: 60,
+          },
           capital,
         })
       }
@@ -326,6 +334,41 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
                        title="보유 중 최고가 대비 이 비율(%)만큼 하락하면 수익 보존 매도합니다 (0 = 끔)"
                        onChange={(e) => setTrailingStopPct(Math.max(0, Number(e.target.value)))} />
               </label>
+            </div>
+          </fieldset>
+        )}
+
+        {!isRebal && (
+          <fieldset className="costs" style={{ marginTop: 10 }}>
+            <legend>🚦 마켓 타이밍 신호등 필터 (하락장 방어)</legend>
+            <div className="modal-grid">
+              <label title="시장 전체 지수가 20일·60일 평균선 아래로 떨어진 하락장일 때 매수를 쉬거나 줄일지 선택합니다">
+                <span>하락장 대응</span>
+                <select value={mtMode} title="시장 하락장 대응 방식을 선택합니다" onChange={(e) => setMtMode(e.target.value as MarketTimingMode)}>
+                  <option value="off">꺼짐 (항상 전략대로 매매)</option>
+                  <option value="block_buy">하락장(🔴)에 신규 매수 중단</option>
+                  <option value="half_size">하락장(🔴)에 매수 자금 50% 축소</option>
+                  <option value="exit_all">하락장(🔴) 진입 시 즉시 현금 대피</option>
+                </select>
+              </label>
+              {mtMode !== 'off' && (
+                <label title="시장 상승·하락 온도를 판단할 대표 지수 ETF를 고릅니다">
+                  <span>기준 시장 지수</span>
+                  <select value={mtBench || (market === 'KR' ? '069500' : 'SPY')} title="기준 시장 지수를 선택합니다" onChange={(e) => setMtBench(e.target.value)}>
+                    {market === 'KR' ? (
+                      <>
+                        <option value="069500">KODEX 200 (코스피)</option>
+                        <option value="229200">KODEX 코스닥150</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="SPY">SPY (미국 S&P500)</option>
+                        <option value="QQQ">QQQ (미국 나스닥100)</option>
+                      </>
+                    )}
+                  </select>
+                </label>
+              )}
             </div>
           </fieldset>
         )}

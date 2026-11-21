@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { PortfolioAsset, RebalanceMode, RiskRules } from './quant'
+import type { MarketTimingRules, PortfolioAsset, RebalanceMode, RiskRules } from './quant'
 import type { Interval, Market } from './types'
 
 export type BotKind = 'single' | 'rebalance'
@@ -47,6 +47,7 @@ export interface Bot {
   params: Record<string, number>
   risk?: RiskRules
   guard?: GuardRules
+  market_timing?: MarketTimingRules
   capital: number
   mode: 'paper' | 'live'
   enabled: boolean
@@ -108,6 +109,7 @@ export interface BotInput {
   params?: Record<string, number>
   risk?: RiskRules
   guard?: GuardRules
+  market_timing?: MarketTimingRules
   capital: number
 }
 

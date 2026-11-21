@@ -96,12 +96,22 @@ export interface RiskRules {
   trailing_stop_pct?: number
 }
 
+export type MarketTimingMode = 'off' | 'block_buy' | 'half_size' | 'exit_all'
+
+export interface MarketTimingRules {
+  mode: MarketTimingMode
+  benchmark?: string
+  ma_short?: number
+  ma_long?: number
+}
+
 export interface BacktestRequest {
   market: Market
   symbol: string
   strategy: string
   params: Record<string, number>
   risk?: RiskRules
+  market_timing?: MarketTimingRules
   period: Period
   capital: number
   commission_pct: number
@@ -116,6 +126,7 @@ export interface BacktestResult {
   interval?: Interval
   params: Record<string, number>
   risk?: RiskRules
+  market_timing?: MarketTimingRules
   capital: number
   currency: string
   period: { start: number; end: number }

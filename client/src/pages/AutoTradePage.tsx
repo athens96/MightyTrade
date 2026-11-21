@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { autotradeApi, PREFILL_KEY, type Bot, type BotCategory, type BotEvent, type BotInput, type Evaluation } from '../api/autotrade'
 import { ApiError } from '../api/client'
+import { marketApi, type MarketRegime } from '../api/market'
 import { quantApi, type PortfolioModelMeta, type StrategyMeta } from '../api/quant'
 import { priceFormatter } from '../components/chart/format'
 import BotForm from '../components/autotrade/BotForm'
@@ -405,6 +406,7 @@ export default function AutoTradePage() {
   const [strategies, setStrategies] = useState<StrategyMeta[]>([])
   const [portfolioModels, setPortfolioModels] = useState<PortfolioModelMeta[]>([])
   const [status, setStatus] = useState<{ halted: boolean; scheduler: { running: boolean; last_tick: string | null } } | null>(null)
+  const [regimes, setRegimes] = useState<{ KR: MarketRegime; US: MarketRegime } | null>(null)
   const [creating, setCreating] = useState<(Partial<BotInput> & { category?: BotCategory }) | null>(null)
   const [resumeOtp, setResumeOtp] = useState('')
   const [error, setError] = useState<{ code: string; message: string } | null>(null)
@@ -412,6 +414,7 @@ export default function AutoTradePage() {
   const load = useCallback(() => {
     autotradeApi.bots().then((r) => setBots(r.items)).catch((e) => setError({ code: e instanceof ApiError ? e.code : '', message: e.message }))
     autotradeApi.status().then(setStatus).catch(() => undefined)
+    marketApi.regimes().then(setRegimes).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -446,6 +449,14 @@ export default function AutoTradePage() {
           <span className="small muted">
             <i className={`dot ${status.scheduler.running && !status.halted ? 'on' : ''}`} /> 스케줄러 {status.scheduler.running ? '동작 중' : '정지'}
             {status.scheduler.last_tick && ` · ${new Date(status.scheduler.last_tick).toLocaleTimeString('ko-KR', { hour12: false })}`}
+          </span>
+        )}
+        {regimes && (
+          <span
+            className="small muted"
+            title={`마켓 타이밍 기준 — 국내(${regimes.KR.benchmark}): ${regimes.KR.close ?? '-'} / 미국(${regimes.US.benchmark}): ${regimes.US.close ?? '-'}`}
+          >
+            시장온도: 국내 <b>{regimes.KR.label}</b> · 미국 <b>{regimes.US.label}</b>
           </span>
         )}
         <div className="spacer" />
