@@ -171,17 +171,29 @@ cd server && .venv/bin/python -m app.storage.sqlite_store ./data
 
 ## 배포 (Oracle Cloud)
 
-처음 한 번 (Ubuntu VM):
+MightyWork 와 같은 VM 에 올라가며, nginx 가 도메인으로 나눈다 (`mightytrade.duckdns.org` → 127.0.0.1:5001, `mightywork.duckdns.org` → 127.0.0.1:8000). 두 저장소는 같은 배포 구조를 쓴다:
 
-1. VCN Security List와 OS 방화벽(`iptables` + `netfilter-persistent save`)에서 80/443 개방
-2. `apt install nginx python3-venv certbot python3-certbot-nginx git rsync`, 시간대 `Asia/Seoul`
-3. `/opt/mighty-trade`에 git clone, `server/.venv` 생성 후 `pip install -r requirements.txt`
-4. `server/.env` 작성: `FLASK_ENV=production`, 새 `SECRET_KEY`·`ENCRYPTION_KEY`, `COOKIE_SECURE=true`, `DATA_DIR`, `GOOGLE_CLIENT_ID`, `ADMIN_EMAILS` (권한 600)
-5. `deploy/mighty-trade-api.service` → systemd, `deploy/nginx.conf` → `/etc/nginx/sites-available/` (`server_name` 수정)
-6. 도메인(예: DuckDNS)을 VM 공인 IP로 지정 → `certbot --nginx -d <도메인> --redirect` (자동 갱신 타이머 포함)
-7. 외부 설정: Google OAuth 클라이언트의 승인된 JavaScript 원본에 `https://<도메인>`, 토스 WTS 허용 IP에 VM 공인 IP
+| 파일 | 내용 |
+|---|---|
+| `scripts/deploy.sh` | 공통 스크립트 (두 저장소 동일 파일) |
+| `deploy/app.conf` | 앱별 값(경로·도메인·서비스·헬스 체크)과 설치 단계(`remote_install` 등) |
+| `deploy/nginx.conf` | nginx 사이트 템플릿 (처음 설치 때만 복사, 이후 certbot 이 고친 파일 유지) |
+| `deploy/mighty-trade-api.service` | systemd 유닛 (바뀌면 업데이트 때 자동 반영) |
+| `deploy/.env.deploy` | 접속 정보 `DEPLOY_HOST`, `DEPLOY_KEY` (git 제외) |
 
-업데이트: main에 푸시한 뒤 `./scripts/deploy.sh`. 클라이언트를 로컬에서 빌드해 올리고, 서버는 git pull, 의존성 설치, 재시작까지 한다. 접속 정보는 `deploy/.env.deploy`(git 제외)에 `DEPLOY_HOST`, `DEPLOY_KEY`, `DEPLOY_URL`로 둔다.
+```bash
+./scripts/deploy.sh            # 업데이트: main 에 푸시한 뒤. 서버 git pull·의존성·재시작 + 클라이언트 로컬 빌드 업로드
+./scripts/deploy.sh setup      # 처음 설치 (반복 실행 안전): 패키지·clone·systemd·nginx·HTTPS
+./scripts/deploy.sh status     # 서비스 상태·헬스 체크
+./scripts/deploy.sh logs 200   # 서비스 로그
+```
+
+처음 설치 전에 할 일:
+
+1. VCN Security List와 OS 방화벽(`iptables` + `netfilter-persistent save`)에서 80/443 개방, 시간대 `Asia/Seoul`
+2. DuckDNS 도메인을 VM 공인 IP로 지정
+3. VM 에 `/opt/mighty-trade/server/.env` 작성 (권한 600): `FLASK_ENV=production`, 새 `SECRET_KEY`·`ENCRYPTION_KEY`, `COOKIE_SECURE=true`, `DATA_DIR`, `GOOGLE_CLIENT_ID`, `ADMIN_EMAILS` — `setup` 은 이 파일을 만들지 않는다
+4. 외부 설정: Google OAuth 클라이언트의 승인된 JavaScript 원본에 `https://<도메인>`, 토스 WTS 허용 IP에 VM 공인 IP
 
 서버의 `server/.env`와 `server/data/`는 서버에만 있다. `ENCRYPTION_KEY`를 잃으면 저장된 토스 키와 OTP를 복구할 수 없으니 따로 백업한다.
 
