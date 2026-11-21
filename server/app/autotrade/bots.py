@@ -171,6 +171,9 @@ def log(bot: dict, kind: str, message: str, level: str = "info", data: Optional[
     if len(events) > MAX_EVENTS_PER_BOT:
         for e in sorted(events, key=lambda e: e["at"])[: len(events) - MAX_EVENTS_PER_BOT]:
             store.delete(EVENTS, e["id"])
+    if kind in ("order", "approval", "fill", "error", "skip", "halt", "protection"):
+        from . import notifier
+        notifier.notify_bot_log(bot, kind, message, level)
 
 
 def events(bot: dict, limit: int = 100) -> list:

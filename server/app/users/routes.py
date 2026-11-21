@@ -112,3 +112,30 @@ def delete_toss_credentials():
     credentials.delete_toss(uid)
     forget_client(uid, previous["client_id"] if previous else None)
     return jsonify(credentials.public_view(uid))
+
+
+# ------------------------------------------------------------------ trade notifications (MT-2)
+@bp.get("/me/notifications")
+@login_required
+def get_notifications():
+    return jsonify(credentials.public_notifications_view(g.user["id"]))
+
+
+@bp.put("/me/notifications")
+@login_required
+def put_notifications():
+    body = request.get_json(silent=True) or {}
+    return jsonify(credentials.save_notifications(g.user["id"], body))
+
+
+@bp.delete("/me/notifications")
+@login_required
+def delete_notifications():
+    return jsonify(credentials.delete_notifications(g.user["id"]))
+
+
+@bp.post("/me/notifications/test")
+@login_required
+def test_notifications():
+    from ..autotrade import notifier
+    return jsonify(notifier.send_test(g.user["id"]))

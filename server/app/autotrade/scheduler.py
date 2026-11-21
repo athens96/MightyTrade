@@ -22,7 +22,7 @@ from ..market import extras
 from ..users import credentials
 from ..users import repository as users
 from ..users.repository import now_iso
-from . import bots, executor
+from . import bots, executor, notifier
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +31,8 @@ OPEN_DELAY = timedelta(minutes=1)
 LATE_CUTOFF = timedelta(hours=1)
 RECONCILE_EVERY = timedelta(minutes=2)
 ERROR_BACKOFF = timedelta(minutes=10)
+BRIEFING_DELAY = timedelta(minutes=2)
+BRIEFING_WINDOW = timedelta(minutes=40)
 
 
 def sessions(market: str) -> list:
@@ -76,15 +78,22 @@ def tick(app: Flask, now: Optional[datetime] = None) -> None:
             g.user = user
             for market in sorted({b["market"] for b in user_bots}):
                 try:
-                    sess = active_session(market, now)
+                    all_sess = sessions(market)
                 except ApiError as e:
                     log.warning("calendar failed for %s/%s: %s", uid[:8], market, e.message)
                     continue
-                if not sess:
-                    continue
-                date, start, end = sess
-                for bot in (b for b in user_bots if b["market"] == market):
-                    _step(bot, date, start, end, now)
+                sess = next(((d, s, e) for d, s, e in all_sess if s <= now < e), None)
+                if sess:
+                    date, start, end = sess
+                    for bot in (b for b in user_bots if b["market"] == market):
+                        _step(bot, date, start, end, now)
+                else:
+                    closed = next(((d, s, e) for d, s, e in all_sess if e + BRIEFING_DELAY <= now < e + BRIEFING_WINDOW), None)
+                    if closed:
+                        try:
+                            notifier.maybe_send_daily_briefing(uid, market, closed[0])
+                        except Exception:  # noqa: BLE001
+                            log.exception("daily briefing failed for %s/%s", uid[:8], market)
 
 
 def _step(bot: dict, date: str, start: datetime, end: datetime, now: datetime) -> None:
