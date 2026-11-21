@@ -90,11 +90,18 @@ export interface EquityPoint {
 
 export type Period = '1y' | '3y' | '5y' | '10y' | 'max'
 
+export interface RiskRules {
+  stop_loss_pct?: number
+  take_profit_pct?: number
+  trailing_stop_pct?: number
+}
+
 export interface BacktestRequest {
   market: Market
   symbol: string
   strategy: string
   params: Record<string, number>
+  risk?: RiskRules
   period: Period
   capital: number
   commission_pct: number
@@ -108,6 +115,7 @@ export interface BacktestResult {
   strategy: string
   interval?: Interval
   params: Record<string, number>
+  risk?: RiskRules
   capital: number
   currency: string
   period: { start: number; end: number }

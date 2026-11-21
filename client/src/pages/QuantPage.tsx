@@ -88,6 +88,9 @@ interface Form {
   screenerTopN: number
   screenerExcludeWarnings: boolean
   screenerStrictOnly: boolean
+  stopLossPct: number
+  takeProfitPct: number
+  trailingStopPct: number
 }
 
 const DEFAULT_FORM: Form = {
@@ -119,6 +122,9 @@ const DEFAULT_FORM: Form = {
   screenerTopN: 20,
   screenerExcludeWarnings: true,
   screenerStrictOnly: false,
+  stopLossPct: 0,
+  takeProfitPct: 0,
+  trailingStopPct: 0,
 }
 
 const loadForm = (): Form => {
@@ -271,6 +277,11 @@ export default function QuantPage() {
       symbol: (overrideSymbol ?? form.symbol).trim().toUpperCase(),
       strategy: stratId,
       params: stratParams,
+      risk: {
+        stop_loss_pct: form.stopLossPct || 0,
+        take_profit_pct: form.takeProfitPct || 0,
+        trailing_stop_pct: form.trailingStopPct || 0,
+      },
       period: form.period,
       capital: costs.capital,
       commission_pct: costs.commission_pct,
@@ -676,17 +687,25 @@ export default function QuantPage() {
         )}
 
         {meta && !gridMode && !isPortfolio && !isScreener && (
-          <div className="params">
-            {meta.params.map((p) => {
-              const tip = getParamHint(sid, p.key, p.label, p.min, p.max)
-              return (
-                <label className="param" key={p.key} title={tip}>
-                  <span>{p.label}</span>
-                  <input type="number" min={p.min} max={p.max} step={p.step} value={params[p.key]} title={tip} onChange={(e) => setParam(p.key, Number(e.target.value))} />
-                </label>
-              )
-            })}
-          </div>
+          <>
+            <div className="params">
+              {meta.params.map((p) => {
+                const tip = getParamHint(sid, p.key, p.label, p.min, p.max)
+                return (
+                  <label className="param" key={p.key} title={tip}>
+                    <span>{p.label}</span>
+                    <input type="number" min={p.min} max={p.max} step={p.step} value={params[p.key]} title={tip} onChange={(e) => setParam(p.key, Number(e.target.value))} />
+                  </label>
+                )
+              })}
+            </div>
+            <fieldset className="costs">
+              <legend>공통 보호막 · 익절/손절 (0이면 끔)</legend>
+              {num('공통 손절 (%)', form.stopLossPct, (v) => set('stopLossPct', Math.max(0, Math.min(80, v))), 0.5, undefined, '매수가 대비 이 비율(%)만큼 떨어지면 전략 신호를 기다리지 않고 즉시 손절합니다 (0이면 사용 안 함)')}
+              {num('공통 목표 익절 (%)', form.takeProfitPct, (v) => set('takeProfitPct', Math.max(0, Math.min(80, v))), 0.5, undefined, '매수가 대비 이 비율(%)만큼 오르면 목표 수익을 확정하고 즉시 익절합니다 (0이면 사용 안 함)')}
+              {num('트레일링 스톱 (%)', form.trailingStopPct, (v) => set('trailingStopPct', Math.max(0, Math.min(80, v))), 0.5, undefined, '매수 후 찍은 최고가 대비 이 비율(%)만큼 되밀리면 수익을 지키며 자동 매도합니다 (0이면 사용 안 함)')}
+            </fieldset>
+          </>
         )}
 
         {meta && gridMode && (

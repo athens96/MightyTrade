@@ -9,6 +9,7 @@ from typing import Any, Optional
 from ..errors import ApiError
 from ..market.models import Market
 from ..quant import portfolio
+from ..quant.engine import RiskRules
 from ..quant.strategies import STRATEGIES, StrategyParamError
 from ..storage import get_store
 from ..users.repository import now_iso
@@ -111,10 +112,15 @@ def validate(body: dict, existing: Optional[dict] = None) -> dict:
         params = cls(src.get("params") or {}).p
     except StrategyParamError as e:
         raise ApiError(400, "invalid_params", str(e))
+    try:
+        risk = RiskRules.from_dict(src.get("risk")).to_dict()
+    except (TypeError, ValueError) as e:
+        raise ApiError(400, "invalid_risk", str(e))
     name = str(src.get("name") or f"{cls.name} · {symbol}")[:60]
     return {
         "kind": "single", "category": cls.category, "timeframe": cls.timeframe,
-        "name": name, "market": market, "symbol": symbol, "strategy": cls.id, "params": params, "capital": capital,
+        "name": name, "market": market, "symbol": symbol, "strategy": cls.id, "params": params,
+        "risk": risk, "capital": capital,
     }
 
 

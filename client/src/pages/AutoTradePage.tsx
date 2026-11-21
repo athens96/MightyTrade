@@ -133,7 +133,19 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         ) : (
           <>
             {bot.symbol} · <b>{meta?.name ?? bot.strategy}</b>{meta?.theory ? ` (${meta.theory})` : ''} ·{' '}
-            {Object.entries(bot.params).map(([k, v]) => `${k}=${v}`).join(', ')} · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
+            {Object.entries(bot.params).map(([k, v]) => `${k}=${v}`).join(', ')}
+            {bot.risk && (bot.risk.stop_loss_pct || bot.risk.take_profit_pct || bot.risk.trailing_stop_pct) ? (
+              <>
+                {' '}· 🛡️ 보호막(
+                {[
+                  bot.risk.stop_loss_pct ? `손절 -${bot.risk.stop_loss_pct}%` : '',
+                  bot.risk.take_profit_pct ? `익절 +${bot.risk.take_profit_pct}%` : '',
+                  bot.risk.trailing_stop_pct ? `트레일링 -${bot.risk.trailing_stop_pct}%` : '',
+                ].filter(Boolean).join(' / ')}
+                )
+              </>
+            ) : null}
+            {' '}· 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
           </>
         )}
       </p>

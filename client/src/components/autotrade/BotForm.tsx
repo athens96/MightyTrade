@@ -51,6 +51,9 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
     initial?.assets ?? portfolioModels.find((m) => m.id === (initial?.model ?? 'all_weather'))?.presets[initial?.market ?? 'US'] ?? [],
   )
   const [params, setParams] = useState<Record<string, number>>(initial?.params ?? {})
+  const [stopLossPct, setStopLossPct] = useState(initial?.risk?.stop_loss_pct ?? bot?.risk?.stop_loss_pct ?? 0)
+  const [takeProfitPct, setTakeProfitPct] = useState(initial?.risk?.take_profit_pct ?? bot?.risk?.take_profit_pct ?? 0)
+  const [trailingStopPct, setTrailingStopPct] = useState(initial?.risk?.trailing_stop_pct ?? bot?.risk?.trailing_stop_pct ?? 0)
   const [capital, setCapital] = useState(initial?.capital ?? (market === 'KR' ? 1_000_000 : 1_000))
   const [name, setName] = useState(initial?.name ?? '')
   const [watch, setWatch] = useState<WatchItem[]>([])
@@ -134,6 +137,11 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
           symbol: symbol.trim().toUpperCase(),
           strategy: meta.id,
           params: full,
+          risk: {
+            stop_loss_pct: stopLossPct || 0,
+            take_profit_pct: takeProfitPct || 0,
+            trailing_stop_pct: trailingStopPct || 0,
+          },
           capital,
         })
       }
@@ -283,6 +291,32 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
                    placeholder={isRebal ? (pModel ? `${pModel.name} (${market})` : '') : (meta ? `${meta.name} · ${symbol}` : '')} />
           </label>
         </div>
+
+        {!isRebal && (
+          <fieldset className="costs" style={{ marginTop: 10 }}>
+            <legend>🛡️ 공통 보호막 · 토스 OCO 자동 연동 (0이면 끔)</legend>
+            <div className="modal-grid">
+              <label title="매수가 대비 이 비율(%)만큼 떨어지면 즉시 손절합니다. 실거래 시 토스증권 조건주문으로 자동 등록됩니다">
+                <span>공통 손절 (%)</span>
+                <input type="number" min={0} max={80} step={0.5} value={stopLossPct}
+                       title="매수가 대비 이 비율(%)만큼 하락하면 즉시 손절합니다 (0 = 끔)"
+                       onChange={(e) => setStopLossPct(Math.max(0, Number(e.target.value)))} />
+              </label>
+              <label title="매수가 대비 이 비율(%)만큼 오르면 목표 수익을 확정합니다. 손절과 함께 켜면 토스 OCO 양방향 주문으로 등록됩니다">
+                <span>공통 목표 익절 (%)</span>
+                <input type="number" min={0} max={80} step={0.5} value={takeProfitPct}
+                       title="매수가 대비 이 비율(%)만큼 상승하면 목표 익절합니다 (0 = 끔)"
+                       onChange={(e) => setTakeProfitPct(Math.max(0, Number(e.target.value)))} />
+              </label>
+              <label title="주가가 오른 뒤 보유 중 최고가 대비 이 비율(%)만큼 밀리면 익절선을 따라 올리며 수익을 잠급니다">
+                <span>트레일링 스톱 (%)</span>
+                <input type="number" min={0} max={80} step={0.5} value={trailingStopPct}
+                       title="보유 중 최고가 대비 이 비율(%)만큼 하락하면 수익 보존 매도합니다 (0 = 끔)"
+                       onChange={(e) => setTrailingStopPct(Math.max(0, Number(e.target.value)))} />
+              </label>
+            </div>
+          </fieldset>
+        )}
 
         {isRebal && pModel && (
           <div style={{ marginTop: 10 }}>

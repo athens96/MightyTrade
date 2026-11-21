@@ -13,7 +13,7 @@ from ..market.models import Interval, Market
 from ..market.registry import get_provider
 from . import portfolio, screener, screener_data, worker
 from .data import cost_defaults
-from .engine import Backtester, Bars, Costs, buy_and_hold
+from .engine import Backtester, Bars, Costs, RiskRules, buy_and_hold
 from .metrics import performance
 from .optimize import OBJECTIVES, Axis, combos, max_warmup, parse_axis
 from .strategies import STRATEGIES, Strategy, StrategyParamError
@@ -49,6 +49,7 @@ class Setup:
     period: str
     capital: float
     costs: Costs
+    risk: RiskRules
 
 
 def _setup(body: dict) -> Setup:
@@ -65,6 +66,10 @@ def _setup(body: dict) -> Setup:
     period = body.get("period", "5y")
     if period not in PERIOD_DAYS:
         raise ApiError(400, "invalid_period")
+    try:
+        risk = RiskRules.from_dict(body.get("risk"))
+    except (TypeError, ValueError) as e:
+        raise ApiError(400, "invalid_risk", str(e))
     d = cost_defaults(market) if "commission_pct" not in body else {}
     return Setup(
         market, symbol, cls, body.get("params") or {}, period,
@@ -74,6 +79,7 @@ def _setup(body: dict) -> Setup:
             tax_pct=_num(body, "tax_pct", d.get("tax_pct", 0), 0, 5),
             slippage_pct=_num(body, "slippage_pct", d.get("slippage_pct", 0), 0, 5),
         ),
+        risk=risk,
     )
 
 
@@ -184,11 +190,12 @@ def backtest():
     s = _setup(request.get_json(silent=True) or {})
     strategy = _strategy(s.cls, s.params)
     candles, bars, start, warn = _load(s, strategy.warmup())
-    result = Backtester(bars, strategy, s.capital, s.costs, start).run()
+    result = Backtester(bars, strategy, s.capital, s.costs, start, risk=s.risk).run()
     codes = result.pop("warnings") + warn
     return jsonify(
         **_context(s, bars, start),
         params=strategy.p,
+        risk=s.risk.to_dict(),
         start_index=start,
         candles=[c.to_dict() for c in candles],
         chart_indicators=strategy.chart_indicators(),

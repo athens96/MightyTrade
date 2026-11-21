@@ -82,6 +82,39 @@ class Costs:
 
 
 @dataclass
+class RiskRules:
+    """Common strategy-agnostic protective exits (% from entry or highest high since entry)."""
+
+    stop_loss_pct: float = 0.0
+    take_profit_pct: float = 0.0
+    trailing_stop_pct: float = 0.0
+
+    @property
+    def enabled(self) -> bool:
+        return self.stop_loss_pct > 0 or self.take_profit_pct > 0 or self.trailing_stop_pct > 0
+
+    @classmethod
+    def from_dict(cls, raw: Optional[dict]) -> "RiskRules":
+        if not raw or not isinstance(raw, dict):
+            return cls()
+        vals = {}
+        for k in ("stop_loss_pct", "take_profit_pct", "trailing_stop_pct"):
+            v = raw.get(k, 0.0)
+            v = 0.0 if v in (None, "") else float(v)
+            if not 0.0 <= v <= 80.0:
+                raise ValueError(f"{k} must be between 0 and 80")
+            vals[k] = round(v, 4)
+        return cls(**vals)
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "stop_loss_pct": self.stop_loss_pct,
+            "take_profit_pct": self.take_profit_pct,
+            "trailing_stop_pct": self.trailing_stop_pct,
+        }
+
+
+@dataclass
 class Trade:
     entry_time: int
     entry_price: float
@@ -106,7 +139,7 @@ class Trade:
 
 class Backtester:
     def __init__(self, bars: Bars, strategy: "Strategy", capital: float, costs: Costs, start_index: int,
-                 whole_shares: bool = True):
+                 whole_shares: bool = True, risk: Optional[RiskRules] = None):
         if not 0 <= start_index < len(bars) - 1:
             raise ValueError("not enough bars for the backtest period")
         self.b = bars
@@ -115,8 +148,10 @@ class Backtester:
         self.costs = costs
         self.start = start_index
         self.whole_shares = whole_shares
+        self.risk = risk or RiskRules()
         self.cash = capital
         self.pos = Position()
+        self.peak_price = 0.0
         self.trades: list[Trade] = []
         self.warnings: list[str] = []
 
@@ -169,6 +204,7 @@ class Backtester:
         fee = value * comm
         self.cash -= value + fee
         self.pos = Position(qty, price, j)
+        self.peak_price = max(price, self.b.high[j])
         self.trades.append(Trade(self.b.time[j], price, qty, o.reason, _cost_basis=value + fee, _entry_index=j))
 
     def _sell(self, o: Order, j: int) -> None:
@@ -187,6 +223,32 @@ class Backtester:
         t.return_pct = t.pnl / t._cost_basis * 100
         t.bars = j - t._entry_index
         self.pos = Position()
+        self.peak_price = 0.0
+
+    def _check_risk_exit(self, j: int) -> bool:
+        if not self.pos.is_open or not self.risk.enabled:
+            return False
+        entry = self.pos.entry_price
+        r = self.risk
+        eff_stop: Optional[float] = None
+        stop_reason = ""
+        if r.stop_loss_pct > 0:
+            eff_stop = entry * (1.0 - r.stop_loss_pct / 100.0)
+            stop_reason = f"공통 손절 (-{r.stop_loss_pct:g}%)"
+        if r.trailing_stop_pct > 0 and self.peak_price > 0:
+            tr_level = self.peak_price * (1.0 - r.trailing_stop_pct / 100.0)
+            if eff_stop is None or tr_level > eff_stop:
+                eff_stop = tr_level
+                stop_reason = f"트레일링 스톱 (고점 대비 -{r.trailing_stop_pct:g}%)"
+        if eff_stop is not None and self.b.low[j] <= eff_stop:
+            self._sell(Order("sell", kind="stop", stop=eff_stop, reason=stop_reason), j)
+            return not self.pos.is_open
+        if r.take_profit_pct > 0:
+            tp_level = entry * (1.0 + r.take_profit_pct / 100.0)
+            if self.b.high[j] >= tp_level:
+                self._sell(Order("sell", kind="limit", limit=tp_level, reason=f"공통 익절 (+{r.take_profit_pct:g}%)"), j)
+                return not self.pos.is_open
+        return False
 
     # -------------------------------------------------------------------- run
     def run(self) -> dict[str, Any]:
@@ -196,9 +258,13 @@ class Backtester:
         equity: list[float] = []
         in_market = 0
         for j in range(self.start, len(b)):
+            exited_by_risk = self._check_risk_exit(j)
             for o in pending:  # orders decided at the previous close
+                if exited_by_risk and o.side == "sell":
+                    continue
                 (self._buy if o.side == "buy" else self._sell)(o, j)
             if self.pos.is_open:
+                self.peak_price = max(self.peak_price, b.high[j])
                 in_market += 1
             eq = self.cash + self.pos.qty * b.close[j]
             equity.append(eq)

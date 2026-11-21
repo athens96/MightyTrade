@@ -29,7 +29,10 @@ export default function BacktestView({ result, title }: { result: BacktestResult
   const indicators = useMemo(() => sanitize(result.chart_indicators), [result])
   const navigate = useNavigate()
   const makeBot = () => {
-    sessionStorage.setItem(PREFILL_KEY, JSON.stringify({ market: result.market, symbol: result.symbol, strategy: result.strategy, params: result.params }))
+    sessionStorage.setItem(
+      PREFILL_KEY,
+      JSON.stringify({ market: result.market, symbol: result.symbol, strategy: result.strategy, params: result.params, risk: result.risk }),
+    )
     navigate('/auto')
   }
 

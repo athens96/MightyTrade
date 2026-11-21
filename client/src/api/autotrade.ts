@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { PortfolioAsset, RebalanceMode } from './quant'
+import type { PortfolioAsset, RebalanceMode, RiskRules } from './quant'
 import type { Interval, Market } from './types'
 
 export type BotKind = 'single' | 'rebalance'
@@ -38,6 +38,7 @@ export interface Bot {
   rebalance?: RebalanceMode
   drift_pct?: number
   params: Record<string, number>
+  risk?: RiskRules
   capital: number
   mode: 'paper' | 'live'
   enabled: boolean
@@ -95,6 +96,7 @@ export interface BotInput {
   rebalance?: RebalanceMode
   drift_pct?: number
   params?: Record<string, number>
+  risk?: RiskRules
   capital: number
 }
 
