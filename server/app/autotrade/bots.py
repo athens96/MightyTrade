@@ -27,14 +27,17 @@ def bot_kind(bot: dict) -> str:
 
 
 def bot_category(bot: dict) -> str:
-    if bot_kind(bot) == "rebalance":
+    k = bot_kind(bot)
+    if k == "rebalance":
         return "rebalance"
+    if k == "rotation":
+        return "rotation"
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return getattr(cls, "category", "swing") if cls else "swing"
 
 
 def bot_timeframe(bot: dict) -> str:
-    if bot_kind(bot) == "rebalance":
+    if bot_kind(bot) in ("rebalance", "rotation"):
         return "1d"
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return getattr(cls, "timeframe", "1d") if cls else "1d"
@@ -53,7 +56,7 @@ def empty_rebalance_state(capital: float) -> dict:
 
 def has_open_position(bot: dict, mode: Optional[str] = None) -> bool:
     modes = (mode,) if mode else ("paper", "live")
-    if bot_kind(bot) == "rebalance":
+    if bot_kind(bot) in ("rebalance", "rotation"):
         return any(
             any(int(p.get("qty") or 0) > 0 for p in (bot["state"][m].get("positions") or {}).values())
             for m in modes
@@ -64,7 +67,7 @@ def has_open_position(bot: dict, mode: Optional[str] = None) -> bool:
 def validate(body: dict, existing: Optional[dict] = None) -> dict:
     src = {**(existing or {}), **body}
     kind = str(src.get("kind") or "single")
-    if kind not in ("single", "rebalance"):
+    if kind not in ("single", "rebalance", "rotation"):
         raise ApiError(400, "invalid_kind")
     try:
         market = Market(str(src.get("market", "")).upper()).value
@@ -104,6 +107,52 @@ def validate(body: dict, existing: Optional[dict] = None) -> dict:
             "params": params, "guard": guard, "capital": capital,
         }
 
+    if kind == "rotation":
+        from ..quant import screener
+        from . import rotation
+        preset_id = str(src.get("preset") or "momentum_quality")
+        preset = screener.SCREENER_PRESETS.get(preset_id)
+        if preset is None:
+            raise ApiError(400, "unknown_preset", "알 수 없는 종목 발굴 방식입니다")
+        if preset["kr_only"] and market != "KR":
+            raise ApiError(400, "kr_only_preset", "이 발굴 방식은 국내(KR) 시장 전용입니다")
+        universe = str(src.get("universe") or ("kr_all_150" if market == "KR" else "us_sp100"))
+        if universe not in screener.UNIVERSES[market] and universe not in screener.UNIVERSE_ALIASES:
+            raise ApiError(400, "unknown_universe", "알 수 없는 후보 종목 묶음입니다")
+        custom_raw = src.get("custom_symbols")
+        if isinstance(custom_raw, str):
+            custom_syms = [s.strip().upper() for s in re.split(r"[\s,;]+", custom_raw) if s.strip()]
+        elif isinstance(custom_raw, list):
+            custom_syms = [str(s).strip().upper() for s in custom_raw if str(s).strip()]
+        else:
+            custom_syms = []
+        if universe == "custom" and len(custom_syms) < 2:
+            raise ApiError(400, "too_few_symbols", "직접 입력 종목은 최소 2개 이상이어야 합니다")
+        try:
+            top_n = int(float(src.get("top_n", 5)))
+            hold_buffer = int(float(src.get("hold_buffer", max(top_n * 2, 10))))
+        except (TypeError, ValueError):
+            raise ApiError(400, "invalid_number", "상위 종목 수·유지 순위는 정수여야 합니다")
+        if not 2 <= top_n <= 15:
+            raise ApiError(400, "out_of_range", "상위 편입 종목 수는 2 ~ 15개 범위여야 합니다")
+        if not top_n <= hold_buffer <= 40:
+            raise ApiError(400, "out_of_range", f"유지 순위 버퍼는 {top_n} ~ 40위 범위여야 합니다")
+        cadence = str(src.get("rebalance") or "weekly")
+        if cadence not in rotation.ROTATION_CADENCES:
+            raise ApiError(400, "invalid_rebalance", "순환 주기는 weekly / biweekly / monthly 중 하나여야 합니다")
+        strat_id = str(src.get("strategy") or preset["recommended_strategy"])
+        guard = protections.validate_guard(src.get("guard"))
+        mt_cfg = market_timing.validate_market_timing(src.get("market_timing"), market)
+        name = str(src.get("name") or f"순환매 · {preset['name']} ({market})")[:60]
+        return {
+            "kind": "rotation", "category": "rotation", "timeframe": "1d",
+            "name": name, "market": market, "symbol": f"{universe}:TOP{top_n}",
+            "preset": preset_id, "universe": universe, "custom_symbols": custom_syms,
+            "strategy": strat_id, "top_n": top_n, "hold_buffer": hold_buffer,
+            "rebalance": cadence, "exclude_warnings": bool(src.get("exclude_warnings", True)),
+            "params": {}, "guard": guard, "market_timing": mt_cfg, "capital": capital,
+        }
+
     symbol = str(src.get("symbol", "")).strip().upper()
     if not SYMBOL_RE[market].fullmatch(symbol):
         raise ApiError(400, "invalid_symbol")
@@ -133,7 +182,7 @@ def create(uid: str, body: dict) -> dict:
         raise ApiError(400, "too_many_bots", f"봇은 최대 {MAX_BOTS}개까지 만들 수 있습니다")
     fields = validate(body)
     bot_id = uuid.uuid4().hex[:12]
-    init_state = empty_rebalance_state if fields["kind"] == "rebalance" else empty_state
+    init_state = empty_rebalance_state if fields["kind"] in ("rebalance", "rotation") else empty_state
     rec = {**fields, "user_id": uid, "mode": "paper", "enabled": False, "created_at": now_iso(), "updated_at": now_iso(),
            "state": {"paper": init_state(fields["capital"]), "live": init_state(fields["capital"])}}
     return get_store().put(BOTS, bot_id, rec)
@@ -197,7 +246,7 @@ def public(bot: dict) -> dict:
     out["category"] = bot_category(bot)
     out["timeframe"] = bot_timeframe(bot)
     st = state(bot)
-    if out["kind"] == "rebalance":
+    if out["kind"] in ("rebalance", "rotation"):
         positions = st.get("positions") or {}
         last_prices = st.get("last_prices") or {}
         pos_val = sum(
@@ -211,6 +260,7 @@ def public(bot: dict) -> dict:
             "last_run_date": st["last_run_date"],
             "last_rebalance_date": st.get("last_rebalance_date"),
             "target_weights": st.get("target_weights") or {},
+            "selected_picks": st.get("selected_picks") or [],
             "last_prices": last_prices,
             "last_price": pos_val,
             "rebalances": (st.get("rebalances") or [])[-30:],

@@ -43,8 +43,12 @@ def is_rebalance(bot: dict) -> bool:
     return bots.bot_kind(bot) == "rebalance"
 
 
+def is_rotation(bot: dict) -> bool:
+    return bots.bot_kind(bot) == "rotation"
+
+
 def is_intraday(bot: dict) -> bool:
-    if is_rebalance(bot):
+    if is_rebalance(bot) or is_rotation(bot):
         return False
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return cls is not None and getattr(cls, "timeframe", "1d") != "1d"
@@ -187,6 +191,9 @@ def preview(bot: dict, today: str) -> dict:
     if is_rebalance(bot):
         from . import rebalance as rebal
         return rebal.preview(bot, today)
+    if is_rotation(bot):
+        from . import rotation as rot
+        return rot.preview(bot, today)
     d = decide_intraday(bot, today) if is_intraday(bot) else decide(bot, today)
     tb = d["today_bar"]
     return {
@@ -465,6 +472,9 @@ def reconcile_live(bot: dict, today: str) -> bool:
     if is_rebalance(bot):
         from . import rebalance as rebal
         return rebal.reconcile_live(bot, today)
+    if is_rotation(bot):
+        from . import rotation as rot
+        return rot.reconcile_live(bot, today)
     st = bot["state"]["live"]
     if not st["pending"]:
         return False
@@ -794,6 +804,9 @@ def run(bot: dict, today: str) -> dict:
     if is_rebalance(bot):
         from . import rebalance as rebal
         return rebal.run(bot, today)
+    if is_rotation(bot):
+        from . import rotation as rot
+        return rot.run(bot, today)
     return run_paper(bot, today) if bot["mode"] == "paper" else run_live(bot, today)
 
 

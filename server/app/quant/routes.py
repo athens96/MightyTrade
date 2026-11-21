@@ -405,3 +405,42 @@ def screener_run():
             top_n=top_n,
         )
     )
+
+
+@bp.post("/screener/rotation-backtest")
+@login_required
+def screener_rotation_backtest():
+    """Historical backtest for screener-linked periodic top-N stock rotation (MT-6)."""
+    from flask import g
+    from ..autotrade import rotation
+
+    body = request.get_json(silent=True) or {}
+    try:
+        market = Market(str(body.get("market", "")).upper())
+    except ValueError:
+        raise ApiError(400, "invalid_market")
+    preset = str(body.get("preset") or "momentum_quality")
+    universe = str(body.get("universe") or ("kr_all_150" if market == Market.KR else "us_sp100"))
+    custom = body.get("symbols")
+    if isinstance(custom, str):
+        custom = [s.strip() for s in re.split(r"[\s,;]+", custom) if s.strip()]
+    top_n = int(_num(body, "top_n", 5, 2, 15))
+    hold_buffer = int(_num(body, "hold_buffer", max(top_n * 2, 10), top_n, 40))
+    cadence = str(body.get("cadence") or "monthly")
+    period = str(body.get("period") or "3y")
+    d = cost_defaults(market)
+    capital = _num(body, "capital", d.get("capital", 10_000_000), 1, 1e13)
+    return jsonify(
+        rotation.run_rotation_backtest(
+            market,
+            preset,
+            universe,
+            custom_symbols=custom if isinstance(custom, list) else None,
+            top_n=top_n,
+            hold_buffer=hold_buffer,
+            cadence=cadence,
+            period=period,
+            capital=capital,
+            user_id=g.user["id"],
+        )
+    )

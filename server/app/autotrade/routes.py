@@ -85,7 +85,11 @@ def update_bot(bot_id: str):
     bot = bots.get(g.user["id"], bot_id)
     body = request.get_json(silent=True) or {}
     holding = bots.has_open_position(bot)
-    locked_keys = ("market", "model", "assets") if bots.bot_kind(bot) == "rebalance" else ("market", "symbol", "strategy")
+    kind = bots.bot_kind(bot)
+    locked_keys = (
+        ("market", "model", "assets") if kind == "rebalance"
+        else (("market", "preset", "universe") if kind == "rotation" else ("market", "symbol", "strategy"))
+    )
     if holding and any(k in body and body[k] != bot.get(k) for k in locked_keys):
         raise ApiError(409, "bot_has_position", "보유 중인 봇은 종목·전략(이론)을 바꿀 수 없습니다")
     fields = bots.validate(body, bot)
@@ -178,7 +182,7 @@ def reset(bot_id: str):
     if bot["mode"] != "paper":
         raise ApiError(400, "paper_only", "모의 모드 기록만 초기화할 수 있습니다")
     bot["state"]["paper"] = (
-        bots.empty_rebalance_state(bot["capital"]) if bots.bot_kind(bot) == "rebalance" else bots.empty_state(bot["capital"])
+        bots.empty_rebalance_state(bot["capital"]) if bots.bot_kind(bot) in ("rebalance", "rotation") else bots.empty_state(bot["capital"])
     )
     bots.log(bot, "config", "모의 기록 초기화")
     return jsonify(bot=bots.public(bots.save(bot)))

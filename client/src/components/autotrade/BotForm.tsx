@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { Bot, BotCategory, BotInput } from '../../api/autotrade'
+import type { Bot, BotCategory, BotInput, RotationCadence } from '../../api/autotrade'
 import { marketApi } from '../../api/market'
-import type { MarketTimingMode, PortfolioAsset, PortfolioModelMeta, PortfolioRole, RebalanceMode, StrategyMeta } from '../../api/quant'
+import { quantApi, type MarketTimingMode, type PortfolioAsset, type PortfolioModelMeta, type PortfolioRole, type RebalanceMode, type ScreenerPresetMeta, type ScreenerUniverseMeta, type StrategyMeta } from '../../api/quant'
 import type { Market, WatchItem } from '../../api/types'
 import { getParamHint } from '../../lib/paramHints'
 import { StrategyGuideBox } from '../GuideBox'
@@ -32,9 +32,11 @@ const REBAL_OPTIONS: { id: RebalanceMode; label: string }[] = [
 export default function BotForm({ strategies, portfolioModels, initial, bot, onSubmit, onClose }: Props) {
   const initialCat: BotCategory =
     bot?.category ??
-    (initial?.kind === 'rebalance'
-      ? 'rebalance'
-      : initial?.category ?? strategies.find((s) => s.id === initial?.strategy)?.category ?? 'swing')
+    (initial?.kind === 'rotation'
+      ? 'rotation'
+      : initial?.kind === 'rebalance'
+        ? 'rebalance'
+        : initial?.category ?? strategies.find((s) => s.id === initial?.strategy)?.category ?? 'swing')
 
   const [category, setCategory] = useState<BotCategory>(initialCat)
   const [market, setMarket] = useState<Market>(initial?.market ?? (initialCat === 'rebalance' ? 'US' : 'KR'))
@@ -44,7 +46,9 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
   )
   const [modelId, setModelId] = useState(initial?.model ?? portfolioModels[0]?.id ?? 'all_weather')
   const [rebalance, setRebalance] = useState<RebalanceMode>(
-    initial?.rebalance ?? portfolioModels.find((m) => m.id === (initial?.model ?? 'all_weather'))?.default_rebalance ?? 'monthly',
+    (initial?.kind === 'rebalance' ? (initial?.rebalance as RebalanceMode | undefined) : undefined) ??
+      portfolioModels.find((m) => m.id === (initial?.model ?? 'all_weather'))?.default_rebalance ??
+      'monthly',
   )
   const [driftPct, setDriftPct] = useState(initial?.drift_pct ?? 5)
   const [assets, setAssets] = useState<PortfolioAsset[]>(
@@ -60,6 +64,16 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
   const [dailyLossPct, setDailyLossPct] = useState(initial?.guard?.daily_loss_limit_pct ?? bot?.guard?.daily_loss_limit_pct ?? 0)
   const [mtMode, setMtMode] = useState<MarketTimingMode>(initial?.market_timing?.mode ?? bot?.market_timing?.mode ?? 'off')
   const [mtBench, setMtBench] = useState(initial?.market_timing?.benchmark ?? bot?.market_timing?.benchmark ?? '')
+  const [rotPresets, setRotPresets] = useState<ScreenerPresetMeta[]>([])
+  const [rotUniverses, setRotUniverses] = useState<Record<Market, ScreenerUniverseMeta[]>>({ KR: [], US: [] })
+  const [rotPreset, setRotPreset] = useState(initial?.preset ?? bot?.preset ?? 'momentum_quality')
+  const [rotUniverse, setRotUniverse] = useState(initial?.universe ?? bot?.universe ?? (market === 'KR' ? 'kr_all_150' : 'us_sp100'))
+  const [rotCustom, setRotCustom] = useState(
+    Array.isArray(initial?.custom_symbols) ? initial.custom_symbols.join(', ') : (typeof initial?.custom_symbols === 'string' ? initial.custom_symbols : (bot?.custom_symbols?.join(', ') ?? '')),
+  )
+  const [rotTopN, setRotTopN] = useState(initial?.top_n ?? bot?.top_n ?? 5)
+  const [rotBuffer, setRotBuffer] = useState(initial?.hold_buffer ?? bot?.hold_buffer ?? 10)
+  const [rotCadence, setRotCadence] = useState<RotationCadence>((initial?.rebalance as RotationCadence) ?? (bot?.rebalance as RotationCadence) ?? 'weekly')
   const [capital, setCapital] = useState(initial?.capital ?? (market === 'KR' ? 1_000_000 : 1_000))
   const [name, setName] = useState(initial?.name ?? '')
   const [watch, setWatch] = useState<WatchItem[]>([])
@@ -74,9 +88,14 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
 
   useEffect(() => {
     marketApi.watchlist().then((r) => setWatch(r.items)).catch(() => undefined)
+    quantApi.screenerPresets().then((r) => {
+      setRotPresets(r.presets)
+      setRotUniverses(r.universes)
+    }).catch(() => undefined)
   }, [])
 
   const isRebal = category === 'rebalance'
+  const isRot = category === 'rotation'
   const catStrategies = strategies.filter((s) => s.category === (category === 'daytrade' ? 'daytrade' : 'swing'))
   const meta = catStrategies.find((s) => s.id === strategy) ?? catStrategies[0]
   const pModel = portfolioModels.find((m) => m.id === modelId) ?? portfolioModels[0]
@@ -102,6 +121,10 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
     setMarket(nextMarket)
     if (!bot) setCapital(nextMarket === 'KR' ? 1_000_000 : 1_000)
     if (isRebal && pModel && !holding) setAssets(pModel.presets[nextMarket] ?? [])
+    if (!holding) {
+      setRotUniverse(nextMarket === 'KR' ? 'kr_all_150' : 'us_sp100')
+      if (nextMarket !== 'KR' && rotPreset === 'smart_money') setRotPreset('momentum_quality')
+    }
   }
 
   const switchModel = (nextId: string) => {
@@ -125,7 +148,27 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
       daily_loss_limit_pct: dailyLossPct || 0,
     }
     try {
-      if (isRebal) {
+      if (isRot) {
+        await onSubmit({
+          kind: 'rotation',
+          name: name || undefined,
+          market,
+          preset: rotPreset,
+          universe: rotUniverse,
+          custom_symbols: rotUniverse === 'custom' ? rotCustom : undefined,
+          top_n: rotTopN,
+          hold_buffer: Math.max(rotTopN, rotBuffer),
+          rebalance: rotCadence,
+          guard,
+          market_timing: {
+            mode: mtMode,
+            benchmark: mtBench || (market === 'KR' ? '069500' : 'SPY'),
+            ma_short: 20,
+            ma_long: 60,
+          },
+          capital,
+        })
+      } else if (isRebal) {
         if (!pModel) return
         const full = Object.fromEntries(pModel.params.map((p) => [p.key, value(p.key, p.default)]))
         await onSubmit({
@@ -173,7 +216,11 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
     }
   }
 
-  const canSubmit = isRebal ? assets.length >= 2 && assets.every((a) => a.symbol.trim()) : !!symbol.trim()
+  const canSubmit = isRot
+    ? (rotUniverse !== 'custom' || rotCustom.split(/[\s,;]+/).filter(Boolean).length >= 2)
+    : isRebal
+      ? assets.length >= 2 && assets.every((a) => a.symbol.trim())
+      : !!symbol.trim()
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -186,7 +233,8 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             {([
               ['swing', '스윙봇 (일봉)', '하루 한 번 일봉 종가를 보고 며칠~몇 주 추세를 타는 스윙 매매 봇입니다'],
               ['daytrade', '단타봇 (장중·분봉)', '장중 분봉이나 시초가 돌파를 노리고 장 마감 전 당일 모두 청산하는 단타 봇입니다'],
-              ['rebalance', '리밸런싱 봇 (포트폴리오)', '여러 주식·채권·금 ETF를 담아 매월·분기마다 목표 비중을 자동으로 맞춰주는 포트폴리오 봇입니다'],
+              ['rebalance', '리밸런싱 봇', '여러 주식·채권·금 ETF를 담아 매월·분기마다 목표 비중을 자동으로 맞춰주는 포트폴리오 봇입니다'],
+              ['rotation', '순환매 봇 (발굴)', '매주·매월 퀀트 종목발굴 상위 N종목을 자동으로 뽑아 순위 밖 종목만 교체해 주는 랭킹 봇입니다'],
             ] as [BotCategory, string, string][]).map(([id, label, tip]) => (
               <button type="button" key={id} className={category === id ? 'active' : ''} title={tip} onClick={() => switchCategory(id)}>
                 {label}
@@ -209,7 +257,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             </select>
           </label>
 
-          {!isRebal && (
+          {!isRebal && !isRot && (
             <>
               <label title="봇이 감시하고 매매할 종목 코드(예: 005930, AAPL)를 입력하거나 관심종목에서 고릅니다">
                 <span>종목 코드</span>
@@ -237,6 +285,57 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
                     <option key={s.id} value={s.id}>{s.name}{s.timeframe !== '1d' ? ` (${s.timeframe})` : ''}</option>
                   ))}
                 </select>
+              </label>
+            </>
+          )}
+
+          {isRot && (
+            <>
+              <label title="정기 순환매마다 어떤 퀀트 기준으로 상위 종목을 뽑을지 선택합니다">
+                <span>종목 발굴 방식</span>
+                <select value={rotPreset} disabled={holding} title="종목 발굴 공식을 선택합니다" onChange={(e) => setRotPreset(e.target.value)}>
+                  {rotPresets.map((p) => (
+                    <option key={p.id} value={p.id} disabled={p.kr_only && market !== 'KR'}>
+                      {p.name}{p.kr_only && market !== 'KR' ? ' (국내 전용)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label title="어느 대표 종목 묶음 안에서 상위 종목을 고를지 선택합니다">
+                <span>후보 종목 묶음</span>
+                <select value={rotUniverse} disabled={holding} title="스캔할 후보 종목 묶음을 선택합니다" onChange={(e) => setRotUniverse(e.target.value)}>
+                  {(rotUniverses[market] ?? []).map((u) => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+              </label>
+              {rotUniverse === 'custom' && (
+                <label title="직접 순환매할 후보 종목 코드들을 쉼표로 구분해 입력합니다 (최소 2개)">
+                  <span>직접 입력 종목 코드</span>
+                  <input value={rotCustom} title="쉼표로 구분해 종목 코드들을 입력합니다" onChange={(e) => setRotCustom(e.target.value.toUpperCase())} placeholder={market === 'KR' ? '005930, 000660, 005380' : 'AAPL, MSFT, NVDA'} />
+                </label>
+              )}
+              <label title="얼마나 자주 종목 순위를 다시 매겨 하위 탈락 종목을 교체할지 선택합니다">
+                <span>순환 교체 주기</span>
+                <select value={rotCadence} title="순환 교체 주기를 선택합니다" onChange={(e) => setRotCadence(e.target.value as RotationCadence)}>
+                  <option value="weekly">매주 초</option>
+                  <option value="biweekly">격주 (2주마다)</option>
+                  <option value="monthly">매월 초</option>
+                </select>
+              </label>
+              <label title="점수가 가장 높은 상위 몇 종목에 똑같이 나누어 투자할지 정합니다 (2~15종목)">
+                <span>상위 편입 수 (개)</span>
+                <input type="number" min={2} max={15} step={1} value={rotTopN} title="보유할 상위 종목 개수 (2~15)"
+                       onChange={(e) => {
+                         const v = Math.max(2, Math.min(15, Math.floor(Number(e.target.value))))
+                         setRotTopN(v)
+                         if (rotBuffer < v) setRotBuffer(v)
+                       }} />
+              </label>
+              <label title="이미 보유 중인 종목은 이 순위 안에 남아 있으면 굳이 팔지 않고 유지해 수수료와 세금을 아낍니다 (예: 상위 5개 매수, 10위 안이면 유지)">
+                <span>유지 버퍼 순위 (위)</span>
+                <input type="number" min={rotTopN} max={40} step={1} value={rotBuffer} title="보유 종목을 팔지 않고 유지할 허용 순위"
+                       onChange={(e) => setRotBuffer(Math.max(rotTopN, Math.min(40, Math.floor(Number(e.target.value)))))} />
               </label>
             </>
           )}
@@ -283,7 +382,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             />
           </label>
 
-          {!isRebal && meta?.params.map((p) => {
+          {!isRebal && !isRot && meta?.params.map((p) => {
             const tip = getParamHint(meta.id, p.key, p.label, p.min, p.max)
             return (
               <label key={p.key} title={tip}>
@@ -446,7 +545,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
           </div>
         )}
 
-        {!isRebal && meta && (
+        {!isRebal && !isRot && meta && (
           <>
             <p className="muted small" style={{ marginTop: 10 }}>
               <b>{meta.theory}</b><br />{meta.summary}

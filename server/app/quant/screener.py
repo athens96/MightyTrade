@@ -526,6 +526,7 @@ def _resolve_candidates(
     custom_symbols: Optional[list[str]],
     *,
     is_mock: bool,
+    user_id: Optional[str] = None,
 ) -> tuple[str, list[tuple[str, str]]]:
     m = market.value
     uid_norm = UNIVERSE_ALIASES.get(universe_id, universe_id)
@@ -549,7 +550,8 @@ def _resolve_candidates(
         return uid_norm, out
 
     if uid_norm == "watchlist":
-        rec = get_store().get(WATCHLISTS, g.user["id"])
+        uid = user_id or (getattr(g, "user", None) or {}).get("id")
+        rec = get_store().get(WATCHLISTS, uid) if uid else None
         wl = rec["items"] if rec else DEFAULT_WATCHLIST
         out = [(it["symbol"], it.get("name") or it["symbol"]) for it in wl if it.get("market") == m]
         if len(out) < 1:
@@ -888,6 +890,7 @@ def run_screen(
     exclude_warnings: bool = True,
     strict_only: bool = False,
     top_n: int = 20,
+    user_id: Optional[str] = None,
 ) -> dict[str, Any]:
     preset = SCREENER_PRESETS.get(preset_id)
     if preset is None:
@@ -905,7 +908,7 @@ def run_screen(
             raise ApiError(400, "daily_strategy_only", "전략 궁합 발굴은 일봉 전략(스윙·일봉 단타)만 지원합니다")
 
     is_mock = current_app.config["MARKET_PROVIDERS"][market.value] != "toss"
-    uni_norm, candidates = _resolve_candidates(market, universe_id, custom_symbols, is_mock=is_mock)
+    uni_norm, candidates = _resolve_candidates(market, universe_id, custom_symbols, is_mock=is_mock, user_id=user_id)
     syms = [s for s, _ in candidates]
     name_map = dict(candidates)
 

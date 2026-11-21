@@ -10,8 +10,8 @@ import { FeatureGuideBox, StrategyGuideBox } from '../components/GuideBox'
 import { investingUrl } from '../lib/externalLinks'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
 
-const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱' }
-const REBAL_LABEL: Record<string, string> = { monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈' }
+const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱', rotation: '순환매' }
+const REBAL_LABEL: Record<string, string> = { weekly: '매주 초', biweekly: '격주(2주)', monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈' }
 
 const money = (b: Bot, v: number | null | undefined) =>
   v == null ? '-' : `${priceFormatter(b.market)(v)}${b.market === 'KR' ? '원' : ' USD'}`
@@ -63,9 +63,10 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const isRebal = bot.kind === 'rebalance'
+  const isRebal = bot.kind === 'rebalance' || bot.kind === 'rotation'
+  const isRot = bot.kind === 'rotation'
   const meta = !isRebal ? strategies.find((s) => s.id === bot.strategy) : undefined
-  const pModel = isRebal ? portfolioModels.find((m) => m.id === bot.model) : undefined
+  const pModel = bot.kind === 'rebalance' ? portfolioModels.find((m) => m.id === bot.model) : undefined
 
   const loadEvents = useCallback(() => {
     autotradeApi.bot(bot.id).then((r) => setEvents(r.events)).catch(() => undefined)
@@ -129,7 +130,11 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         </button>
       </div>
       <p className="muted small">
-        {isRebal ? (
+        {isRot ? (
+          <>
+            <b>종목발굴 순환매 ({bot.preset})</b> · 후보군 {bot.universe} · 상위 {bot.top_n}종목 (유지버퍼 {bot.hold_buffer}위) · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
+          </>
+        ) : isRebal ? (
           <>
             <b>{pModel?.name ?? bot.model}</b> ({pModel?.theory}) · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
           </>
@@ -257,6 +262,36 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
           )}
         </div>
       )}
+
+          {isRot && Object.keys(positions).length > 0 && !bot.assets && (
+            <>
+              <h4>순환매 현재 보유 종목 ({Object.keys(positions).length}종목)</h4>
+              <div className="trades-wrap">
+                <table className="trades left-first">
+                  <thead>
+                    <tr><th>종목</th><th>보유</th><th>평균단가</th><th>현재가</th><th>현재 비중</th><th>목표 비중</th></tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(positions).map(([sym, p]) => {
+                      const px = s.last_prices?.[sym] ?? p.entry_price
+                      const curW = totalRebalVal > 0 && px ? (p.qty * px / totalRebalVal) * 100 : 0
+                      const tgtW = s.target_weights?.[sym]
+                      return (
+                        <tr key={sym}>
+                          <td><b>{p.name && p.name !== sym ? `${p.name} (${sym})` : sym}</b></td>
+                          <td>{p.qty.toLocaleString()}주</td>
+                          <td>{money(bot, p.entry_price)}</td>
+                          <td>{px ? money(bot, px) : '-'}</td>
+                          <td>{curW.toFixed(1)}%</td>
+                          <td><b>{tgtW != null ? `${tgtW.toFixed(1)}%` : '교체 대기'}</b></td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
 
       {isRebal && bot.assets && (
         <>
@@ -498,8 +533,11 @@ export default function AutoTradePage() {
         )}
         <button
           className="primary"
-          title="새로운 스윙·단타·리밸런싱 자동매매 봇을 만듭니다 (처음엔 안전한 모의 모드·꺼진 상태로 생성)"
-          onClick={() => setCreating({ category: filter === 'all' ? 'swing' : filter, ...(filter === 'rebalance' ? { kind: 'rebalance' } : {}) })}
+          title="새로운 스윙·단타·리밸런싱·순환매 자동매매 봇을 만듭니다 (처음엔 안전한 모의 모드·꺼진 상태로 생성)"
+          onClick={() => setCreating({
+            category: filter === 'all' ? 'swing' : filter,
+            ...(filter === 'rebalance' ? { kind: 'rebalance' } : filter === 'rotation' ? { kind: 'rotation' } : {}),
+          })}
         >
           + 봇 만들기
         </button>
@@ -510,6 +548,7 @@ export default function AutoTradePage() {
         <button className={filter === 'swing' ? 'active' : ''} title="일봉 기준으로 며칠~몇 주 추세를 타는 스윙봇만 모아서 봅니다" onClick={() => setFilter('swing')}>스윙봇 {countOf('swing')}</button>
         <button className={filter === 'daytrade' ? 'active' : ''} title="장중 분봉·시초가 돌파를 노리고 당일 마감 전에 청산하는 단타봇만 봅니다" onClick={() => setFilter('daytrade')}>단타봇 {countOf('daytrade')}</button>
         <button className={filter === 'rebalance' ? 'active' : ''} title="여러 ETF를 묶어 정기적으로 목표 비중을 맞춰주는 자산배분 리밸런싱 봇만 봅니다" onClick={() => setFilter('rebalance')}>리밸런싱 봇 {countOf('rebalance')}</button>
+        <button className={filter === 'rotation' ? 'active' : ''} title="종목 발굴 상위 N종목을 매주·매월 자동 교체해 굴리는 순환매 봇만 봅니다" onClick={() => setFilter('rotation')}>순환매 봇 {countOf('rotation')}</button>
       </div>
       <FeatureGuideBox guide={FEATURE_GUIDES.autotrade} />
 
@@ -519,10 +558,11 @@ export default function AutoTradePage() {
         <aside className="bot-list">
           {visibleBots.map((b) => {
             const p = botPnl(b)
-            const heldCount = b.kind === 'rebalance'
+            const multiKind = b.kind === 'rebalance' || b.kind === 'rotation'
+            const heldCount = multiKind
               ? Object.values(b.state.positions ?? {}).filter((x) => x.qty > 0).length
               : b.state.position.qty
-            const heldLabel = b.kind === 'rebalance'
+            const heldLabel = multiKind
               ? (heldCount ? `${heldCount}종목 보유` : '미구성')
               : (heldCount ? `${heldCount}주 보유` : '미보유')
             return (

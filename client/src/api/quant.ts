@@ -421,6 +421,23 @@ export interface ScreenerResult {
   items: ScreenerRow[]
 }
 
+export interface RotationBacktestResult {
+  market: Market
+  preset: string
+  universe: string
+  top_n: number
+  hold_buffer: number
+  cadence: 'weekly' | 'biweekly' | 'monthly'
+  capital: number
+  currency: string
+  period: { start: number; end: number }
+  equity: EquityPoint[]
+  metrics: Metrics & { rebalances: number }
+  benchmark: Metrics
+  rebalances: PortfolioRebalanceEntry[]
+  current_weights: Record<string, number>
+}
+
 export const quantApi = {
   strategies: () => api<{ items: StrategyMeta[]; objectives: Record<string, string> }>('/quant/strategies'),
   optimize: (req: GridRequest) => api<OptimizeResult>('/quant/optimize', { method: 'POST', json: req }),
@@ -432,4 +449,14 @@ export const quantApi = {
   portfolioBacktest: (req: PortfolioBacktestRequest) => api<PortfolioBacktestResult>('/quant/portfolio/backtest', { method: 'POST', json: req }),
   screenerPresets: () => api<ScreenerPresetsResponse>('/quant/screener/presets'),
   screenerRun: (req: ScreenerRunRequest) => api<ScreenerResult>('/quant/screener/run', { method: 'POST', json: req }),
+  screenerRotationBacktest: (req: {
+    market: Market
+    preset: string
+    universe: string
+    symbols?: string | string[]
+    top_n?: number
+    hold_buffer?: number
+    cadence?: 'weekly' | 'biweekly' | 'monthly'
+    period?: '1y' | '3y' | '5y'
+  }) => api<RotationBacktestResult>('/quant/screener/rotation-backtest', { method: 'POST', json: req }),
 }

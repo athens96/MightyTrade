@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PREFILL_KEY } from '../../api/autotrade'
-import type { PortfolioAsset, ScreenerPresetMeta, ScreenerResult, ScreenerRow } from '../../api/quant'
+import { quantApi, type PortfolioAsset, type RotationBacktestResult, type ScreenerPresetMeta, type ScreenerResult, type ScreenerRow } from '../../api/quant'
 import { investingUrl } from '../../lib/externalLinks'
 import { priceFormatter } from '../chart/format'
+import EquityChart from './EquityChart'
+import MetricsTable from './MetricsTable'
 
 const pct = (v: number | null | undefined, digits = 1, signed = true) => {
   if (v == null || Number.isNaN(v)) return '-'
@@ -39,6 +42,9 @@ interface Props {
 export default function ScreenerView({ result, preset, onBacktest, onPortfolio }: Props) {
   const navigate = useNavigate()
   const money = priceFormatter(result.market)
+  const [rotBt, setRotBt] = useState<RotationBacktestResult | null>(null)
+  const [rotBusy, setRotBusy] = useState(false)
+  const [rotErr, setRotErr] = useState('')
 
   const buildTopPortfolio = (count = 5): { assets: PortfolioAsset[]; modelId: string } => {
     const picks = result.items.slice(0, Math.min(count, result.items.length))
@@ -90,6 +96,45 @@ export default function ScreenerView({ result, preset, onBacktest, onPortfolio }
     navigate('/auto')
   }
 
+  const sendToRotationBot = () => {
+    sessionStorage.setItem(
+      PREFILL_KEY,
+      JSON.stringify({
+        kind: 'rotation',
+        category: 'rotation',
+        market: result.market,
+        preset: result.preset,
+        universe: result.universe,
+        strategy: result.strategy,
+        top_n: Math.min(5, Math.max(2, result.items.length)),
+        hold_buffer: 10,
+        rebalance: 'weekly',
+      }),
+    )
+    navigate('/auto')
+  }
+
+  const runRotationSim = async () => {
+    setRotBusy(true)
+    setRotErr('')
+    try {
+      const r = await quantApi.screenerRotationBacktest({
+        market: result.market,
+        preset: result.preset,
+        universe: result.universe,
+        top_n: Math.min(5, Math.max(2, result.items.length)),
+        hold_buffer: 10,
+        cadence: 'monthly',
+        period: '3y',
+      })
+      setRotBt(r)
+    } catch (e) {
+      setRotErr((e as Error).message)
+    } finally {
+      setRotBusy(false)
+    }
+  }
+
   const p = result.preset
   const isFund = p === 'magic_formula' || p === 'multifactor'
   const isDiv = p === 'dividend_lowvol'
@@ -107,6 +152,14 @@ export default function ScreenerView({ result, preset, onBacktest, onPortfolio }
             <div className="screener-actions">
               <button
                 type="button"
+                disabled={rotBusy}
+                title="이 발굴 공식으로 최근 3년간 매월 상위 5종목을 자동 교체했을 때의 과거 성과를 백테스트합니다"
+                onClick={runRotationSim}
+              >
+                {rotBusy ? '순환매 검증 중…' : '순환매 3년 백테스트'}
+              </button>
+              <button
+                type="button"
                 title="발굴된 상위 종목들을 포트폴리오 탭에 자동으로 담아 분산 투자 성과를 바로 백테스트합니다"
                 onClick={() => {
                   const { assets, modelId } = buildTopPortfolio(5)
@@ -118,10 +171,17 @@ export default function ScreenerView({ result, preset, onBacktest, onPortfolio }
               <button
                 type="button"
                 className="primary"
-                title="발굴된 상위 종목들을 묶어 정기적으로 비중을 맞추는 자동매매 리밸런싱 봇 생성 창을 엽니다 (모의 모드 시작)"
+                title="매주/매월 이 발굴 공식을 자동 실행해 상위 종목으로 교체해 주는 '자동 순환매 랭킹 봇'을 만듭니다"
+                onClick={sendToRotationBot}
+              >
+                🔄 자동 순환매 봇 만들기 →
+              </button>
+              <button
+                type="button"
+                title="발굴된 상위 종목들을 고정 바구니로 묶어 리밸런싱 봇을 만듭니다"
                 onClick={sendTopToRebalBot}
               >
-                상위 {Math.min(5, result.items.length)}종 리밸런싱 봇 →
+                고정 리밸런싱 봇 →
               </button>
             </div>
           )}
@@ -140,6 +200,20 @@ export default function ScreenerView({ result, preset, onBacktest, onPortfolio }
       {result.notices.map((n, i) => (
         <p key={i} className="warn small">{n}</p>
       ))}
+      {rotErr && <p className="error small">{rotErr}</p>}
+      {rotBt && (
+        <div className="panel" style={{ marginBottom: 14 }}>
+          <div className="account-head">
+            <h4>🔄 순환매 백테스트 결과 (상위 {rotBt.top_n}종 · 유지버퍼 {rotBt.hold_buffer}위 · 총 {rotBt.metrics.rebalances}회 교체)</h4>
+            <div className="spacer" />
+            <button type="button" className="link" title="순환매 백테스트 결과를 접습니다" onClick={() => setRotBt(null)}>닫기</button>
+          </div>
+          <div className="result-grid">
+            <MetricsTable strategy={rotBt.metrics} benchmark={rotBt.benchmark} market={rotBt.market} />
+            <EquityChart points={rotBt.equity} market={rotBt.market} />
+          </div>
+        </div>
+      )}
 
       {result.items.length === 0 ? (
         <div className="placeholder muted">조건에 맞는 종목이 없습니다. 다른 후보 묶음이나 발굴 방식을 선택해 보세요.</div>

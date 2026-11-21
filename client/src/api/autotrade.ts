@@ -2,8 +2,9 @@ import { api } from './client'
 import type { MarketTimingRules, PortfolioAsset, RebalanceMode, RiskRules } from './quant'
 import type { Interval, Market } from './types'
 
-export type BotKind = 'single' | 'rebalance'
-export type BotCategory = 'swing' | 'daytrade' | 'rebalance'
+export type BotKind = 'single' | 'rebalance' | 'rotation'
+export type BotCategory = 'swing' | 'daytrade' | 'rebalance' | 'rotation'
+export type RotationCadence = 'weekly' | 'biweekly' | 'monthly'
 
 export interface BotTrade {
   entry_date: string
@@ -42,7 +43,13 @@ export interface Bot {
   strategy?: string
   model?: string
   assets?: PortfolioAsset[]
-  rebalance?: RebalanceMode
+  preset?: string
+  universe?: string
+  custom_symbols?: string[]
+  top_n?: number
+  hold_buffer?: number
+  exclude_warnings?: boolean
+  rebalance?: RebalanceMode | RotationCadence
   drift_pct?: number
   params: Record<string, number>
   risk?: RiskRules
@@ -55,8 +62,9 @@ export interface Bot {
   updated_at: string
   state: {
     position: { qty: number; entry_price: number; entry_date: string | null }
-    positions?: Record<string, { qty: number; entry_price: number }>
+    positions?: Record<string, { qty: number; entry_price: number; name?: string }>
     target_weights?: Record<string, number>
+    selected_picks?: { symbol: string; name: string; rank: number; score: number }[]
     last_prices?: Record<string, number>
     last_rebalance_date?: string | null
     rebalances?: BotRebalanceLog[]
@@ -104,7 +112,13 @@ export interface BotInput {
   strategy?: string
   model?: string
   assets?: PortfolioAsset[]
-  rebalance?: RebalanceMode
+  preset?: string
+  universe?: string
+  custom_symbols?: string[] | string
+  top_n?: number
+  hold_buffer?: number
+  exclude_warnings?: boolean
+  rebalance?: RebalanceMode | RotationCadence
   drift_pct?: number
   params?: Record<string, number>
   risk?: RiskRules
