@@ -299,6 +299,7 @@ export interface PortfolioBacktestRequest {
   params: Record<string, number>
   rebalance: RebalanceMode
   drift_pct: number
+  buy_only?: boolean
   period: Period
   capital: number
   commission_pct: number
@@ -313,6 +314,7 @@ export interface PortfolioBacktestResult {
   params: Record<string, number>
   rebalance: RebalanceMode
   drift_pct: number
+  buy_only?: boolean
   capital: number
   currency: string
   period: { start: number; end: number }

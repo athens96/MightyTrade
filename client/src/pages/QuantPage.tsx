@@ -80,6 +80,7 @@ interface Form {
   portfolioModel: string
   portfolioRebalance: RebalanceMode
   portfolioDriftPct: number
+  portfolioBuyOnly: boolean
   portfolioParams: Record<string, Record<string, number>>
   portfolioAssets: Record<string, PortfolioAsset[]>
   screenerPreset: string
@@ -116,6 +117,7 @@ const DEFAULT_FORM: Form = {
   portfolioModel: 'all_weather',
   portfolioRebalance: 'quarterly',
   portfolioDriftPct: 5,
+  portfolioBuyOnly: false,
   portfolioParams: {},
   portfolioAssets: {},
   screenerPreset: 'momentum_quality',
@@ -337,6 +339,7 @@ export default function QuantPage() {
           params: pParams,
           rebalance: form.portfolioRebalance,
           drift_pct: form.portfolioDriftPct,
+          buy_only: form.portfolioBuyOnly,
           period: form.period,
           capital: costs.capital,
           commission_pct: costs.commission_pct,
@@ -570,6 +573,10 @@ export default function QuantPage() {
                 </select>
               </label>
               {form.portfolioRebalance === 'drift' && num('허용 편차 (%)', form.portfolioDriftPct, (v) => set('portfolioDriftPct', v), 0.5, undefined, '목표 비중에서 몇 %p 이상 벗어났을 때만 사고팔아 비중을 다시 맞출지 정합니다 (기본 5%)')}
+              <label className="check small" title="켜면 기존 보유 주식을 절대 팔지 않고(매도세금·수수료 0원), 남아 있는 현금으로 비중이 부족한 자산만 사서 채웁니다">
+                <input type="checkbox" checked={!!form.portfolioBuyOnly} onChange={(e) => set('portfolioBuyOnly', e.target.checked)} />
+                <span>무매도(Buy-Only) 리밸런싱 (세금·매도수수료 절감)</span>
+              </label>
               {pModel.params.map((p) => {
                 const tip = getParamHint(pMid, p.key, p.label, p.min, p.max)
                 return (

@@ -355,7 +355,8 @@ def portfolio_backtest():
         provider = get_provider(market)
         for sym in missing:
             bars_by_sym[sym] = Bars.from_candles(provider.get_history(market, sym, Interval.D1, fetch_from))
-    res = worker.run_portfolio(bars_by_sym, model.id, assets, params, rebalance, drift_pct, capital, costs, start_ts)
+    buy_only = bool(body.get("buy_only", False))
+    res = worker.run_portfolio(bars_by_sym, model.id, assets, params, rebalance, drift_pct, capital, costs, start_ts, buy_only=buy_only)
     warn_codes = res.pop("warnings", [])
     return jsonify(
         market=market.value,
@@ -364,6 +365,7 @@ def portfolio_backtest():
         params=params,
         rebalance=rebalance,
         drift_pct=drift_pct,
+        buy_only=buy_only,
         capital=capital,
         currency="KRW" if market == Market.KR else "USD",
         costs=costs.__dict__,

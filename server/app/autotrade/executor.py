@@ -47,8 +47,12 @@ def is_rotation(bot: dict) -> bool:
     return bots.bot_kind(bot) == "rotation"
 
 
+def is_dca(bot: dict) -> bool:
+    return bots.bot_kind(bot) == "dca"
+
+
 def is_intraday(bot: dict) -> bool:
-    if is_rebalance(bot) or is_rotation(bot):
+    if is_rebalance(bot) or is_rotation(bot) or is_dca(bot):
         return False
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return cls is not None and getattr(cls, "timeframe", "1d") != "1d"
@@ -194,6 +198,9 @@ def preview(bot: dict, today: str) -> dict:
     if is_rotation(bot):
         from . import rotation as rot
         return rot.preview(bot, today)
+    if is_dca(bot):
+        from . import dca
+        return dca.preview(bot, today)
     d = decide_intraday(bot, today) if is_intraday(bot) else decide(bot, today)
     tb = d["today_bar"]
     return {
@@ -807,6 +814,9 @@ def run(bot: dict, today: str) -> dict:
     if is_rotation(bot):
         from . import rotation as rot
         return rot.run(bot, today)
+    if is_dca(bot):
+        from . import dca
+        return dca.run(bot, today)
     return run_paper(bot, today) if bot["mode"] == "paper" else run_live(bot, today)
 
 

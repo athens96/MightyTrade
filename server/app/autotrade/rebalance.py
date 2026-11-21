@@ -93,26 +93,49 @@ def decide(bot: dict, today: str, loaded: Optional[tuple] = None) -> dict[str, A
 
     c = _costs(Market(bot["market"]))
     headroom = max((c.slippage_pct + c.commission_pct) / 100.0, LIVE_BUY_HEADROOM)
+    buy_only = bool(bot.get("buy_only", False))
     sells, buys = [], []
-    for a in assets:
-        s = a["symbol"]
-        cur_qty = int(positions.get(s, {}).get("qty") or 0)
-        w = tgt_w.get(s, 0.0)
-        px = open_prices[s]
-        tgt_qty = math.floor(total_val * w / (px * (1.0 + headroom))) if w > 0 and px > 0 else 0
-        diff = tgt_qty - cur_qty
-        if diff < 0:
-            sells.append({
-                "symbol": s, "side": "sell", "kind": "market", "qty": -diff,
-                "price": px, "current_pct": round(cur_w[s] * 100, 1), "target_pct": round(w * 100, 1),
-                "text": f"{s} 매도 {-diff}주 (현재 {cur_w[s] * 100:.1f}% → 목표 {w * 100:.1f}%)",
-            })
-        elif diff > 0:
-            buys.append({
-                "symbol": s, "side": "buy", "kind": "market", "qty": diff,
-                "price": px, "current_pct": round(cur_w[s] * 100, 1), "target_pct": round(w * 100, 1),
-                "text": f"{s} 매수 {diff}주 (현재 {cur_w[s] * 100:.1f}% → 목표 {w * 100:.1f}%)",
-            })
+    if buy_only:
+        # Cash-inflow Buy-Only mode (Passiv style): never sell existing holdings; deploy cash into underweight assets
+        avail_cash = float(st.get("cash", 0.0)) if bot["mode"] == "paper" else max(float(bot["capital"]) - pos_val, 0.0)
+        tot_after = pos_val + avail_cash
+        deficits = {
+            a["symbol"]: max(0.0, tot_after * tgt_w.get(a["symbol"], 0.0) - int(positions.get(a["symbol"], {}).get("qty") or 0) * open_prices[a["symbol"]])
+            for a in assets
+        }
+        sum_def = sum(deficits.values())
+        if sum_def > 0 and avail_cash > 0:
+            for a in assets:
+                s = a["symbol"]
+                px = open_prices[s]
+                alloc = avail_cash * (deficits[s] / sum_def)
+                add_q = math.floor(alloc / (px * (1.0 + headroom))) if px > 0 and alloc > 0 else 0
+                if add_q > 0:
+                    buys.append({
+                        "symbol": s, "side": "buy", "kind": "market", "qty": add_q,
+                        "price": px, "current_pct": round(cur_w[s] * 100, 1), "target_pct": round(tgt_w.get(s, 0.0) * 100, 1),
+                        "text": f"{s} 무매도 부족분 매수 {add_q}주 (현재 {cur_w[s] * 100:.1f}% → 목표 {tgt_w.get(s, 0.0) * 100:.1f}%)",
+                    })
+    else:
+        for a in assets:
+            s = a["symbol"]
+            cur_qty = int(positions.get(s, {}).get("qty") or 0)
+            w = tgt_w.get(s, 0.0)
+            px = open_prices[s]
+            tgt_qty = math.floor(total_val * w / (px * (1.0 + headroom))) if w > 0 and px > 0 else 0
+            diff = tgt_qty - cur_qty
+            if diff < 0:
+                sells.append({
+                    "symbol": s, "side": "sell", "kind": "market", "qty": -diff,
+                    "price": px, "current_pct": round(cur_w[s] * 100, 1), "target_pct": round(w * 100, 1),
+                    "text": f"{s} 매도 {-diff}주 (현재 {cur_w[s] * 100:.1f}% → 목표 {w * 100:.1f}%)",
+                })
+            elif diff > 0:
+                buys.append({
+                    "symbol": s, "side": "buy", "kind": "market", "qty": diff,
+                    "price": px, "current_pct": round(cur_w[s] * 100, 1), "target_pct": round(w * 100, 1),
+                    "text": f"{s} 매수 {diff}주 (현재 {cur_w[s] * 100:.1f}% → 목표 {w * 100:.1f}%)",
+                })
 
     return {
         "date": today,
@@ -168,15 +191,28 @@ def run_paper(bot: dict, today: str) -> dict[str, Any]:
     syms = [a["symbol"] for a in bot["assets"]]
 
     if d["due"]:
+        buy_only = bool(bot.get("buy_only", False))
         val_open = float(st["cash"]) + sum(int(positions.get(s, {}).get("qty") or 0) * d["open_prices"][s] for s in syms)
         tgt_w = d["target_weights_raw"]
         desired = {}
-        for s in syms:
-            px_buy = d["open_prices"][s] * (1.0 + slip) * (1.0 + comm)
-            desired[s] = math.floor(val_open * tgt_w.get(s, 0.0) / px_buy) if tgt_w.get(s, 0.0) > 0 and px_buy > 0 else 0
+        if buy_only:
+            deficits = {
+                s: max(0.0, val_open * tgt_w.get(s, 0.0) - int(positions.get(s, {}).get("qty") or 0) * d["open_prices"][s])
+                for s in syms
+            }
+            sum_def = sum(deficits.values())
+            for s in syms:
+                cur_q = int(positions.get(s, {}).get("qty") or 0)
+                px_buy = d["open_prices"][s] * (1.0 + slip) * (1.0 + comm)
+                alloc = (float(st["cash"]) * deficits[s] / sum_def) if sum_def > 0 else 0.0
+                desired[s] = cur_q + (math.floor(alloc / px_buy) if px_buy > 0 and alloc > 0 else 0)
+        else:
+            for s in syms:
+                px_buy = d["open_prices"][s] * (1.0 + slip) * (1.0 + comm)
+                desired[s] = math.floor(val_open * tgt_w.get(s, 0.0) / px_buy) if tgt_w.get(s, 0.0) > 0 and px_buy > 0 else 0
 
         n_orders = 0
-        # 1) Sells first
+        # 1) Sells first (skipped in buy_only mode since desired[s] >= cur_q)
         for s in syms:
             pos = positions.get(s) or {"qty": 0, "entry_price": 0.0}
             diff = desired[s] - int(pos["qty"])
@@ -321,13 +357,30 @@ def run_live(bot: dict, today: str) -> dict[str, Any]:
     headroom = max((c.slippage_pct + c.commission_pct) / 100.0, LIVE_BUY_HEADROOM)
 
     if d["due"]:
+        buy_only = bool(bot.get("buy_only", False))
         tgt_w = d["target_weights_raw"]
         pos_val = sum(int(positions.get(s, {}).get("qty") or 0) * prices[s] for s in syms)
         target_cap = max(float(bot["capital"]), pos_val)
-        desired = {
-            s: (math.floor(target_cap * tgt_w.get(s, 0.0) / (prices[s] * (1.0 + headroom))) if tgt_w.get(s, 0.0) > 0 and prices[s] > 0 else 0)
-            for s in syms
-        }
+        if buy_only:
+            bp_init = normalize(client.request("GET", "/api/v1/buying-power", params={"currency": currency}, account_seq=seq) or {})
+            avail_init = min(float(bp_init.get("cashBuyingPower") or 0.0), max(float(bot["capital"]) - pos_val, 0.0))
+            tot_after = pos_val + avail_init
+            deficits = {
+                s: max(0.0, tot_after * tgt_w.get(s, 0.0) - int(positions.get(s, {}).get("qty") or 0) * prices[s])
+                for s in syms
+            }
+            sum_def = sum(deficits.values())
+            desired = {}
+            for s in syms:
+                cur_q = int(positions.get(s, {}).get("qty") or 0)
+                alloc = (avail_init * deficits[s] / sum_def) if sum_def > 0 else 0.0
+                unit = prices[s] * (1.0 + headroom)
+                desired[s] = cur_q + (math.floor(alloc / unit) if unit > 0 and alloc > 0 else 0)
+        else:
+            desired = {
+                s: (math.floor(target_cap * tgt_w.get(s, 0.0) / (prices[s] * (1.0 + headroom))) if tgt_w.get(s, 0.0) > 0 and prices[s] > 0 else 0)
+                for s in syms
+            }
 
         sent_sells: set[str] = set()
         n_sent = 0

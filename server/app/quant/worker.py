@@ -59,10 +59,10 @@ def _exec_montecarlo(
 
 def _exec_portfolio(
     bars_by_symbol: dict[str, Bars], model_id: str, assets: list[dict], params: dict,
-    rebalance: str, drift_pct: float, capital: float, costs: Costs, start_ts: int,
+    rebalance: str, drift_pct: float, capital: float, costs: Costs, start_ts: int, buy_only: bool = False,
 ) -> dict[str, Any]:
     return portfolio.run_portfolio_backtest(
-        bars_by_symbol, model_id, assets, params, rebalance, drift_pct, capital, costs, start_ts
+        bars_by_symbol, model_id, assets, params, rebalance, drift_pct, capital, costs, start_ts, buy_only=buy_only
     )
 
 
@@ -141,9 +141,9 @@ def run_montecarlo(
 
 def run_portfolio(
     bars_by_symbol: dict[str, Bars], model_id: str, assets: list[dict], params: dict,
-    rebalance: str, drift_pct: float, capital: float, costs: Costs, start_ts: int,
+    rebalance: str, drift_pct: float, capital: float, costs: Costs, start_ts: int, buy_only: bool = False,
 ) -> dict[str, Any]:
     return _submit(
         _exec_portfolio, bars_by_symbol, model_id, assets, params,
-        rebalance, drift_pct, capital, costs, start_ts,
+        rebalance, drift_pct, capital, costs, start_ts, buy_only,
     )

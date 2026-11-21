@@ -2,9 +2,19 @@ import { api } from './client'
 import type { MarketTimingRules, PortfolioAsset, RebalanceMode, RiskRules } from './quant'
 import type { Interval, Market } from './types'
 
-export type BotKind = 'single' | 'rebalance' | 'rotation'
-export type BotCategory = 'swing' | 'daytrade' | 'rebalance' | 'rotation'
+export type BotKind = 'single' | 'rebalance' | 'rotation' | 'dca'
+export type BotCategory = 'swing' | 'daytrade' | 'rebalance' | 'rotation' | 'dca'
 export type RotationCadence = 'weekly' | 'biweekly' | 'monthly'
+export type DcaCadence = 'daily' | 'weekly' | 'biweekly' | 'monthly'
+
+export interface DcaStats {
+  steps: number
+  total_invested: number
+  last_dca_date: string | null
+  smart_avg_price: number | null
+  regular_avg_price: number | null
+  saved_pct: number | null
+}
 
 export interface BotTrade {
   entry_date: string
@@ -49,8 +59,14 @@ export interface Bot {
   top_n?: number
   hold_buffer?: number
   exclude_warnings?: boolean
-  rebalance?: RebalanceMode | RotationCadence
+  rebalance?: RebalanceMode | RotationCadence | DcaCadence
   drift_pct?: number
+  buy_only?: boolean
+  weekday?: number
+  base_amount?: number
+  smart_scale?: boolean
+  dip_mult?: number
+  peak_mult?: number
   params: Record<string, number>
   risk?: RiskRules
   guard?: GuardRules
@@ -75,6 +91,7 @@ export interface Bot {
     equity: { date: string; value: number }[]
     tripped?: { at: string; date: string; reason: string } | null
     cooldown_until?: string | null
+    dca_stats?: DcaStats
     cash?: number
     equity_now?: number
   }
@@ -118,8 +135,14 @@ export interface BotInput {
   top_n?: number
   hold_buffer?: number
   exclude_warnings?: boolean
-  rebalance?: RebalanceMode | RotationCadence
+  rebalance?: RebalanceMode | RotationCadence | DcaCadence
   drift_pct?: number
+  buy_only?: boolean
+  weekday?: number
+  base_amount?: number
+  smart_scale?: boolean
+  dip_mult?: number
+  peak_mult?: number
   params?: Record<string, number>
   risk?: RiskRules
   guard?: GuardRules

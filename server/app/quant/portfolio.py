@@ -1152,6 +1152,7 @@ def run_portfolio_backtest(
     capital: float,
     costs: Costs,
     start_ts: int,
+    buy_only: bool = False,
 ) -> dict[str, Any]:
     """Multi-asset rebalancing backtest (bar i close decision -> bar i+1 open execution, sells before buys)."""
     model = PORTFOLIO_MODELS[model_id]
@@ -1183,10 +1184,18 @@ def run_portfolio_backtest(
             pending_target = None
             val_open = cash + sum(holdings[s] * opens[s][j] for s in syms)
             desired: dict[str, int] = {}
-            for s in syms:
-                w = target_w.get(s, 0.0)
-                px_buy = opens[s][j] * (1.0 + slip) * (1.0 + comm)
-                desired[s] = math.floor(val_open * w / px_buy) if w > 0 and px_buy > 0 else 0
+            if buy_only:
+                deficits = {s: max(0.0, val_open * target_w.get(s, 0.0) - holdings[s] * opens[s][j]) for s in syms}
+                sum_def = sum(deficits.values())
+                for s in syms:
+                    px_buy = opens[s][j] * (1.0 + slip) * (1.0 + comm)
+                    alloc = (cash * deficits[s] / sum_def) if sum_def > 0 else 0.0
+                    desired[s] = holdings[s] + (math.floor(alloc / px_buy) if px_buy > 0 and alloc > 0 else 0)
+            else:
+                for s in syms:
+                    w = target_w.get(s, 0.0)
+                    px_buy = opens[s][j] * (1.0 + slip) * (1.0 + comm)
+                    desired[s] = math.floor(val_open * w / px_buy) if w > 0 and px_buy > 0 else 0
 
             traded_val = 0.0
             n_orders = 0

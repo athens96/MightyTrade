@@ -10,8 +10,8 @@ import { FeatureGuideBox, StrategyGuideBox } from '../components/GuideBox'
 import { investingUrl } from '../lib/externalLinks'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
 
-const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱', rotation: '순환매' }
-const REBAL_LABEL: Record<string, string> = { weekly: '매주 초', biweekly: '격주(2주)', monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈' }
+const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱', rotation: '순환매', dca: '적립식' }
+const REBAL_LABEL: Record<string, string> = { daily: '매일', weekly: '매주', biweekly: '격주(2주)', monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈' }
 
 const money = (b: Bot, v: number | null | undefined) =>
   v == null ? '-' : `${priceFormatter(b.market)(v)}${b.market === 'KR' ? '원' : ' USD'}`
@@ -65,7 +65,8 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
   const [error, setError] = useState('')
   const isRebal = bot.kind === 'rebalance' || bot.kind === 'rotation'
   const isRot = bot.kind === 'rotation'
-  const meta = !isRebal ? strategies.find((s) => s.id === bot.strategy) : undefined
+  const isDca = bot.kind === 'dca'
+  const meta = !isRebal && !isDca ? strategies.find((s) => s.id === bot.strategy) : undefined
   const pModel = bot.kind === 'rebalance' ? portfolioModels.find((m) => m.id === bot.model) : undefined
 
   const loadEvents = useCallback(() => {
@@ -134,9 +135,14 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
           <>
             <b>종목발굴 순환매 ({bot.preset})</b> · 후보군 {bot.universe} · 상위 {bot.top_n}종목 (유지버퍼 {bot.hold_buffer}위) · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
           </>
+        ) : isDca ? (
+          <>
+            {bot.symbol} · <b>스마트 적립식 모으기</b> ({REBAL_LABEL[bot.rebalance ?? 'weekly']} · 기본 {money(bot, bot.base_amount)}
+            {bot.smart_scale ? ` · 세일 ${bot.dip_mult}x / 과열 ${bot.peak_mult}x` : ''}) · 총 한도 {money(bot, bot.capital)}
+          </>
         ) : isRebal ? (
           <>
-            <b>{pModel?.name ?? bot.model}</b> ({pModel?.theory}) · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
+            <b>{pModel?.name ?? bot.model}</b> ({pModel?.theory}){bot.buy_only ? ' · 💰 무매도 추가입금 전용' : ''} · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
           </>
         ) : (
           <>
@@ -194,11 +200,20 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
           <span className="small muted">대기 주문 {s.pending.length}건</span>
         </div>
         <div className="stat-tile">
-          <span className="muted small">{isRebal ? '리밸런싱' : '매매'}</span>
+          <span className="muted small">{isRebal ? '리밸런싱' : isDca ? '적립 평단가 비교' : '매매'}</span>
           {isRebal ? (
             <>
               <b>{(s.rebalances ?? []).length}회</b>
               <span className="small muted">{REBAL_LABEL[bot.rebalance ?? 'monthly']}</span>
+            </>
+          ) : isDca ? (
+            <>
+              <b>{s.dca_stats?.steps ?? 0}회 적립</b>
+              <span className="small muted">
+                {s.dca_stats?.saved_pct != null
+                  ? `일반 적립 대비 평단 ${s.dca_stats.saved_pct >= 0 ? `-${s.dca_stats.saved_pct.toFixed(2)}% 절감` : `+${Math.abs(s.dca_stats.saved_pct).toFixed(2)}%`}`
+                  : `누적 투입 ${money(bot, s.dca_stats?.total_invested ?? 0)}`}
+              </span>
             </>
           ) : (
             <>
@@ -536,7 +551,7 @@ export default function AutoTradePage() {
           title="새로운 스윙·단타·리밸런싱·순환매 자동매매 봇을 만듭니다 (처음엔 안전한 모의 모드·꺼진 상태로 생성)"
           onClick={() => setCreating({
             category: filter === 'all' ? 'swing' : filter,
-            ...(filter === 'rebalance' ? { kind: 'rebalance' } : filter === 'rotation' ? { kind: 'rotation' } : {}),
+            ...(filter === 'rebalance' ? { kind: 'rebalance' } : filter === 'rotation' ? { kind: 'rotation' } : filter === 'dca' ? { kind: 'dca' } : {}),
           })}
         >
           + 봇 만들기
@@ -549,6 +564,7 @@ export default function AutoTradePage() {
         <button className={filter === 'daytrade' ? 'active' : ''} title="장중 분봉·시초가 돌파를 노리고 당일 마감 전에 청산하는 단타봇만 봅니다" onClick={() => setFilter('daytrade')}>단타봇 {countOf('daytrade')}</button>
         <button className={filter === 'rebalance' ? 'active' : ''} title="여러 ETF를 묶어 정기적으로 목표 비중을 맞춰주는 자산배분 리밸런싱 봇만 봅니다" onClick={() => setFilter('rebalance')}>리밸런싱 봇 {countOf('rebalance')}</button>
         <button className={filter === 'rotation' ? 'active' : ''} title="종목 발굴 상위 N종목을 매주·매월 자동 교체해 굴리는 순환매 봇만 봅니다" onClick={() => setFilter('rotation')}>순환매 봇 {countOf('rotation')}</button>
+        <button className={filter === 'dca' ? 'active' : ''} title="세일 구간에 더 사고 과열 구간에 덜 사며 꾸준히 모으는 스마트 적립식 봇만 봅니다" onClick={() => setFilter('dca')}>적립식 봇 {countOf('dca')}</button>
       </div>
       <FeatureGuideBox guide={FEATURE_GUIDES.autotrade} />
 

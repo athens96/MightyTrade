@@ -88,7 +88,8 @@ def update_bot(bot_id: str):
     kind = bots.bot_kind(bot)
     locked_keys = (
         ("market", "model", "assets") if kind == "rebalance"
-        else (("market", "preset", "universe") if kind == "rotation" else ("market", "symbol", "strategy"))
+        else (("market", "preset", "universe") if kind == "rotation"
+              else (("market", "symbol") if kind == "dca" else ("market", "symbol", "strategy")))
     )
     if holding and any(k in body and body[k] != bot.get(k) for k in locked_keys):
         raise ApiError(409, "bot_has_position", "보유 중인 봇은 종목·전략(이론)을 바꿀 수 없습니다")

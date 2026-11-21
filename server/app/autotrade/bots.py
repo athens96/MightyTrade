@@ -28,16 +28,14 @@ def bot_kind(bot: dict) -> str:
 
 def bot_category(bot: dict) -> str:
     k = bot_kind(bot)
-    if k == "rebalance":
-        return "rebalance"
-    if k == "rotation":
-        return "rotation"
+    if k in ("rebalance", "rotation", "dca"):
+        return k
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return getattr(cls, "category", "swing") if cls else "swing"
 
 
 def bot_timeframe(bot: dict) -> str:
-    if bot_kind(bot) in ("rebalance", "rotation"):
+    if bot_kind(bot) in ("rebalance", "rotation", "dca"):
         return "1d"
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return getattr(cls, "timeframe", "1d") if cls else "1d"
@@ -67,7 +65,7 @@ def has_open_position(bot: dict, mode: Optional[str] = None) -> bool:
 def validate(body: dict, existing: Optional[dict] = None) -> dict:
     src = {**(existing or {}), **body}
     kind = str(src.get("kind") or "single")
-    if kind not in ("single", "rebalance", "rotation"):
+    if kind not in ("single", "rebalance", "rotation", "dca"):
         raise ApiError(400, "invalid_kind")
     try:
         market = Market(str(src.get("market", "")).upper()).value
@@ -104,7 +102,40 @@ def validate(body: dict, existing: Optional[dict] = None) -> dict:
             "kind": "rebalance", "category": "rebalance", "timeframe": "1d",
             "name": name, "market": market, "symbol": ",".join(a["symbol"] for a in assets),
             "model": model.id, "assets": assets, "rebalance": rebalance, "drift_pct": drift_pct,
+            "buy_only": bool(src.get("buy_only", False)),
             "params": params, "guard": guard, "capital": capital,
+        }
+
+    if kind == "dca":
+        from . import dca
+        symbol = str(src.get("symbol", "")).strip().upper()
+        if not SYMBOL_RE[market].fullmatch(symbol):
+            raise ApiError(400, "invalid_symbol")
+        cadence = str(src.get("rebalance") or "weekly")
+        if cadence not in dca.DCA_CADENCES:
+            raise ApiError(400, "invalid_rebalance", "적립 주기는 daily / weekly / biweekly / monthly 중 하나여야 합니다")
+        try:
+            weekday = int(float(src.get("weekday", 0)))
+            base_amount = float(src.get("base_amount") or (100_000 if market == "KR" else 100))
+            dip_mult = float(src.get("dip_mult", 1.5))
+            peak_mult = float(src.get("peak_mult", 0.5))
+        except (TypeError, ValueError):
+            raise ApiError(400, "invalid_number", "적립 금액·배수 설정값은 숫자여야 합니다")
+        if not 0 <= weekday <= 4:
+            raise ApiError(400, "out_of_range", "적립 요일은 0(월) ~ 4(금) 범위여야 합니다")
+        if base_amount <= 0 or base_amount > capital:
+            raise ApiError(400, "out_of_range", "1회 적립 금액은 0보다 크고 총 운용 자금 이하여야 합니다")
+        if not (1.0 <= dip_mult <= 3.0 and 0.0 <= peak_mult <= 1.0):
+            raise ApiError(400, "out_of_range", "세일 배수(1~3x) 및 과열 배수(0~1x) 범위를 확인하세요")
+        guard = protections.validate_guard(src.get("guard"))
+        mt_cfg = market_timing.validate_market_timing(src.get("market_timing"), market)
+        name = str(src.get("name") or f"스마트 적립 · {symbol}")[:60]
+        return {
+            "kind": "dca", "category": "dca", "timeframe": "1d",
+            "name": name, "market": market, "symbol": symbol, "rebalance": cadence, "weekday": weekday,
+            "base_amount": round(base_amount, 2), "smart_scale": bool(src.get("smart_scale", True)),
+            "dip_mult": round(dip_mult, 2), "peak_mult": round(peak_mult, 2),
+            "params": {}, "guard": guard, "market_timing": mt_cfg, "capital": capital,
         }
 
     if kind == "rotation":
@@ -273,6 +304,10 @@ def public(bot: dict) -> dict:
         return out
     pos = st["position"]
     price = st.get("last_price") or pos.get("entry_price") or 0.0
+    dca_extra = {}
+    if out["kind"] == "dca":
+        from . import dca
+        dca_extra["dca_stats"] = dca.public_dca_stats(st)
     out["state"] = {
         "position": pos,
         "pending": st["pending"],
@@ -282,6 +317,7 @@ def public(bot: dict) -> dict:
         "equity": st["equity"][-400:],
         "tripped": st.get("tripped"),
         "cooldown_until": st.get("cooldown_until"),
+        **dca_extra,
         **({"cash": st["cash"], "equity_now": st["cash"] + pos["qty"] * price} if bot["mode"] == "paper" else {}),
     }
     return out
