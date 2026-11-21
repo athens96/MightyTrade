@@ -8,9 +8,10 @@ from flask import Blueprint, current_app, g, jsonify, request
 from ..auth import otp
 from ..auth.decorators import login_required
 from ..errors import ApiError
+from ..trading import orders as trading
 from ..users import credentials
 from ..users import repository as users
-from . import bots, executor, protections
+from . import bots, executor, protections, semi
 from .scheduler import active_session, target_date
 
 bp = Blueprint("autotrade", __name__)
@@ -119,7 +120,8 @@ def enable(bot_id: str):
     _need_toss()
     protections.acknowledge_on_enable(bot)
     bot["enabled"] = True
-    bots.log(bot, "config", f"켜짐 ({'모의' if bot['mode'] == 'paper' else '실거래'})")
+    mode_lbl = "모의" if bot["mode"] == "paper" else ("승인 후 주문(반자동)" if bot["mode"] == "semi" else "실거래")
+    bots.log(bot, "config", f"켜짐 ({mode_lbl})")
     return jsonify(bot=bots.public(bots.save(bot)))
 
 
@@ -135,19 +137,51 @@ def disable(bot_id: str):
 @bp.post("/bots/<bot_id>/mode")
 @login_required
 def set_mode(bot_id: str):
-    """Switch paper <-> live. Going live needs a fresh OTP. Switching always turns the bot off."""
+    """Switch paper <-> semi <-> live. Going semi/live needs a fresh OTP unless already live->semi."""
     bot = bots.get(g.user["id"], bot_id)
     body = request.get_json(silent=True) or {}
     mode = body.get("mode")
-    if mode not in ("paper", "live"):
+    if mode not in ("paper", "semi", "live"):
         raise ApiError(400, "invalid_mode")
-    if mode == "live":
+    if mode in ("semi", "live") and not (bot["mode"] == "live" and mode == "semi"):
         _need_toss()
         otp.verify(_user(), str(body.get("otp_code", "")))
     bot["mode"] = mode
     bot["enabled"] = False
-    bots.log(bot, "config", "실거래 모드로 전환 (꺼진 상태 — 켜면 실제 주문이 나갑니다)" if mode == "live" else "모의 모드로 전환", "warn" if mode == "live" else "info")
+    msg_map = {
+        "paper": "모의 모드로 전환",
+        "semi": "승인 후 주문(반자동) 모드로 전환 (꺼진 상태 — 신호 발생 시 1클릭 승인 후 주문 전송)",
+        "live": "실거래 모드로 전환 (꺼진 상태 — 켜면 실제 주문이 나갑니다)",
+    }
+    bots.log(bot, "config", msg_map[mode], "warn" if mode == "live" else "info")
     return jsonify(bot=bots.public(bots.save(bot)))
+
+
+@bp.post("/bots/<bot_id>/approve")
+@login_required
+def approve_bot_order(bot_id: str):
+    """1-Click approve & submit staged semi-auto order(s) (needs unlocked trading session or OTP)."""
+    bot = bots.get(g.user["id"], bot_id)
+    _need_toss()
+    user = _user()
+    body = request.get_json(silent=True) or {}
+    otp_code = str(body.get("otp_code") or "").strip()
+    if otp_code:
+        trading.unlock(user, otp_code)
+    else:
+        trading.require_unlocked(user)
+    res = semi.approve_proposal(bot)
+    bot = bots.get(g.user["id"], bot_id)
+    return jsonify(result=res, bot=bots.public(bot))
+
+
+@bp.post("/bots/<bot_id>/skip")
+@login_required
+def skip_bot_order(bot_id: str):
+    bot = bots.get(g.user["id"], bot_id)
+    semi.skip_proposal(bot)
+    bot = bots.get(g.user["id"], bot_id)
+    return jsonify(bot=bots.public(bot))
 
 
 @bp.post("/bots/<bot_id>/evaluate")

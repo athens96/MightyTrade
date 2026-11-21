@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { autotradeApi, PREFILL_KEY, type Bot, type BotCategory, type BotEvent, type BotInput, type Evaluation } from '../api/autotrade'
+import { autotradeApi, PREFILL_KEY, type Bot, type BotCategory, type BotEvent, type BotInput, type BotMode, type Evaluation } from '../api/autotrade'
 import { ApiError } from '../api/client'
 import { marketApi, type MarketRegime } from '../api/market'
 import { quantApi, type PortfolioModelMeta, type StrategyMeta } from '../api/quant'
 import { priceFormatter } from '../components/chart/format'
 import BotForm from '../components/autotrade/BotForm'
 import { FeatureGuideBox, StrategyGuideBox } from '../components/GuideBox'
+import UnlockBar from '../components/trading/UnlockBar'
 import { investingUrl } from '../lib/externalLinks'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
 
 const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱', rotation: '순환매', dca: '적립식' }
+const MODE_LABEL: Record<BotMode, string> = { paper: '모의', semi: '승인 후 주문', live: '실거래' }
 const REBAL_LABEL: Record<string, string> = { daily: '매일', weekly: '매주', biweekly: '격주(2주)', monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈' }
 
 const money = (b: Bot, v: number | null | undefined) =>
@@ -59,6 +61,8 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
   const [events, setEvents] = useState<BotEvent[]>([])
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null)
   const [otp, setOtp] = useState('')
+  const [targetMode, setTargetMode] = useState<BotMode>('semi')
+  const [approveOtp, setApproveOtp] = useState('')
   const [confirmLive, setConfirmLive] = useState(false)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState('')
@@ -113,8 +117,9 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
       <div className="account-head">
         <h3>{bot.name}</h3>
         <span className={`cat-badge ${bot.category}`}>{CAT_LABEL[bot.category]}{bot.timeframe !== '1d' ? ` · ${bot.timeframe}` : ''}</span>
-        <span className={`mode-badge ${bot.mode}`}>{bot.mode === 'paper' ? '모의' : '실거래'}</span>
+        <span className={`mode-badge ${bot.mode}`}>{MODE_LABEL[bot.mode]}</span>
         <span className={`state-badge ${bot.enabled ? 'on' : ''}`}>{bot.enabled ? '켜짐' : '꺼짐'}</span>
+        {s.pending_approval && <span className="match-badge" title="1클릭 승인을 기다리는 주문이 있습니다">✋ 승인 대기 ({s.pending_approval.orders.length}건)</span>}
         {s.tripped && <span className="warn-badge" title={s.tripped.reason}>🛑 보호 잠금</span>}
         {!s.tripped && s.cooldown_until && <span className="warn-badge" title={`${s.cooldown_until}까지 손절 후 휴식`}>⏳ 쿨다운 ~{s.cooldown_until}</span>}
         {!isRebal && (
@@ -167,6 +172,54 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         theory={isRebal ? pModel?.theory : meta?.theory}
         guide={isRebal ? pModel?.guide : meta?.guide}
       />
+      {s.pending_approval && (
+        <div className="panel" style={{ borderColor: '#388bfd', marginBottom: 12 }}>
+          <div className="account-head">
+            <h4>✋ 1클릭 승인 대기 주문 ({s.pending_approval.date})</h4>
+            <span className="muted small">만료: {new Date(s.pending_approval.expires_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+            <div className="spacer" />
+            <UnlockBar />
+          </div>
+          {s.pending_approval.reason && <p className="small muted">{s.pending_approval.reason}</p>}
+          <ul>
+            {s.pending_approval.orders.map((o, idx) => (
+              <li key={idx} className={o.side === 'BUY' ? 'up' : 'down'}>
+                <b>{o.symbol}</b> {o.side === 'BUY' ? '매수' : '매도'} {o.qty.toLocaleString()}주 ({o.kind === 'limit' && o.level ? `지정가 ${money(bot, o.level)}` : o.kind === 'stop' && o.level ? `조건가 ${money(bot, o.level)}` : '시장가'}) — {o.text}
+              </li>
+            ))}
+          </ul>
+          <div className="modal-actions" style={{ justifyContent: 'flex-start' }}>
+            <input
+              className="otp-input"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="OTP(잠금시)"
+              value={approveOtp}
+              title="위 거래 잠금이 이미 풀려 있으면 비워두어도 되며, 잠겨 있으면 여기에 OTP 6자리를 입력해 바로 승인할 수 있습니다"
+              onChange={(e) => setApproveOtp(e.target.value.replace(/\D/g, ''))}
+            />
+            <button
+              className="primary"
+              disabled={!!busy}
+              title="준비된 주문 수량과 가격을 확인하고 토스증권으로 즉시 주문을 전송합니다"
+              onClick={() => act('approve', async () => {
+                const r = await autotradeApi.approve(bot.id, approveOtp || undefined)
+                setApproveOtp('')
+                return r
+              })}
+            >
+              {busy === 'approve' ? '전송 중…' : '✓ 1클릭 승인 주문 전송'}
+            </button>
+            <button
+              disabled={!!busy}
+              title="오늘 발생한 신호는 주문하지 않고 건너뜁니다"
+              onClick={() => act('skip', () => autotradeApi.skip(bot.id))}
+            >
+              오늘 건너뛰기
+            </button>
+          </div>
+        </div>
+      )}
       {s.tripped && (
         <p className="warn">
           <b>🛑 서킷브레이커 자동 보호 작동 ({s.tripped.date}):</b> {s.tripped.reason}. 상태를 점검한 뒤 오른쪽 위 <b>켜기</b>를 누르면 잠금이 해제되고 새 기준점부터 감시를 재개합니다.
@@ -347,13 +400,32 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
       <div className="panel live-panel">
         {bot.mode === 'paper' ? (
           <>
-            <h4>실거래로 전환</h4>
+            <h4>운용 모드 전환 (반자동 · 실거래)</h4>
             <p className="small">
-              실거래 모드에서 봇을 켜면 <b>실제 주문이 자동으로 나갑니다.</b> 모의 모드로 충분히 확인한 뒤 전환하세요. 주문은 계정의 일일 주문 한도·건당 금액
-              한도를 따르고, 상단의 <b>전체 중지</b>로 언제든 멈출 수 있습니다. 전환하면 봇은 꺼진 상태가 됩니다.
+              처음 실전에 들어갈 때는 봇이 신호·수량만 계산해 알려주고 내가 버튼 한 번으로 승인하는 <b>승인 후 주문(반자동)</b> 모드를 추천합니다.
+              <b>실거래(완전자동)</b> 모드에서 봇을 켜면 확인 없이 실제 주문이 바로 나갑니다. 전환 직후에는 안전을 위해 봇이 꺼진 상태가 됩니다.
             </p>
-            <label className="check small" title="모의 모드로 충분히 테스트했으며 실거래 전환 후 봇을 켜면 내 계좌에서 실제 주문이 나간다는 점을 확인합니다">
-              <input type="checkbox" checked={confirmLive} onChange={(e) => setConfirmLive(e.target.checked)} /> 실제 돈으로 자동 주문된다는 것을 이해했습니다
+            <div className="tabs" style={{ marginBottom: 8 }}>
+              <button
+                type="button"
+                className={targetMode === 'semi' ? 'active' : ''}
+                title="봇이 주문서를 미리 준비해 알림을 보내면 내가 1클릭 승인했을 때만 실제 주문이 나갑니다"
+                onClick={() => setTargetMode('semi')}
+              >
+                ✋ 승인 후 주문 (반자동 · 권장)
+              </button>
+              <button
+                type="button"
+                className={targetMode === 'live' ? 'active' : ''}
+                title="신호가 발생하면 사람 확인 없이 정해진 시각에 자동으로 실제 주문을 보냅니다"
+                onClick={() => setTargetMode('live')}
+              >
+                ⚡ 실거래 (완전자동)
+              </button>
+            </div>
+            <label className="check small" title="모의 테스트를 충분히 마쳤으며 실제 토스증권 계좌와 연결된다는 점을 확인합니다">
+              <input type="checkbox" checked={confirmLive} onChange={(e) => setConfirmLive(e.target.checked)} />
+              {targetMode === 'semi' ? '승인 클릭 시 실제 돈으로 주문이 나간다는 것을 이해했습니다' : '실제 돈으로 무인 자동 주문된다는 것을 이해했습니다'}
             </label>
             <div className="modal-actions" style={{ justifyContent: 'flex-start' }}>
               <input
@@ -362,23 +434,28 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
                 maxLength={6}
                 placeholder="OTP"
                 value={otp}
-                title="실거래 전환 보안을 위해 스마트폰 인증 앱의 6자리 OTP 숫자를 입력하세요"
+                title="모드 전환 보안을 위해 스마트폰 인증 앱의 6자리 OTP 숫자를 입력하세요"
                 onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
               />
               <button
-                className="danger"
+                className={targetMode === 'live' ? 'danger' : 'primary'}
                 disabled={!confirmLive || otp.length !== 6 || !!busy}
-                title="위 확인 체크와 OTP 6자리를 입력하면 실거래 모드로 전환합니다 (전환 직후에는 안전을 위해 꺼진 상태로 유지됩니다)"
-                onClick={() => act('mode', () => autotradeApi.mode(bot.id, 'live', otp))}
+                title="확인 체크와 OTP 6자리를 입력하면 선택한 실전 모드로 전환합니다"
+                onClick={() => act('mode', () => autotradeApi.mode(bot.id, targetMode, otp))}
               >
-                실거래 모드로 전환
+                {targetMode === 'semi' ? '반자동(승인 후 주문) 전환' : '실거래 모드로 전환'}
               </button>
             </div>
           </>
         ) : (
-          <div className="modal-actions" style={{ justifyContent: 'flex-start' }}>
-            <span className="small">실거래 모드입니다. 이미 들어간 주문·보유는 모의로 바꿔도 그대로 남습니다.</span>
-            <button disabled={!!busy} title="실제 계좌 자동 주문을 멈추고 안전한 가상 모의투자 모드로 되돌립니다" onClick={() => act('mode', () => autotradeApi.mode(bot.id, 'paper'))}>
+          <div className="modal-actions" style={{ justifyContent: 'flex-start', flexWrap: 'wrap' }}>
+            <span className="small">현재 <b>{MODE_LABEL[bot.mode]}</b> 모드입니다. 이미 들어간 주문·보유는 모의로 바꿔도 그대로 남습니다.</span>
+            {bot.mode === 'live' && (
+              <button disabled={!!busy} title="무인 자동 주문을 멈추고 신호 발생 시 내가 1클릭 승인할 때만 주문하는 반자동 모드로 바꿉니다" onClick={() => act('mode', () => autotradeApi.mode(bot.id, 'semi'))}>
+                반자동(승인 후 주문)으로 전환
+              </button>
+            )}
+            <button disabled={!!busy} title="실제 계좌 주문을 멈추고 안전한 가상 모의투자 모드로 되돌립니다" onClick={() => act('mode', () => autotradeApi.mode(bot.id, 'paper'))}>
               모의 모드로 전환
             </button>
           </div>
@@ -434,7 +511,7 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         {events.map((e) => (
           <div key={e.id} className={`log-row ${e.level}`}>
             <span className="muted">{new Date(e.at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
-            <span className={`mode-badge ${e.mode}`}>{e.mode === 'paper' ? '모의' : '실거래'}</span>
+            <span className={`mode-badge ${e.mode}`}>{MODE_LABEL[e.mode]}</span>
             <span>{e.message}</span>
           </div>
         ))}
@@ -591,7 +668,8 @@ export default function AutoTradePage() {
                 <div className="bot-item-top">
                   <b>{b.name}</b>
                   <span className={`cat-badge ${b.category}`}>{CAT_LABEL[b.category]}</span>
-                  <span className={`mode-badge ${b.mode}`}>{b.mode === 'paper' ? '모의' : '실거래'}</span>
+                  <span className={`mode-badge ${b.mode}`}>{MODE_LABEL[b.mode]}</span>
+                  {b.state.pending_approval && <span className="match-badge">✋</span>}
                 </div>
                 <div className="bot-item-sub small">
                   <span className={`dot ${b.enabled ? 'on' : ''}`} /> {b.enabled ? '켜짐' : '꺼짐'} · {heldLabel}

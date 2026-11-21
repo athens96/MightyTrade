@@ -35,6 +35,28 @@ export interface BotRebalanceLog {
   weights: Record<string, number>
 }
 
+export type BotMode = 'paper' | 'semi' | 'live'
+
+export interface PendingApprovalOrder {
+  symbol: string
+  side: 'BUY' | 'SELL'
+  kind: string
+  qty: number
+  signal_price: number
+  level: number | null
+  reason: string
+  text: string
+}
+
+export interface PendingApproval {
+  id: string
+  date: string
+  created_at: string
+  expires_at: string
+  reason: string
+  orders: PendingApprovalOrder[]
+}
+
 export interface GuardRules {
   max_drawdown_pct?: number
   max_consecutive_losses?: number
@@ -72,7 +94,7 @@ export interface Bot {
   guard?: GuardRules
   market_timing?: MarketTimingRules
   capital: number
-  mode: 'paper' | 'live'
+  mode: BotMode
   enabled: boolean
   created_at: string
   updated_at: string
@@ -85,6 +107,7 @@ export interface Bot {
     last_rebalance_date?: string | null
     rebalances?: BotRebalanceLog[]
     pending: { side: string; symbol?: string; kind?: string; level?: number; active_date?: string; date?: string }[]
+    pending_approval?: PendingApproval | null
     last_run_date: string | null
     last_price: number | null
     trades: BotTrade[]
@@ -103,7 +126,7 @@ export interface BotEvent {
   kind: string
   level: 'info' | 'warn' | 'error'
   message: string
-  mode: 'paper' | 'live'
+  mode: BotMode
 }
 
 export interface Evaluation {
@@ -161,8 +184,11 @@ export const autotradeApi = {
   remove: (id: string) => api<{ ok: true }>(`/autotrade/bots/${id}`, { method: 'DELETE' }),
   enable: (id: string) => api<{ bot: Bot }>(`/autotrade/bots/${id}/enable`, { method: 'POST' }),
   disable: (id: string) => api<{ bot: Bot }>(`/autotrade/bots/${id}/disable`, { method: 'POST' }),
-  mode: (id: string, mode: 'paper' | 'live', otp_code?: string) =>
+  mode: (id: string, mode: BotMode, otp_code?: string) =>
     api<{ bot: Bot }>(`/autotrade/bots/${id}/mode`, { method: 'POST', json: { mode, otp_code } }),
+  approve: (id: string, otp_code?: string) =>
+    api<{ result: { sent: number }; bot: Bot }>(`/autotrade/bots/${id}/approve`, { method: 'POST', json: otp_code ? { otp_code } : {} }),
+  skip: (id: string) => api<{ bot: Bot }>(`/autotrade/bots/${id}/skip`, { method: 'POST' }),
   evaluate: (id: string) => api<Evaluation>(`/autotrade/bots/${id}/evaluate`, { method: 'POST' }),
   run: (id: string) => api<{ result: unknown; bot: Bot }>(`/autotrade/bots/${id}/run`, { method: 'POST' }),
   reset: (id: string) => api<{ bot: Bot }>(`/autotrade/bots/${id}/reset`, { method: 'POST' }),

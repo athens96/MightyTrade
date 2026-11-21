@@ -247,8 +247,12 @@ def all_enabled() -> list:
     return get_store().find(BOTS, lambda b: b.get("enabled"))
 
 
+def state_key(mode: str) -> str:
+    return "paper" if mode == "paper" else "live"
+
+
 def state(bot: dict) -> dict:
-    return bot["state"][bot["mode"]]
+    return bot["state"][state_key(bot.get("mode", "paper"))]
 
 
 def log(bot: dict, kind: str, message: str, level: str = "info", data: Optional[dict] = None) -> None:
@@ -277,6 +281,8 @@ def public(bot: dict) -> dict:
     out["category"] = bot_category(bot)
     out["timeframe"] = bot_timeframe(bot)
     st = state(bot)
+    from . import semi
+    pending_app = semi.active_proposal(st)
     if out["kind"] in ("rebalance", "rotation"):
         positions = st.get("positions") or {}
         last_prices = st.get("last_prices") or {}
@@ -288,6 +294,7 @@ def public(bot: dict) -> dict:
             "position": {"qty": sum(int(p.get("qty") or 0) for p in positions.values()), "entry_price": 0.0, "entry_date": None},
             "positions": positions,
             "pending": st["pending"],
+            "pending_approval": pending_app,
             "last_run_date": st["last_run_date"],
             "last_rebalance_date": st.get("last_rebalance_date"),
             "target_weights": st.get("target_weights") or {},
@@ -311,6 +318,7 @@ def public(bot: dict) -> dict:
     out["state"] = {
         "position": pos,
         "pending": st["pending"],
+        "pending_approval": pending_app,
         "last_run_date": st["last_run_date"],
         "last_price": st.get("last_price"),
         "trades": st["trades"][-50:],

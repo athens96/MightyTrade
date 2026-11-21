@@ -99,9 +99,23 @@ def tick(app: Flask, now: Optional[datetime] = None) -> None:
 def _step(bot: dict, date: str, start: datetime, end: datetime, now: datetime) -> None:
     st = bots.state(bot)
     try:
-        if bot["mode"] == "live" and st["pending"] and not _recent(st.get("last_reconcile"), RECONCILE_EVERY, now):
+        if bot["mode"] in ("live", "semi") and st["pending"] and not _recent(st.get("last_reconcile"), RECONCILE_EVERY, now):
             executor.reconcile_live(bot, date)
             bots.save(bot)
+        if bot["mode"] == "semi":
+            if now < start + OPEN_DELAY or _recent((st.get("last_error") or {}).get("at"), ERROR_BACKOFF, now):
+                return
+            if not executor.is_intraday(bot) and st["last_run_date"] == date:
+                return
+            if not executor.is_intraday(bot) and now > end - LATE_CUTOFF:
+                st["last_run_date"] = date
+                bots.save(bot)
+                bots.log(bot, "skip", "장 마감 1시간 전 이후라 오늘 반자동 점검을 건너뜁니다", "warn")
+                return
+            from . import semi
+            semi.stage_from_scheduler(bot, date, end, now=now)
+            st.pop("last_error", None)
+            return
         if executor.is_intraday(bot):
             if now < start + OPEN_DELAY or _recent((st.get("last_error") or {}).get("at"), ERROR_BACKOFF, now):
                 return
