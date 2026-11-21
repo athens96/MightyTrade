@@ -9,6 +9,7 @@ import type { Candle, Instrument, Interval, Market, Quote, WatchItem, WatchQuote
 import { priceFormatter } from '../components/chart/format'
 import { settingsApi, type Settings } from '../api/settings'
 import IndicatorPanel from '../components/chart/IndicatorPanel'
+import ChartDiagnosis from '../components/chart/ChartDiagnosis'
 import TradingChart from '../components/chart/TradingChart'
 import { DEFAULT_INDICATORS, sanitize, type IndicatorConfig } from '../indicators/registry'
 import { FeatureGuideBox } from '../components/GuideBox'
@@ -280,6 +281,13 @@ export default function DashboardPage() {
         ) : (
           error && <p className="error">{error}</p>
         )}
+        <ChartDiagnosis
+          candles={candles}
+          market={selected?.market ?? market}
+          interval={interval}
+          livePrice={shown?.price ?? null}
+          activeIndicators={indicators}
+        />
         <TradingChart
           candles={candles}
           market={selected?.market ?? market}

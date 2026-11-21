@@ -53,7 +53,7 @@ input { background: #0d1117; color: inherit; border: 1px solid #30363d; border-r
 .topbar nav a { color: #8b949e; text-decoration: none; }
 .topbar nav a.active { color: #e6edf3; }
 .dashboard { display: grid; grid-template-columns: 290px minmax(0, 1fr) 300px; height: calc(100vh - 53px); }
-.sidebar { border-right: 1px solid #21262d; padding: 12px; }
+.sidebar { border-right: 1px solid #21262d; padding: 12px; overflow-y: auto; }
 .tabs { display: flex; gap: 6px; }
 .watchlist { list-style: none; padding: 0; margin: 12px 0; }
 .watchlist li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px; border-radius: 6px; cursor: pointer; }
@@ -62,7 +62,7 @@ input { background: #0d1117; color: inherit; border: 1px solid #30363d; border-r
 .wl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wl-price { font-weight: 600; }
 .watchlist li:hover, .watchlist li.active { background: #161b22; }
-.chart-panel { display: flex; flex-direction: column; padding: 12px 16px; min-width: 0; }
+.chart-panel { display: flex; flex-direction: column; padding: 12px 16px; min-width: 0; overflow-y: auto; }
 .chart-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .chart-header h2, .chart-header > span, .chart-header button { white-space: nowrap; }
 .chart-header h2 { margin: 0; font-size: 18px; }
@@ -325,6 +325,45 @@ b.plain { color: #e6edf3; }
 .quant-search { position: relative; }
 .quant-search input { width: 100%; box-sizing: border-box; font-size: 12px; }
 .quant-search .search-results { position: relative; max-height: 180px; margin-top: 4px; }
+
+/* Chart Diagnosis */
+.chart-diag { margin: 8px 0; border: 1px solid #21262d; border-radius: 8px; background: #10141a; flex-shrink: 0; }
+.chart-diag.tone-bull { border-left: 3px solid #3fb950; }
+.chart-diag.tone-overheated { border-left: 3px solid #f0b429; }
+.chart-diag.tone-pullback { border-left: 3px solid #58a6ff; }
+.chart-diag.tone-oversold_bear { border-left: 3px solid #ec835a; }
+.chart-diag.tone-bear { border-left: 3px solid #f85149; }
+.chart-diag.tone-neutral { border-left: 3px solid #6e7681; }
+.chart-diag > summary { padding: 7px 12px; cursor: pointer; font-size: 12.5px; list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.chart-diag > summary::-webkit-details-marker { display: none; }
+.chart-diag > summary::after { content: '▼'; font-size: 10px; color: #8b949e; transition: transform .15s; }
+.chart-diag[open] > summary::after { transform: rotate(180deg); }
+.chart-diag[open] > summary { border-bottom: 1px solid #21262d; }
+.diag-badge { font-weight: 600; white-space: nowrap; }
+.diag-score { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: #1c2129; border: 1px solid #30363d; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.diag-headline { color: #c9d1d9; flex: 1 1 240px; min-width: 0; }
+.diag-lv { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.diag-lv b { color: #c9d1d9; font-weight: 600; }
+.diag-more { margin-left: auto; white-space: nowrap; }
+.diag-body { padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 12px; }
+.diag-summary-box { padding: 8px 12px; border-radius: 6px; background: #151a22; border: 1px solid #21262d; font-size: 13px; line-height: 1.55; }
+.diag-summary-box p { margin: 0; }
+.diag-summary-box .diag-tip { margin-top: 6px; color: #8ab4f8; }
+.diag-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 8px; }
+.diag-meter { padding: 7px 10px; border-radius: 6px; background: #0d1117; border: 1px solid #21262d; display: flex; flex-direction: column; gap: 2px; font-variant-numeric: tabular-nums; }
+.diag-meter b { font-size: 14px; }
+.diag-group h5 { margin: 0 0 6px; font-size: 12.5px; color: #c9d1d9; }
+.diag-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.diag-item { padding: 8px 10px; border-radius: 6px; background: #0d1117; border: 1px solid #21262d; display: flex; flex-direction: column; gap: 3px; }
+.diag-item p { margin: 2px 0 0; line-height: 1.45; color: #c9d1d9; }
+.diag-item-head { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.diag-active-tag { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #1f2937; color: #8ab4f8; }
+.diag-status { font-size: 11px; padding: 1px 6px; border-radius: 6px; font-weight: 600; background: #21262d; color: #c9d1d9; white-space: nowrap; }
+.diag-item.sig-bull .diag-status { background: rgba(63,185,80,.16); color: #3fb950; }
+.diag-item.sig-bear .diag-status { background: rgba(248,81,73,.16); color: #f85149; }
+.diag-item.sig-warn .diag-status { background: rgba(240,180,41,.16); color: #f0b429; }
+.diag-item.sig-cool .diag-status { background: rgba(88,166,255,.16); color: #58a6ff; }
+.diag-disclaimer { margin: 0; }
 
 /* ======================================================================
    Responsive. Desktop rules above stay as-is; these only kick in on

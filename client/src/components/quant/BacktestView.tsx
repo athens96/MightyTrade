@@ -4,6 +4,7 @@ import { MOBILE, useMediaQuery } from '../../hooks/useMediaQuery'
 import { PREFILL_KEY } from '../../api/autotrade'
 import type { BacktestResult } from '../../api/quant'
 import { priceFormatter } from '../chart/format'
+import ChartDiagnosis from '../chart/ChartDiagnosis'
 import TradingChart, { type ChartMarker } from '../chart/TradingChart'
 import { DOWN, UP, sanitize } from '../../indicators/registry'
 import { investingUrl } from '../../lib/externalLinks'
@@ -55,6 +56,12 @@ export default function BacktestView({ result, title }: { result: BacktestResult
         <MetricsTable strategy={result.metrics} benchmark={result.benchmark} market={result.market} interval={result.interval} />
         <EquityChart points={result.equity} market={result.market} />
       </div>
+      <ChartDiagnosis
+        candles={result.candles}
+        market={result.market}
+        interval={result.interval ?? '1d'}
+        activeIndicators={indicators}
+      />
       <div className="quant-price-chart">
         <TradingChart
           candles={result.candles}
