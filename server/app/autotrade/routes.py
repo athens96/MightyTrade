@@ -10,7 +10,7 @@ from ..auth.decorators import login_required
 from ..errors import ApiError
 from ..users import credentials
 from ..users import repository as users
-from . import bots, executor
+from . import bots, executor, protections
 from .scheduler import active_session, target_date
 
 bp = Blueprint("autotrade", __name__)
@@ -112,6 +112,7 @@ def delete_bot(bot_id: str):
 def enable(bot_id: str):
     bot = bots.get(g.user["id"], bot_id)
     _need_toss()
+    protections.acknowledge_on_enable(bot)
     bot["enabled"] = True
     bots.log(bot, "config", f"켜짐 ({'모의' if bot['mode'] == 'paper' else '실거래'})")
     return jsonify(bot=bots.public(bots.save(bot)))

@@ -29,7 +29,7 @@ from ..storage import get_store
 from ..trading import orders as trading
 from ..trading.ticks import fmt_price, round_price
 from ..users.repository import now_iso
-from . import bots
+from . import bots, protections
 
 TERMINAL = {"FILLED", "CANCELED", "REJECTED", "REPLACED"}
 LIVE_BUY_HEADROOM = 0.005
@@ -325,9 +325,14 @@ def run_paper(bot: dict, today: str) -> dict:
             bots.log(bot, "fill", f"[모의/보호막] {reason} 시가 매도 @ {today_bar.open:,.2f}")
     d = decide(bot, today, loaded)
     o_open = today_bar.open
+    est_eq = st["cash"] + st["position"]["qty"] * o_open
+    buy_block = protections.check_buy_allowed(bot, st, today, current_equity=est_eq)
     for o in d["orders"]:
         holding = st["position"]["qty"] > 0
         if (o.side == "buy" and holding) or (o.side == "sell" and not holding):
+            continue
+        if o.side == "buy" and buy_block:
+            bots.log(bot, "skip", f"[모의] 신규 매수 보류: {buy_block}", "warn")
             continue
         if o.kind == "market":
             if o.side == "buy":
@@ -382,6 +387,7 @@ def run_paper(bot: dict, today: str) -> dict:
     st["last_price"] = today_bar.close
     pos = st["position"]
     st["equity"].append({"date": today, "value": st["cash"] + pos["qty"] * today_bar.close})
+    protections.evaluate_after_step(bot, st, today)
     bots.save(bot)
     return {"ran": today}
 
@@ -670,8 +676,13 @@ def run_live(bot: dict, today: str) -> dict:
     # holding — e.g. volatility breakout sells at the open and may re-enter on a breakout the same day.
     expect_holding = pos["qty"] > 0
     orders = d["orders"]
+    est_eq_live = bot["capital"] + st.get("realized", 0.0) + pos["qty"] * (current - pos["entry_price"])
+    buy_block = protections.check_buy_allowed(bot, st, today, current_equity=est_eq_live)
     for n, o in enumerate(orders):
         if (o.side == "buy" and expect_holding) or (o.side == "sell" and not expect_holding):
+            continue
+        if o.side == "buy" and buy_block:
+            bots.log(bot, "skip", f"신규 매수 보류: {buy_block}", "warn")
             continue
         side = "BUY" if o.side == "buy" else "SELL"
         try:
@@ -740,6 +751,7 @@ def run_live(bot: dict, today: str) -> dict:
             bots.log(bot, "error", f"보호막 주문 설정 실패: {e.message}", "warn")
     st["last_price"] = current
     st["equity"].append({"date": today, "value": bot["capital"] + st.get("realized", 0.0) + pos["qty"] * (current - pos["entry_price"])})
+    protections.evaluate_after_step(bot, st, today)
     bots.save(bot)
     return {"ran": today}
 
@@ -836,9 +848,12 @@ def run_intraday(bot: dict, today: str, now: datetime, session_end: datetime) ->
         st["pending"] = []
         d = decide_intraday(bot, today, loaded)
         px = latest_bar.open
+        buy_block = protections.check_buy_allowed(bot, st, today, current_equity=st["cash"] + st["position"]["qty"] * px)
         for o in d["orders"]:
             holding = st["position"]["qty"] > 0
             if (o.side == "buy" and holding) or (o.side == "sell" and not holding):
+                continue
+            if o.side == "buy" and buy_block:
                 continue
             if o.kind == "market":
                 if o.side == "buy":
@@ -858,6 +873,7 @@ def run_intraday(bot: dict, today: str, now: datetime, session_end: datetime) ->
         st["last_run_date"] = today
         st["last_price"] = latest_bar.close
         _record_day_equity(st, today, st["cash"] + st["position"]["qty"] * latest_bar.close)
+        protections.evaluate_after_step(bot, st, today)
         bots.save(bot)
         return {"ran_bar": bar_time}
 
@@ -890,6 +906,13 @@ def run_intraday(bot: dict, today: str, now: datetime, session_end: datetime) ->
         holding = pos["qty"] > 0
         if (o.side == "buy" and holding) or (o.side == "sell" and not holding):
             continue
+        if o.side == "buy":
+            iblock = protections.check_buy_allowed(
+                bot, st, today, current_equity=bot["capital"] + st.get("realized", 0.0) + pos["qty"] * (current - pos["entry_price"])
+            )
+            if iblock:
+                bots.log(bot, "skip", f"[분봉] 신규 매수 보류: {iblock}", "warn")
+                continue
         side = "BUY" if o.side == "buy" else "SELL"
         try:
             level = o.limit if o.kind == "limit" else (_level(o, latest_bar.open) if o.kind == "stop" else None)
@@ -928,6 +951,7 @@ def run_intraday(bot: dict, today: str, now: datetime, session_end: datetime) ->
             bots.log(bot, "error", f"[분봉] 주문 실패: {e.message}", "error", {"code": e.code})
     st["last_price"] = current
     _record_day_equity(st, today, bot["capital"] + st.get("realized", 0.0) + pos["qty"] * (current - pos["entry_price"]))
+    protections.evaluate_after_step(bot, st, today)
     bots.save(bot)
     return {"ran_bar": bar_time}
 

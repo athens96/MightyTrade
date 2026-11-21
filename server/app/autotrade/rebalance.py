@@ -20,7 +20,7 @@ from ..quant.data import cost_defaults
 from ..quant.engine import Bars, Costs
 from ..trading import orders as trading
 from ..users.repository import now_iso
-from . import bots
+from . import bots, protections
 
 TERMINAL = {"FILLED", "CANCELED", "REJECTED", "REPLACED"}
 LIVE_BUY_HEADROOM = 0.005
@@ -221,6 +221,7 @@ def run_paper(bot: dict, today: str) -> dict[str, Any]:
     st["target_weights"] = d["target_weights"]
     eq_now = float(st["cash"]) + sum(int(positions.get(s, {}).get("qty") or 0) * d["last_prices"][s] for s in syms)
     st["equity"].append({"date": today, "value": eq_now})
+    protections.evaluate_after_step(bot, st, today)
     bots.save(bot)
     return {"ran": today, "rebalanced": d["due"]}
 
@@ -392,6 +393,7 @@ def run_live(bot: dict, today: str) -> dict[str, Any]:
     st["target_weights"] = d["target_weights"]
     unreal = sum(int(p.get("qty") or 0) * (prices.get(s, p["entry_price"]) - p["entry_price"]) for s, p in positions.items())
     st["equity"].append({"date": today, "value": float(bot["capital"]) + st.get("realized", 0.0) + unreal})
+    protections.evaluate_after_step(bot, st, today)
     bots.save(bot)
     return {"ran": today, "rebalanced": d["due"]}
 

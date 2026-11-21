@@ -13,6 +13,7 @@ from ..quant.engine import RiskRules
 from ..quant.strategies import STRATEGIES, StrategyParamError
 from ..storage import get_store
 from ..users.repository import now_iso
+from . import protections
 
 BOTS = "bots"
 EVENTS = "bot_events"
@@ -95,11 +96,12 @@ def validate(body: dict, existing: Optional[dict] = None) -> dict:
         if not 0.5 <= drift_pct <= 50.0:
             raise ApiError(400, "out_of_range", "허용 편차는 0.5 ~ 50% 범위여야 합니다")
         name = str(src.get("name") or f"{model.name} ({market})")[:60]
+        guard = protections.validate_guard(src.get("guard"))
         return {
             "kind": "rebalance", "category": "rebalance", "timeframe": "1d",
             "name": name, "market": market, "symbol": ",".join(a["symbol"] for a in assets),
             "model": model.id, "assets": assets, "rebalance": rebalance, "drift_pct": drift_pct,
-            "params": params, "capital": capital,
+            "params": params, "guard": guard, "capital": capital,
         }
 
     symbol = str(src.get("symbol", "")).strip().upper()
@@ -116,11 +118,12 @@ def validate(body: dict, existing: Optional[dict] = None) -> dict:
         risk = RiskRules.from_dict(src.get("risk")).to_dict()
     except (TypeError, ValueError) as e:
         raise ApiError(400, "invalid_risk", str(e))
+    guard = protections.validate_guard(src.get("guard"))
     name = str(src.get("name") or f"{cls.name} · {symbol}")[:60]
     return {
         "kind": "single", "category": cls.category, "timeframe": cls.timeframe,
         "name": name, "market": market, "symbol": symbol, "strategy": cls.id, "params": params,
-        "risk": risk, "capital": capital,
+        "risk": risk, "guard": guard, "capital": capital,
     }
 
 
@@ -212,6 +215,8 @@ def public(bot: dict) -> dict:
             "rebalances": (st.get("rebalances") or [])[-30:],
             "trades": [],
             "equity": st["equity"][-400:],
+            "tripped": st.get("tripped"),
+            "cooldown_until": st.get("cooldown_until"),
             **({"cash": st["cash"], "equity_now": st["cash"] + pos_val} if bot["mode"] == "paper" else {}),
         }
         return out
@@ -224,6 +229,8 @@ def public(bot: dict) -> dict:
         "last_price": st.get("last_price"),
         "trades": st["trades"][-50:],
         "equity": st["equity"][-400:],
+        "tripped": st.get("tripped"),
+        "cooldown_until": st.get("cooldown_until"),
         **({"cash": st["cash"], "equity_now": st["cash"] + pos["qty"] * price} if bot["mode"] == "paper" else {}),
     }
     return out

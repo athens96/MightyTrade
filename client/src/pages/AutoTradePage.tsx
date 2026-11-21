@@ -112,6 +112,8 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         <span className={`cat-badge ${bot.category}`}>{CAT_LABEL[bot.category]}{bot.timeframe !== '1d' ? ` · ${bot.timeframe}` : ''}</span>
         <span className={`mode-badge ${bot.mode}`}>{bot.mode === 'paper' ? '모의' : '실거래'}</span>
         <span className={`state-badge ${bot.enabled ? 'on' : ''}`}>{bot.enabled ? '켜짐' : '꺼짐'}</span>
+        {s.tripped && <span className="warn-badge" title={s.tripped.reason}>🛑 보호 잠금</span>}
+        {!s.tripped && s.cooldown_until && <span className="warn-badge" title={`${s.cooldown_until}까지 손절 후 휴식`}>⏳ 쿨다운 ~{s.cooldown_until}</span>}
         {!isRebal && (
           <a className="ext-link" href={investingUrl(bot.market, bot.symbol)} target="_blank" rel="noopener noreferrer" title="Investing.com에서 종목 정보·뉴스 보기">Investing ↗</a>
         )}
@@ -153,6 +155,11 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         theory={isRebal ? pModel?.theory : meta?.theory}
         guide={isRebal ? pModel?.guide : meta?.guide}
       />
+      {s.tripped && (
+        <p className="warn">
+          <b>🛑 서킷브레이커 자동 보호 작동 ({s.tripped.date}):</b> {s.tripped.reason}. 상태를 점검한 뒤 오른쪽 위 <b>켜기</b>를 누르면 잠금이 해제되고 새 기준점부터 감시를 재개합니다.
+        </p>
+      )}
       {error && <p className="error">{error}</p>}
 
       <div className="stat-tiles">

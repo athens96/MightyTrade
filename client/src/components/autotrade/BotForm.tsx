@@ -54,6 +54,10 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
   const [stopLossPct, setStopLossPct] = useState(initial?.risk?.stop_loss_pct ?? bot?.risk?.stop_loss_pct ?? 0)
   const [takeProfitPct, setTakeProfitPct] = useState(initial?.risk?.take_profit_pct ?? bot?.risk?.take_profit_pct ?? 0)
   const [trailingStopPct, setTrailingStopPct] = useState(initial?.risk?.trailing_stop_pct ?? bot?.risk?.trailing_stop_pct ?? 0)
+  const [maxDdPct, setMaxDdPct] = useState(initial?.guard?.max_drawdown_pct ?? bot?.guard?.max_drawdown_pct ?? 0)
+  const [maxLossStreak, setMaxLossStreak] = useState(initial?.guard?.max_consecutive_losses ?? bot?.guard?.max_consecutive_losses ?? 0)
+  const [cooldownDays, setCooldownDays] = useState(initial?.guard?.cooldown_days ?? bot?.guard?.cooldown_days ?? 0)
+  const [dailyLossPct, setDailyLossPct] = useState(initial?.guard?.daily_loss_limit_pct ?? bot?.guard?.daily_loss_limit_pct ?? 0)
   const [capital, setCapital] = useState(initial?.capital ?? (market === 'KR' ? 1_000_000 : 1_000))
   const [name, setName] = useState(initial?.name ?? '')
   const [watch, setWatch] = useState<WatchItem[]>([])
@@ -112,6 +116,12 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
     e.preventDefault()
     setBusy(true)
     setError('')
+    const guard = {
+      max_drawdown_pct: maxDdPct || 0,
+      max_consecutive_losses: maxLossStreak || 0,
+      cooldown_days: cooldownDays || 0,
+      daily_loss_limit_pct: dailyLossPct || 0,
+    }
     try {
       if (isRebal) {
         if (!pModel) return
@@ -125,6 +135,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
           rebalance,
           drift_pct: driftPct,
           params: full,
+          guard,
           capital,
         })
       } else {
@@ -142,6 +153,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             take_profit_pct: takeProfitPct || 0,
             trailing_stop_pct: trailingStopPct || 0,
           },
+          guard,
           capital,
         })
       }
@@ -317,6 +329,36 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             </div>
           </fieldset>
         )}
+
+        <fieldset className="costs" style={{ marginTop: 10 }}>
+          <legend>🛑 서킷브레이커 · 연패 자동 휴식 (0이면 끔)</legend>
+          <div className="modal-grid">
+            <label title="봇 평가자산이 원금(또는 최고점) 대비 이 비율(%) 이상 줄어들면 즉시 봇을 끄고 보호 잠금합니다">
+              <span>최대 허용 낙폭 (%)</span>
+              <input type="number" min={0} max={80} step={1} value={maxDdPct}
+                     title="봇 자산이 최고점 대비 이 비율(%) 이상 줄면 자동으로 봇을 일시정지합니다 (예: 10)"
+                     onChange={(e) => setMaxDdPct(Math.max(0, Number(e.target.value)))} />
+            </label>
+            <label title="연속으로 손절이 이 횟수만큼 이어지면 시장과 전략이 안 맞는 시기로 보고 자동으로 봇을 멈춥니다">
+              <span>연속 손절 한도 (회)</span>
+              <input type="number" min={0} max={20} step={1} value={maxLossStreak}
+                     title="연속 손절이 이 횟수에 도달하면 봇을 자동 중지합니다 (예: 3)"
+                     onChange={(e) => setMaxLossStreak(Math.max(0, Math.floor(Number(e.target.value))))} />
+            </label>
+            <label title="손실로 청산한 직후 같은 종목에 곧바로 재진입해 연타를 맞지 않도록 며칠 동안 쉴지 정합니다">
+              <span>손절 후 쿨다운 (일)</span>
+              <input type="number" min={0} max={60} step={1} value={cooldownDays}
+                     title="손절 직후 며칠 동안 신규 매수를 쉬어갈지 정합니다 (예: 3)"
+                     onChange={(e) => setCooldownDays(Math.max(0, Math.floor(Number(e.target.value))))} />
+            </label>
+            <label title="하루 동안 전날 자산 대비 이 비율(%) 이상 손실이 나면 그날 남은 시간에는 신규 매수를 보류합니다">
+              <span>일일 손실 한도 (%)</span>
+              <input type="number" min={0} max={50} step={0.5} value={dailyLossPct}
+                     title="전날 대비 당일 손실이 이 비율(%)을 넘으면 오늘 신규 매수를 중단합니다 (예: 5)"
+                     onChange={(e) => setDailyLossPct(Math.max(0, Number(e.target.value)))} />
+            </label>
+          </div>
+        </fieldset>
 
         {isRebal && pModel && (
           <div style={{ marginTop: 10 }}>

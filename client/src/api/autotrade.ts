@@ -24,6 +24,13 @@ export interface BotRebalanceLog {
   weights: Record<string, number>
 }
 
+export interface GuardRules {
+  max_drawdown_pct?: number
+  max_consecutive_losses?: number
+  cooldown_days?: number
+  daily_loss_limit_pct?: number
+}
+
 export interface Bot {
   id: string
   kind: BotKind
@@ -39,6 +46,7 @@ export interface Bot {
   drift_pct?: number
   params: Record<string, number>
   risk?: RiskRules
+  guard?: GuardRules
   capital: number
   mode: 'paper' | 'live'
   enabled: boolean
@@ -56,6 +64,8 @@ export interface Bot {
     last_price: number | null
     trades: BotTrade[]
     equity: { date: string; value: number }[]
+    tripped?: { at: string; date: string; reason: string } | null
+    cooldown_until?: string | null
     cash?: number
     equity_now?: number
   }
@@ -97,6 +107,7 @@ export interface BotInput {
   drift_pct?: number
   params?: Record<string, number>
   risk?: RiskRules
+  guard?: GuardRules
   capital: number
 }
 
