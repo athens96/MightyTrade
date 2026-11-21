@@ -255,6 +255,35 @@ def state(bot: dict) -> dict:
     return bot["state"][state_key(bot.get("mode", "paper"))]
 
 
+def record_live_slippage(
+    st: dict,
+    symbol: str,
+    side: str,
+    qty: float,
+    signal_price: Optional[float],
+    fill_price: float,
+    date: str,
+) -> Optional[float]:
+    """Record live execution fill vs signal reference price in basis points (+ = adverse slippage, - = price improvement)."""
+    if not signal_price or signal_price <= 0 or fill_price <= 0 or qty <= 0:
+        return None
+    s_up = str(side).upper()
+    bps = ((fill_price / signal_price) - 1.0) * 10_000.0 if s_up == "BUY" else (1.0 - (fill_price / signal_price)) * 10_000.0
+    fills = st.setdefault("fills", [])
+    fills.append({
+        "date": date,
+        "symbol": symbol,
+        "side": s_up,
+        "qty": round(float(qty), 4),
+        "signal_price": round(float(signal_price), 4),
+        "fill_price": round(float(fill_price), 4),
+        "slippage_bps": round(bps, 2),
+    })
+    if len(fills) > 200:
+        del fills[:-200]
+    return round(bps, 2)
+
+
 def log(bot: dict, kind: str, message: str, level: str = "info", data: Optional[dict] = None) -> None:
     store = get_store()
     store.put(EVENTS, uuid.uuid4().hex, {

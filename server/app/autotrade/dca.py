@@ -300,7 +300,7 @@ def run_live(bot: dict, today: str) -> dict[str, Any]:
                                "timeInForce": "DAY", "quantity": str(qty)}
                     built = {"market": m, "payload": payload, "checks": {"estimated_value": qty * current}}
                     r = trading.submit(built, bot["user_id"], source=f"bot:{bot['id']}")
-                    st["pending"].append({"kind": "order", "id": r["orderId"], "side": "BUY", "qty": qty, "date": today, "synced": 0.0})
+                    st["pending"].append({"kind": "order", "id": r["orderId"], "side": "BUY", "qty": qty, "date": today, "synced": 0.0, "signal_price": current})
                     st["dca_invested"] = float(st.get("dca_invested") or 0.0) + qty * current
                     st["last_dca_date"] = today
                     bots.log(bot, "order", f"[적립] 시장가 매수 {qty}주 — {d['multiplier_note']}")

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { autotradeApi, PREFILL_KEY, type Bot, type BotCategory, type BotEvent, type BotInput, type BotMode, type Evaluation } from '../api/autotrade'
+import { autotradeApi, PREFILL_KEY, type AutotradeOverview, type Bot, type BotCategory, type BotEvent, type BotInput, type BotMode, type Evaluation } from '../api/autotrade'
 import { ApiError } from '../api/client'
 import { marketApi, type MarketRegime } from '../api/market'
 import { quantApi, type PortfolioModelMeta, type StrategyMeta } from '../api/quant'
 import { priceFormatter } from '../components/chart/format'
 import BotForm from '../components/autotrade/BotForm'
+import OverviewPanel from '../components/autotrade/OverviewPanel'
 import { FeatureGuideBox, StrategyGuideBox } from '../components/GuideBox'
 import UnlockBar from '../components/trading/UnlockBar'
 import { investingUrl } from '../lib/externalLinks'
@@ -533,6 +534,7 @@ export default function AutoTradePage() {
   const [strategies, setStrategies] = useState<StrategyMeta[]>([])
   const [portfolioModels, setPortfolioModels] = useState<PortfolioModelMeta[]>([])
   const [status, setStatus] = useState<{ halted: boolean; scheduler: { running: boolean; last_tick: string | null } } | null>(null)
+  const [overview, setOverview] = useState<AutotradeOverview | null>(null)
   const [regimes, setRegimes] = useState<{ KR: MarketRegime; US: MarketRegime } | null>(null)
   const [creating, setCreating] = useState<(Partial<BotInput> & { category?: BotCategory }) | null>(null)
   const [resumeOtp, setResumeOtp] = useState('')
@@ -541,6 +543,7 @@ export default function AutoTradePage() {
   const load = useCallback(() => {
     autotradeApi.bots().then((r) => setBots(r.items)).catch((e) => setError({ code: e instanceof ApiError ? e.code : '', message: e.message }))
     autotradeApi.status().then(setStatus).catch(() => undefined)
+    autotradeApi.overview().then(setOverview).catch(() => undefined)
     marketApi.regimes().then(setRegimes).catch(() => undefined)
   }, [])
 
@@ -564,7 +567,10 @@ export default function AutoTradePage() {
     }
   }, [visibleBots, selected])
 
-  const upsert = (b: Bot) => setBots((list) => (list.some((x) => x.id === b.id) ? list.map((x) => (x.id === b.id ? b : x)) : [...list, b]))
+  const upsert = (b: Bot) => {
+    setBots((list) => (list.some((x) => x.id === b.id) ? list.map((x) => (x.id === b.id ? b : x)) : [...list, b]))
+    autotradeApi.overview().then(setOverview).catch(() => undefined)
+  }
   const current = visibleBots.find((b) => b.id === selected) ?? bots.find((b) => b.id === selected)
   const countOf = (c: BotCategory) => bots.filter((b) => b.category === c).length
 
@@ -644,6 +650,15 @@ export default function AutoTradePage() {
         <button className={filter === 'dca' ? 'active' : ''} title="세일 구간에 더 사고 과열 구간에 덜 사며 꾸준히 모으는 스마트 적립식 봇만 봅니다" onClick={() => setFilter('dca')}>적립식 봇 {countOf('dca')}</button>
       </div>
       <FeatureGuideBox guide={FEATURE_GUIDES.autotrade} />
+      {overview && bots.length > 0 && (
+        <OverviewPanel
+          overview={overview}
+          onSelectBot={(id) => {
+            setFilter('all')
+            setSelected(id)
+          }}
+        />
+      )}
 
       {error?.code === 'toss_credentials_required' && <p className="placeholder">토스증권 API 키가 필요합니다. <Link to="/settings">설정에서 등록하기 →</Link></p>}
 

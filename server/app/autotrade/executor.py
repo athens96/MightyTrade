@@ -509,10 +509,12 @@ def reconcile_live(bot: dict, today: str) -> bool:
             filled = ex.get("filledQuantity") or 0.0
             delta = filled - p.get("synced", 0.0)
             if delta > 0 and ex.get("averageFilledPrice"):
-                _apply_live_fill(st, p["side"], delta, ex["averageFilledPrice"], today, entry_atr=p.get("entry_atr"))
+                avg_px = float(ex["averageFilledPrice"])
+                _apply_live_fill(st, p["side"], delta, avg_px, today, entry_atr=p.get("entry_atr"))
+                bots.record_live_slippage(st, p.get("symbol") or bot["symbol"], p["side"], delta, p.get("signal_price"), avg_px, today)
                 p["synced"] = filled
                 changed = True
-                bots.log(bot, "fill", f"{'매수' if p['side'] == 'BUY' else '매도'} 체결 {delta:g}주 @ {ex['averageFilledPrice']:,.2f}")
+                bots.log(bot, "fill", f"{'매수' if p['side'] == 'BUY' else '매도'} 체결 {delta:g}주 @ {avg_px:,.2f}")
             if o.get("status") in TERMINAL:
                 if o.get("status") == "REJECTED":
                     bots.log(bot, "error", f"주문 거부됨 ({p['side']})", "error")
@@ -773,7 +775,7 @@ def run_live(bot: dict, today: str) -> dict:
             if immediate:
                 r = _send_market(bot, side, qty, current, _client_order_id(bot, today, n, "mkt"))
                 st["pending"].append({"kind": "order", "id": r["orderId"], "side": side, "qty": qty,
-                                      "date": today, "synced": 0.0, **extra})
+                                      "date": today, "synced": 0.0, "signal_price": current, **extra})
                 bots.log(bot, "order", f"{'매수' if side == 'BUY' else '매도'} 시장가 {qty}주 주문 — {o.reason}")
                 if side == "SELL" and any(nxt.side == "buy" for nxt in orders[n + 1:]):
                     _wait_sell_fill(bot, today, r["orderId"])
@@ -784,12 +786,12 @@ def run_live(bot: dict, today: str) -> dict:
             elif o.kind == "limit" and level is not None:
                 r = _send_limit(bot, side, qty, level, _client_order_id(bot, today, n, "lmt"))
                 st["pending"].append({"kind": "order", "id": r["orderId"], "side": side, "qty": qty,
-                                      "date": today, "synced": 0.0, **extra})
+                                      "date": today, "synced": 0.0, "signal_price": level, **extra})
                 bots.log(bot, "order", f"{describe(o, today_bar.open)} → 지정가 {qty}주 (오늘 하루 유효)")
             else:
                 r = _send_conditional(bot, side, qty, level, today, _client_order_id(bot, today, n, "cond"))
                 st["pending"].append({"kind": "conditional", "id": r["conditionalOrderId"], "side": side, "qty": qty,
-                                      "date": today, "synced": 0.0, **extra})
+                                      "date": today, "synced": 0.0, "signal_price": level, **extra})
                 bots.log(bot, "order", f"{describe(o, today_bar.open)} → 조건주문 {qty}주 (오늘 하루 유효)")
         except ApiError as e:
             bots.log(bot, "error", f"주문 실패: {e.message}", "error", {"code": e.code})

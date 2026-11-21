@@ -380,7 +380,7 @@ def run_live(bot: dict, today: str) -> dict[str, Any]:
                         continue
                     r = rebal._send_market(bot, s, "SELL", qty, prices[s], _client_order_id(bot, today, s, "SELL"))
                     st["pending"].append({"kind": "order", "id": r["orderId"], "symbol": s, "side": "SELL",
-                                          "qty": qty, "date": today, "synced": 0.0})
+                                          "qty": qty, "date": today, "synced": 0.0, "signal_price": prices[s]})
                     sent_sells.add(r["orderId"])
                     n_sent += 1
                     bots.log(bot, "order", f"[순환매] {s} 교체 매도 시장가 {qty}주")
@@ -408,7 +408,7 @@ def run_live(bot: dict, today: str) -> dict[str, Any]:
                 try:
                     r = rebal._send_market(bot, s, "BUY", qty, prices[s], _client_order_id(bot, today, s, "BUY"))
                     st["pending"].append({"kind": "order", "id": r["orderId"], "symbol": s, "side": "BUY",
-                                          "qty": qty, "date": today, "synced": 0.0})
+                                          "qty": qty, "date": today, "synced": 0.0, "signal_price": prices[s]})
                     budget = max(budget - qty * unit, 0.0)
                     n_sent += 1
                     bots.log(bot, "order", f"[순환매] {s} 편입 매수 시장가 {qty}주")

@@ -11,7 +11,7 @@ from ..errors import ApiError
 from ..trading import orders as trading
 from ..users import credentials
 from ..users import repository as users
-from . import bots, executor, protections, semi
+from . import analytics, bots, executor, protections, semi
 from .scheduler import active_session, target_date
 
 bp = Blueprint("autotrade", __name__)
@@ -59,6 +59,12 @@ def resume():
     otp.verify(_user(), str((request.get_json(silent=True) or {}).get("otp_code", "")))
     users.update_user(g.user["id"], autotrade_halted=False)
     return jsonify(halted=False)
+
+
+@bp.get("/overview")
+@login_required
+def overview():
+    return jsonify(analytics.build_overview(g.user["id"]))
 
 
 @bp.get("/bots")

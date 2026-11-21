@@ -294,10 +294,12 @@ def reconcile_live(bot: dict, today: str) -> bool:
             filled = ex.get("filledQuantity") or 0.0
             delta = filled - p.get("synced", 0.0)
             if delta > 0 and ex.get("averageFilledPrice"):
-                _apply_fill(st, p["symbol"], p["side"], delta, ex["averageFilledPrice"])
+                avg_px = float(ex["averageFilledPrice"])
+                _apply_fill(st, p["symbol"], p["side"], delta, avg_px)
+                bots.record_live_slippage(st, p["symbol"], p["side"], delta, p.get("signal_price"), avg_px, today)
                 p["synced"] = filled
                 changed = True
-                bots.log(bot, "fill", f"[리밸런싱] {p['symbol']} {'매수' if p['side'] == 'BUY' else '매도'} 체결 {delta:g}주 @ {ex['averageFilledPrice']:,.2f}")
+                bots.log(bot, "fill", f"[리밸런싱] {p['symbol']} {'매수' if p['side'] == 'BUY' else '매도'} 체결 {delta:g}주 @ {avg_px:,.2f}")
             if o.get("status") in TERMINAL:
                 if o.get("status") == "REJECTED":
                     bots.log(bot, "error", f"[리밸런싱] {p['symbol']} 주문 거부됨 ({p['side']})", "error")
@@ -397,7 +399,7 @@ def run_live(bot: dict, today: str) -> dict[str, Any]:
                         continue
                     r = _send_market(bot, s, "SELL", qty, prices[s], _client_order_id(bot, today, s, "SELL"))
                     st["pending"].append({"kind": "order", "id": r["orderId"], "symbol": s, "side": "SELL",
-                                          "qty": qty, "date": today, "synced": 0.0})
+                                          "qty": qty, "date": today, "synced": 0.0, "signal_price": prices[s]})
                     sent_sells.add(r["orderId"])
                     n_sent += 1
                     bots.log(bot, "order", f"[리밸런싱] {s} 매도 시장가 {qty}주")
@@ -428,7 +430,7 @@ def run_live(bot: dict, today: str) -> dict[str, Any]:
                 try:
                     r = _send_market(bot, s, "BUY", qty, prices[s], _client_order_id(bot, today, s, "BUY"))
                     st["pending"].append({"kind": "order", "id": r["orderId"], "symbol": s, "side": "BUY",
-                                          "qty": qty, "date": today, "synced": 0.0})
+                                          "qty": qty, "date": today, "synced": 0.0, "signal_price": prices[s]})
                     budget = max(budget - qty * unit, 0.0)
                     n_sent += 1
                     bots.log(bot, "order", f"[리밸런싱] {s} 매수 시장가 {qty}주")

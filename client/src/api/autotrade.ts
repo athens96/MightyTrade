@@ -173,8 +173,88 @@ export interface BotInput {
   capital: number
 }
 
+export interface LedgerMarketSummary {
+  bots: number
+  enabled: number
+  capital: number
+  equity: number
+  invested: number
+  pnl: number
+  return_pct: number
+}
+
+export interface LedgerGroupSummary {
+  bots: number
+  enabled: number
+  capital_krw: number
+  equity_krw: number
+  invested_krw: number
+  pnl_krw: number
+  return_pct: number
+  kr_share_pct: number
+  us_share_pct: number
+  by_market: Record<Market, LedgerMarketSummary>
+}
+
+export interface OverviewDuplicateSymbol {
+  market: Market
+  symbol: string
+  live_conflict: boolean
+  bots: { id: string; name: string; mode: BotMode; enabled: boolean; category: BotCategory }[]
+}
+
+export interface OverviewScheduleItem {
+  bot_id: string
+  name: string
+  market: Market
+  category: BotCategory
+  mode: BotMode
+  enabled: boolean
+  schedule: string
+  last_run_date: string | null
+  pending_approval_orders: number
+  tripped: boolean
+}
+
+export interface OverviewScorecardItem {
+  bot_id: string
+  name: string
+  market: Market
+  category: BotCategory
+  mode: BotMode
+  enabled: boolean
+  paper_return_pct: number | null
+  paper_trades: number
+  paper_win_rate_pct: number | null
+  live_return_pct: number | null
+  live_trades: number
+  live_win_rate_pct: number | null
+  return_gap_pct: number | null
+  fills_count: number
+  avg_slippage_bps: number | null
+}
+
+export interface AutotradeOverview {
+  total_bots: number
+  enabled_bots: number
+  pending_approvals_count: number
+  tripped_count: number
+  usd_krw_ref: number
+  paper: LedgerGroupSummary
+  live: LedgerGroupSummary
+  combined_equity: { date: string; paper_return_pct: number | null; live_return_pct: number | null }[]
+  duplicate_symbols: OverviewDuplicateSymbol[]
+  upcoming: OverviewScheduleItem[]
+  execution: {
+    total_fills: number
+    avg_slippage_bps: number | null
+    items: OverviewScorecardItem[]
+  }
+}
+
 export const autotradeApi = {
   status: () => api<{ halted: boolean; scheduler: { running: boolean; last_tick: string | null; error: string | null } }>('/autotrade/status'),
+  overview: () => api<AutotradeOverview>('/autotrade/overview'),
   halt: () => api<{ halted: boolean; cancelled: number }>('/autotrade/halt', { method: 'POST' }),
   resume: (otp_code: string) => api<{ halted: boolean }>('/autotrade/resume', { method: 'POST', json: { otp_code } }),
   bots: () => api<{ items: Bot[] }>('/autotrade/bots'),
