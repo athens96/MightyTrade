@@ -15,7 +15,7 @@ export function StrategyGuideBox({
   if (!guide || (!guide.background && !guide.setup?.length && !guide.execution?.length)) return null
   return (
     <details className="guide-box" open={defaultOpen}>
-      <summary>
+      <summary title="클릭하면 이 투자 전략의 원리·권장 세팅·주의사항 가이드를 펼치거나 접습니다">
         <span>📘 {title}</span>
         {theory && <span className="muted small"> · {theory}</span>}
       </summary>
@@ -53,7 +53,7 @@ export function StrategyGuideBox({
 export function FeatureGuideBox({ guide }: { guide: FeatureGuide }) {
   return (
     <details className="guide-box feature-guide">
-      <summary>
+      <summary title="클릭하면 이 화면의 사용 순서와 안전장치 안내를 펼치거나 접습니다">
         <span>🧭 {guide.title}</span>
         <span className="muted small"> · 처음 쓰시나요? 세팅·진행 방법 보기</span>
       </summary>

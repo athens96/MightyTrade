@@ -113,11 +113,15 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         <span className={`mode-badge ${bot.mode}`}>{bot.mode === 'paper' ? '모의' : '실거래'}</span>
         <span className={`state-badge ${bot.enabled ? 'on' : ''}`}>{bot.enabled ? '켜짐' : '꺼짐'}</span>
         {!isRebal && (
-          <a className="ext-link" href={investingUrl(bot.market, bot.symbol)} target="_blank" rel="noopener noreferrer">Investing ↗</a>
+          <a className="ext-link" href={investingUrl(bot.market, bot.symbol)} target="_blank" rel="noopener noreferrer" title="Investing.com에서 종목 정보·뉴스 보기">Investing ↗</a>
         )}
         <div className="spacer" />
-        <button onClick={() => act('toggle', () => (bot.enabled ? autotradeApi.disable(bot.id) : autotradeApi.enable(bot.id)))} disabled={!!busy}
-                className={bot.enabled ? '' : bot.mode === 'live' ? 'danger' : 'primary'}>
+        <button
+          onClick={() => act('toggle', () => (bot.enabled ? autotradeApi.disable(bot.id) : autotradeApi.enable(bot.id)))}
+          disabled={!!busy}
+          title={bot.enabled ? '이 봇의 스케줄 자동 실행을 멈춥니다 (이미 보유 중인 주식은 그대로 유지)' : bot.mode === 'live' ? '주의: 켜면 정해진 스케줄마다 내 토스증권 계좌로 실제 자동 주문이 나갑니다' : '정해진 시각마다 가상 자금으로 모의 자동매매를 실행하도록 켭니다'}
+          className={bot.enabled ? '' : bot.mode === 'live' ? 'danger' : 'primary'}
+        >
           {bot.enabled ? '끄기' : bot.mode === 'live' ? '켜기 (실제 주문)' : '켜기'}
         </button>
       </div>
@@ -181,18 +185,40 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
       </div>
 
       <div className="bot-actions">
-        <button disabled={!!busy} onClick={() => act('eval', async () => setEvaluation(await autotradeApi.evaluate(bot.id)))}>
+        <button
+          disabled={!!busy}
+          title="실제 주문은 절대 보내지 않고, 최신 시세 기준으로 매수·매도·리밸런싱 신호가 떴는지만 안전하게 확인합니다"
+          onClick={() => act('eval', async () => setEvaluation(await autotradeApi.evaluate(bot.id)))}
+        >
           {busy === 'eval' ? '점검 중…' : '지금 점검 (주문 없음)'}
         </button>
         {bot.mode === 'paper' && (
           <>
-            <button disabled={!!busy} onClick={() => act('run', () => autotradeApi.run(bot.id))}>{busy === 'run' ? '실행 중…' : '오늘 실행 (모의)'}</button>
-            <button disabled={!!busy} onClick={() => confirm('모의 기록을 모두 지울까요?') && act('reset', () => autotradeApi.reset(bot.id))}>모의 초기화</button>
+            <button
+              disabled={!!busy}
+              title="정해진 스케줄 시각을 기다리지 않고 지금 바로 가상 자금 모의 실행을 1회 수행합니다"
+              onClick={() => act('run', () => autotradeApi.run(bot.id))}
+            >
+              {busy === 'run' ? '실행 중…' : '오늘 실행 (모의)'}
+            </button>
+            <button
+              disabled={!!busy}
+              title="이 봇의 가상 보유 수량과 모의 수익 기록을 모두 지우고 처음 원금 상태로 초기화합니다"
+              onClick={() => confirm('모의 기록을 모두 지울까요?') && act('reset', () => autotradeApi.reset(bot.id))}
+            >
+              모의 초기화
+            </button>
           </>
         )}
-        <button disabled={!!busy} onClick={() => setEditing(true)}>설정 변경</button>
-        <button className="link danger-link" disabled={!!busy}
-                onClick={() => confirm('봇을 삭제할까요?') && act('del', async () => { await autotradeApi.remove(bot.id); onDeleted() })}>삭제</button>
+        <button disabled={!!busy} title="이 봇의 운용 자금·전략 파라미터·리밸런싱 설정을 수정합니다" onClick={() => setEditing(true)}>설정 변경</button>
+        <button
+          className="link danger-link"
+          disabled={!!busy}
+          title="이 봇과 실행 로그를 삭제합니다 (토스증권 실제 계좌의 보유 주식에는 영향을 주지 않습니다)"
+          onClick={() => confirm('봇을 삭제할까요?') && act('del', async () => { await autotradeApi.remove(bot.id); onDeleted() })}
+        >
+          삭제
+        </button>
       </div>
 
       {evaluation && (
@@ -256,16 +282,35 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
               실거래 모드에서 봇을 켜면 <b>실제 주문이 자동으로 나갑니다.</b> 모의 모드로 충분히 확인한 뒤 전환하세요. 주문은 계정의 일일 주문 한도·건당 금액
               한도를 따르고, 상단의 <b>전체 중지</b>로 언제든 멈출 수 있습니다. 전환하면 봇은 꺼진 상태가 됩니다.
             </p>
-            <label className="check small"><input type="checkbox" checked={confirmLive} onChange={(e) => setConfirmLive(e.target.checked)} /> 실제 돈으로 자동 주문된다는 것을 이해했습니다</label>
+            <label className="check small" title="모의 모드로 충분히 테스트했으며 실거래 전환 후 봇을 켜면 내 계좌에서 실제 주문이 나간다는 점을 확인합니다">
+              <input type="checkbox" checked={confirmLive} onChange={(e) => setConfirmLive(e.target.checked)} /> 실제 돈으로 자동 주문된다는 것을 이해했습니다
+            </label>
             <div className="modal-actions" style={{ justifyContent: 'flex-start' }}>
-              <input className="otp-input" inputMode="numeric" maxLength={6} placeholder="OTP" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} />
-              <button className="danger" disabled={!confirmLive || otp.length !== 6 || !!busy} onClick={() => act('mode', () => autotradeApi.mode(bot.id, 'live', otp))}>실거래 모드로 전환</button>
+              <input
+                className="otp-input"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="OTP"
+                value={otp}
+                title="실거래 전환 보안을 위해 스마트폰 인증 앱의 6자리 OTP 숫자를 입력하세요"
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+              />
+              <button
+                className="danger"
+                disabled={!confirmLive || otp.length !== 6 || !!busy}
+                title="위 확인 체크와 OTP 6자리를 입력하면 실거래 모드로 전환합니다 (전환 직후에는 안전을 위해 꺼진 상태로 유지됩니다)"
+                onClick={() => act('mode', () => autotradeApi.mode(bot.id, 'live', otp))}
+              >
+                실거래 모드로 전환
+              </button>
             </div>
           </>
         ) : (
           <div className="modal-actions" style={{ justifyContent: 'flex-start' }}>
             <span className="small">실거래 모드입니다. 이미 들어간 주문·보유는 모의로 바꿔도 그대로 남습니다.</span>
-            <button disabled={!!busy} onClick={() => act('mode', () => autotradeApi.mode(bot.id, 'paper'))}>모의 모드로 전환</button>
+            <button disabled={!!busy} title="실제 계좌 자동 주문을 멈추고 안전한 가상 모의투자 모드로 되돌립니다" onClick={() => act('mode', () => autotradeApi.mode(bot.id, 'paper'))}>
+              모의 모드로 전환
+            </button>
           </div>
         )}
       </div>
@@ -388,29 +433,53 @@ export default function AutoTradePage() {
         {status?.halted ? (
           <>
             <span className="error small">전체 중지 상태 — 모든 봇이 멈춰 있습니다</span>
-            <input className="otp-input" inputMode="numeric" maxLength={6} placeholder="OTP" value={resumeOtp} onChange={(e) => setResumeOtp(e.target.value.replace(/\D/g, ''))} />
-            <button disabled={resumeOtp.length !== 6} onClick={async () => {
-              try { await autotradeApi.resume(resumeOtp); load() } catch (e) { alert((e as Error).message) } finally { setResumeOtp('') }
-            }}>재개</button>
+            <input
+              className="otp-input"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="OTP"
+              value={resumeOtp}
+              title="전체 중지를 해제하려면 스마트폰 인증 앱의 6자리 OTP 숫자를 입력하세요"
+              onChange={(e) => setResumeOtp(e.target.value.replace(/\D/g, ''))}
+            />
+            <button
+              disabled={resumeOtp.length !== 6}
+              title="OTP 6자리를 확인해 비상 전체 중지 상태를 해제합니다"
+              onClick={async () => {
+                try { await autotradeApi.resume(resumeOtp); load() } catch (e) { alert((e as Error).message) } finally { setResumeOtp('') }
+              }}
+            >
+              재개
+            </button>
           </>
         ) : (
-          <button className="danger" onClick={async () => {
-            if (!confirm('모든 봇을 멈추고 봇이 낸 미체결 주문을 취소할까요?')) return
-            const r = await autotradeApi.halt()
-            alert(`전체 중지됨 · 취소한 주문 ${r.cancelled}건`)
-            load()
-          }}>■ 전체 중지</button>
+          <button
+            className="danger"
+            title="비상 정지 버튼: 즉시 모든 봇의 스케줄 실행을 멈추고 봇이 내놓은 미체결 주문을 모두 취소합니다"
+            onClick={async () => {
+              if (!confirm('모든 봇을 멈추고 봇이 낸 미체결 주문을 취소할까요?')) return
+              const r = await autotradeApi.halt()
+              alert(`전체 중지됨 · 취소한 주문 ${r.cancelled}건`)
+              load()
+            }}
+          >
+            ■ 전체 중지
+          </button>
         )}
-        <button className="primary" onClick={() => setCreating({ category: filter === 'all' ? 'swing' : filter, ...(filter === 'rebalance' ? { kind: 'rebalance' } : {}) })}>
+        <button
+          className="primary"
+          title="새로운 스윙·단타·리밸런싱 자동매매 봇을 만듭니다 (처음엔 안전한 모의 모드·꺼진 상태로 생성)"
+          onClick={() => setCreating({ category: filter === 'all' ? 'swing' : filter, ...(filter === 'rebalance' ? { kind: 'rebalance' } : {}) })}
+        >
           + 봇 만들기
         </button>
       </div>
 
       <div className="tabs" style={{ marginBottom: 10 }}>
-        <button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>전체 {bots.length}</button>
-        <button className={filter === 'swing' ? 'active' : ''} onClick={() => setFilter('swing')}>스윙봇 {countOf('swing')}</button>
-        <button className={filter === 'daytrade' ? 'active' : ''} onClick={() => setFilter('daytrade')}>단타봇 {countOf('daytrade')}</button>
-        <button className={filter === 'rebalance' ? 'active' : ''} onClick={() => setFilter('rebalance')}>리밸런싱 봇 {countOf('rebalance')}</button>
+        <button className={filter === 'all' ? 'active' : ''} title="만들어 둔 모든 자동매매 봇을 한꺼번에 봅니다" onClick={() => setFilter('all')}>전체 {bots.length}</button>
+        <button className={filter === 'swing' ? 'active' : ''} title="일봉 기준으로 며칠~몇 주 추세를 타는 스윙봇만 모아서 봅니다" onClick={() => setFilter('swing')}>스윙봇 {countOf('swing')}</button>
+        <button className={filter === 'daytrade' ? 'active' : ''} title="장중 분봉·시초가 돌파를 노리고 당일 마감 전에 청산하는 단타봇만 봅니다" onClick={() => setFilter('daytrade')}>단타봇 {countOf('daytrade')}</button>
+        <button className={filter === 'rebalance' ? 'active' : ''} title="여러 ETF를 묶어 정기적으로 목표 비중을 맞춰주는 자산배분 리밸런싱 봇만 봅니다" onClick={() => setFilter('rebalance')}>리밸런싱 봇 {countOf('rebalance')}</button>
       </div>
       <FeatureGuideBox guide={FEATURE_GUIDES.autotrade} />
 
@@ -427,7 +496,12 @@ export default function AutoTradePage() {
               ? (heldCount ? `${heldCount}종목 보유` : '미구성')
               : (heldCount ? `${heldCount}주 보유` : '미보유')
             return (
-              <button key={b.id} className={`bot-item ${b.id === selected ? 'active' : ''}`} onClick={() => setSelected(b.id)}>
+              <button
+                key={b.id}
+                className={`bot-item ${b.id === selected ? 'active' : ''}`}
+                title={`${b.name} 상세 상태·수익률·실행 기록 보기`}
+                onClick={() => setSelected(b.id)}
+              >
                 <div className="bot-item-top">
                   <b>{b.name}</b>
                   <span className={`cat-badge ${b.category}`}>{CAT_LABEL[b.category]}</span>

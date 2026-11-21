@@ -20,7 +20,7 @@ function ParamInput({ def, value, onChange }: { def: ParamDef; value: number; on
     else setText(String(value))
   }
   return (
-    <label className="param">
+    <label className="param" title={`${def.label} 설정값 (입력 범위: ${def.min} ~ ${def.max}${def.min === 0 ? ', 0을 넣으면 해당 선을 숨김' : ''})`}>
       <span>{def.label}</span>
       <input
         type="number"
@@ -63,7 +63,11 @@ export default function IndicatorPanel({ value, onChange }: Props) {
 
   return (
     <div className="indicator-panel" ref={ref}>
-      <button className={open ? 'active' : ''} onClick={() => setOpen((o) => !o)}>
+      <button
+        className={open ? 'active' : ''}
+        title="이동평균선·볼린저밴드·RSI·MACD 등 20가지 차트 보조지표를 켜고 끄거나 기간 숫자를 조절합니다"
+        onClick={() => setOpen((o) => !o)}
+      >
         지표 {value.length > 0 && <span className="badge">{value.length}</span>}
       </button>
       {open && (
@@ -79,11 +83,11 @@ export default function IndicatorPanel({ value, onChange }: Props) {
                 return (
                   <div key={def.id} className={`indicator-item${cfg ? ' on' : ''}`}>
                     <div className="indicator-head">
-                      <label>
+                      <label title={def.description}>
                         <input type="checkbox" checked={!!cfg} onChange={() => toggle(def)} />
                         {def.name}
                       </label>
-                      <button className="link" onClick={() => setExpanded(isOpen ? null : def.id)} title="설명 / 설정">
+                      <button className="link" onClick={() => setExpanded(isOpen ? null : def.id)} title="이 지표의 쉬운 설명을 보거나 계산 기간 숫자를 바꿉니다">
                         {isOpen ? '접기' : cfg && def.params.length ? '설정' : '설명'}
                       </button>
                     </div>
@@ -95,7 +99,7 @@ export default function IndicatorPanel({ value, onChange }: Props) {
                             {def.params.map((p) => (
                               <ParamInput key={p.key} def={p} value={cfg.params[p.key]} onChange={(v) => setParam(def.id, p.key, v)} />
                             ))}
-                            <button className="link" onClick={() => reset(def)}>기본값</button>
+                            <button className="link" title="이 지표의 숫자들을 처음 권장 기본값으로 되돌립니다" onClick={() => reset(def)}>기본값</button>
                           </div>
                         )}
                       </div>

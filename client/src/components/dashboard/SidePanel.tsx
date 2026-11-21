@@ -140,9 +140,9 @@ export default function SidePanel({ market, symbol, name, lastPrice, book, ticks
   return (
     <aside className="side-panel">
       <div className="tabs">
-        <button className={tab === 'book' ? 'active' : ''} onClick={() => setTab('book')}>호가·체결</button>
-        <button className={tab === 'order' ? 'active' : ''} onClick={() => setTab('order')}>주문</button>
-        <button className={tab === 'flow' ? 'active' : ''} onClick={() => setTab('flow')}>수급</button>
+        <button className={tab === 'book' ? 'active' : ''} title="실시간 매수·매도 대기 물량(호가창)과 방금 체결된 내역을 봅니다" onClick={() => setTab('book')}>호가·체결</button>
+        <button className={tab === 'order' ? 'active' : ''} title="호가창을 보면서 안전하게 매수·매도 주문을 넣습니다" onClick={() => setTab('order')}>주문</button>
+        <button className={tab === 'flow' ? 'active' : ''} title="최근 20일간 개인·외국인·기관이 얼마나 사고팔았는지 확인합니다 (국내 종목 전용)" onClick={() => setTab('flow')}>수급</button>
         <div className="spacer" />
         {tab === 'book' && <span className={`stream-state ${state}`}><i className="dot" aria-hidden />{STATE_LABEL[state]}</span>}
       </div>

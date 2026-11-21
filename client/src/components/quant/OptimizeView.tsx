@@ -18,7 +18,13 @@ function PickCard({ title, hint, pick, objective, objectiveLabel, onPick }: {
         <span>MDD <b>{fmtMetric('mdd_pct', pick.metrics.mdd_pct)}</b></span>
         <span>매매 <b>{pick.metrics.trades}</b></span>
       </div>
-      <button className="link" onClick={() => onPick(pick.params)}>이 설정으로 백테스트 →</button>
+      <button
+        className="link"
+        title="이 파라미터 숫자들을 적용해 전체 기간 상세 백테스트와 매매 타점 차트를 실행합니다"
+        onClick={() => onPick(pick.params)}
+      >
+        이 설정으로 백테스트 →
+      </button>
     </div>
   )
 }

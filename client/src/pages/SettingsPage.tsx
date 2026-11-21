@@ -69,7 +69,7 @@ export default function SettingsPage() {
               <dt>확인 시각</dt>
               <dd>{status.verified_at ? new Date(status.verified_at).toLocaleString() : '-'}</dd>
             </dl>
-            <button className="danger" onClick={remove}>키 삭제</button>
+            <button className="danger" title="서버에 암호화되어 저장된 내 토스증권 API 키를 즉시 삭제합니다" onClick={remove}>키 삭제</button>
           </>
         )}
       </section>
@@ -82,21 +82,28 @@ export default function SettingsPage() {
           <li>아래에 입력 후 OTP 코드로 확인 (키는 브라우저에서 암호화되어 전송되고, 서버에도 암호화되어 저장됩니다)</li>
         </ol>
         <form className="form" onSubmit={submit} autoComplete="off">
-          <label>
+          <label title="토스증권 PC 웹(WTS) → 설정 → Open API에서 발급받은 Client ID를 붙여넣으세요">
             Client ID
-            <input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="tsck_live_…" spellCheck={false} />
+            <input
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="tsck_live_…"
+              title="토스증권 Open API에서 발급받은 Client ID(tsck_live_... 등)를 붙여넣으세요"
+              spellCheck={false}
+            />
           </label>
-          <label>
+          <label title="토스증권 Open API에서 함께 발급받은 비밀 키(Client Secret)를 입력하세요 (암호화되어 전송·저장됩니다)">
             Client Secret
             <input
               type="password"
               autoComplete="new-password"
               value={clientSecret}
               onChange={(e) => setClientSecret(e.target.value)}
+              title="토스증권 Open API에서 발급받은 Client Secret을 입력하세요 (암호화되어 전송·저장됩니다)"
               spellCheck={false}
             />
           </label>
-          <label>
+          <label title="본인 확인을 위해 스마트폰 인증 앱(Google Authenticator 등)에 표시된 6자리 숫자를 입력하세요">
             OTP 코드
             <input
               inputMode="numeric"
@@ -105,9 +112,14 @@ export default function SettingsPage() {
               value={otpCode}
               onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
               placeholder="6자리"
+              title="스마트폰 인증 앱에 표시된 6자리 일회용 숫자를 입력하세요"
             />
           </label>
-          <button type="submit" disabled={busy || !clientId.trim() || !clientSecret.trim() || otpCode.length !== 6}>
+          <button
+            type="submit"
+            disabled={busy || !clientId.trim() || !clientSecret.trim() || otpCode.length !== 6}
+            title="입력한 API 키가 정상 작동하는지 토스증권에 먼저 확인한 뒤 암호화해 안전하게 저장합니다"
+          >
             {busy ? '토스증권에 확인 중…' : '확인 후 저장'}
           </button>
         </form>

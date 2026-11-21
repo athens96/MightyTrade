@@ -52,11 +52,12 @@ export default function OtpPage() {
           autoComplete="one-time-code"
           maxLength={6}
           placeholder="6자리 코드"
+          title="스마트폰 인증 앱(Google Authenticator 등)에 표시된 6자리 일회용 숫자를 입력하세요"
           value={code}
           onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
           autoFocus
         />
-        <button type="submit" disabled={code.length !== 6}>확인</button>
+        <button type="submit" disabled={code.length !== 6} title="6자리 OTP 코드를 확인하고 로그인을 완료합니다">확인</button>
       </form>
       {error && <p className="error">{error}</p>}
     </AuthShell>

@@ -61,10 +61,10 @@ export default function OcoDialog({ holding, onClose, onDone }: { holding: Holdi
     }
   }
 
-  const num = (label: string, value: number, set: (v: number) => void, hint?: string) => (
-    <label>
+  const num = (label: string, value: number, set: (v: number) => void, hint?: string, tip?: string) => (
+    <label title={tip}>
       <span>{label} {hint && <span className="muted small">{hint}</span>}</span>
-      <input type="number" step="any" value={value} onChange={(e) => edit(set)(Number(e.target.value))} />
+      <input type="number" step="any" value={value} title={tip} onChange={(e) => edit(set)(Number(e.target.value))} />
     </label>
   )
 
@@ -78,26 +78,35 @@ export default function OcoDialog({ holding, onClose, onDone }: { holding: Holdi
           {market === 'KR' && ' 국내 주식은 KRX 정규장에서만 발동됩니다.'}
         </p>
         <div className="modal-grid">
-          {num('수량', qty, setQty)}
-          <label>
+          {num('수량', qty, setQty, undefined, '익절·손절 자동 감시를 걸어둘 주식 수량입니다 (보유 수량 이내)')}
+          <label title="이 날짜까지 익절가나 손절가에 도달하지 않으면 조건주문이 자동 종료됩니다 (최대 1년)">
             <span>만료일 <span className="muted small">최대 1년</span></span>
-            <input type="date" value={expire} min={inDays(0)} max={inDays(365)} onChange={(e) => edit(setExpire)(e.target.value)} />
+            <input
+              type="date"
+              value={expire}
+              min={inDays(0)}
+              max={inDays(365)}
+              title="이 날짜까지 익절가나 손절가에 도달하지 않으면 조건주문이 자동 종료됩니다 (최대 1년)"
+              onChange={(e) => edit(setExpire)(e.target.value)}
+            />
           </label>
-          {num('익절 감시가', tpTrigger, setTpTrigger, pct(tpTrigger))}
-          {num('익절 주문가 (지정가)', tpPrice, setTpPrice, pct(tpPrice))}
-          {num('손절 감시가', slTrigger, setSlTrigger, pct(slTrigger))}
-          {num('손절 주문가 (지정가)', slPrice, setSlPrice, `${pct(slPrice)} · 감시가보다 약간 낮게 두면 급락 시에도 체결될 가능성이 높아요`)}
+          {num('익절 감시가', tpTrigger, setTpTrigger, pct(tpTrigger), '주가가 이 가격 이상으로 올라오면 수익 실현 매도 주문을 발동시킵니다')}
+          {num('익절 주문가 (지정가)', tpPrice, setTpPrice, pct(tpPrice), '익절 감시가에 닿았을 때 실제로 거래소에 내보낼 매도 지정가입니다')}
+          {num('손절 감시가', slTrigger, setSlTrigger, pct(slTrigger), '주가가 이 가격 이하로 내려가면 큰 손실을 막기 위해 손절 매도 주문을 발동시킵니다')}
+          {num('손절 주문가 (지정가)', slPrice, setSlPrice, `${pct(slPrice)} · 감시가보다 약간 낮게 두면 급락 시에도 체결될 가능성이 높아요`, '손절 감시가에 닿았을 때 내보낼 매도 지정가입니다 (감시가보다 약 1% 낮게 두면 급락 시 미체결 위험을 줄여줍니다)')}
         </div>
         {needHighValue && (
-          <label className="check">
+          <label className="check" title="1억 원 이상 큰 금액의 조건주문 실수를 막기 위한 확인 체크입니다">
             <input type="checkbox" checked={highValue} onChange={(e) => edit(setHighValue)(e.target.checked)} /> 1억 원 이상 고액 주문임을 확인합니다
           </label>
         )}
 
         {!preview && (
           <div className="modal-actions">
-            <button type="button" onClick={onClose}>닫기</button>
-            <button type="submit" disabled={busy}>{busy ? '확인 중…' : '미리보기 (주문 전송 안 함)'}</button>
+            <button type="button" title="입력한 내용을 취소하고 창을 닫습니다" onClick={onClose}>닫기</button>
+            <button type="submit" disabled={busy} title="아직 실제 주문을 보내지 않고, 호가 단위 보정 결과와 예상 익절·손절 비율을 먼저 점검합니다">
+              {busy ? '확인 중…' : '미리보기 (주문 전송 안 함)'}
+            </button>
           </div>
         )}
 
@@ -114,15 +123,22 @@ export default function OcoDialog({ holding, onClose, onDone }: { holding: Holdi
               </tbody>
             </table>
             <p className="muted small">가격은 호가 단위에 맞게 조정되었습니다. 아직 아무 주문도 전송되지 않았습니다.</p>
-            <label className="check">
+            <label className="check" title="위 미리보기 조건을 확인했으며 토스증권에 실제 조건주문을 등록한다는 최종 확인 체크입니다">
               <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
               실제 주문이 토스증권에 전송되는 것을 확인합니다
             </label>
             <div className="modal-actions">
-              <button type="button" onClick={onClose}>닫기</button>
+              <button type="button" title="전송하지 않고 창을 닫습니다" onClick={onClose}>닫기</button>
               <input className="otp-input" inputMode="numeric" maxLength={6} placeholder="OTP 6자리" value={otp}
+                     title="스마트폰 인증 앱(Google Authenticator 등)에 표시된 6자리 OTP 숫자를 입력하세요"
                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} />
-              <button type="button" className="danger" disabled={busy || !confirmed || otp.length !== 6} onClick={(e) => run(e, true)}>
+              <button
+                type="button"
+                className="danger"
+                disabled={busy || !confirmed || otp.length !== 6}
+                title="위 확인 체크와 OTP 6자리 입력을 마치면 토스증권에 익절·손절 조건주문을 실제 전송합니다"
+                onClick={(e) => run(e, true)}
+              >
                 {busy ? '전송 중…' : '실제 주문 전송'}
               </button>
             </div>

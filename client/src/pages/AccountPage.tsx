@@ -82,11 +82,13 @@ export default function AccountPage() {
     <div className="account">
       <div className="account-head">
         <h2>계좌</h2>
-        <label className="check small">
+        <label className="check small" title="켜면 지금 주식을 팔 때 빠져나갈 증권사 수수료와 세금까지 미리 뺀 실제 순수익으로 계산해 보여줍니다">
           <input type="checkbox" checked={afterCost} onChange={(e) => setAfterCost(e.target.checked)} /> 매도 비용(수수료·세금) 차감 후
         </label>
         <div className="spacer" />
-        <button onClick={load} disabled={loading}>{loading ? '불러오는 중…' : '새로고침'}</button>
+        <button onClick={load} disabled={loading} title="토스증권에서 최신 보유 종목·예수금·조건주문 상태를 즉시 다시 불러옵니다">
+          {loading ? '불러오는 중…' : '새로고침'}
+        </button>
       </div>
       <FeatureGuideBox guide={FEATURE_GUIDES.account} />
       {error && <p className="error">{error.message}</p>}
@@ -148,7 +150,15 @@ export default function AccountPage() {
                   <td data-label="손익" className={cls(p)}>{signed(p, it.currency)}</td>
                   <td data-label="수익률" className={cls(r)}>{pct(r)}</td>
                   <td data-label="오늘" className={cls(it.dailyProfitLoss.ratePct)}>{pct(it.dailyProfitLoss.ratePct)}</td>
-                  <td className="card-actions"><button className="link" onClick={() => setOco(it)}>익절·손절</button></td>
+                  <td className="card-actions">
+                    <button
+                      className="link"
+                      title={`${it.name} 종목에 목표 익절가와 안전 손절가를 동시에 감시하는 조건주문(OCO) 창을 엽니다`}
+                      onClick={() => setOco(it)}
+                    >
+                      익절·손절
+                    </button>
+                  </td>
                 </tr>
               )
             })}
@@ -165,7 +175,12 @@ export default function AccountPage() {
         <h4>조건 주문</h4>
         <div className="tabs">
           {(['OPEN', 'CLOSED'] as const).map((s) => (
-            <button key={s} className={orderStatus === s ? 'active' : ''} onClick={() => setOrderStatus(s)}>
+            <button
+              key={s}
+              className={orderStatus === s ? 'active' : ''}
+              title={s === 'OPEN' ? '현재 토스증권 서버가 목표가·손절가를 실시간 감시 중인 조건주문을 봅니다' : '이미 발동되었거나 만료·취소되어 끝난 조건주문 내역을 봅니다'}
+              onClick={() => setOrderStatus(s)}
+            >
               {s === 'OPEN' ? '진행 중' : '종료'}
             </button>
           ))}
@@ -200,7 +215,7 @@ export default function AccountPage() {
                   <td data-label="만료일">{o.expireDate ?? '-'}</td>
                   <td className="card-actions">
                     {(o.status === 'WATCHING' || o.status === 'PAUSED') && (
-                      <button className="link danger-link" onClick={() => cancel(o)}>취소</button>
+                      <button className="link danger-link" title="감시 중인 이 조건주문을 취소합니다" onClick={() => cancel(o)}>취소</button>
                     )}
                   </td>
                 </tr>

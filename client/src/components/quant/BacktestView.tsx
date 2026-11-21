@@ -42,7 +42,13 @@ export default function BacktestView({ result, title }: { result: BacktestResult
             Investing ↗
           </a>
           <div className="spacer" />
-          <button className="primary" onClick={makeBot} title="모의 모드로 시작합니다">이 설정으로 봇 만들기 →</button>
+          <button
+            className="primary"
+            onClick={makeBot}
+            title="지금 검증한 종목·전략·파라미터 그대로 자동매매 봇 생성 창을 엽니다 (모의 모드·꺼진 상태로 안전하게 시작)"
+          >
+            이 설정으로 봇 만들기 →
+          </button>
         </div>
         <span className="muted">
           {day(result.period.start)} ~ {day(result.period.end)} · 초기 자본 {money(result.capital)} {result.currency} ·{' '}

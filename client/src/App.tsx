@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
+import HoverTooltip from './components/HoverTooltip'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import LoginPage from './pages/LoginPage'
@@ -15,21 +16,24 @@ const QuantPage = lazy(() => import('./pages/QuantPage'))
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/otp" element={<OtpPage />} />
-      <Route element={<ProtectedRoute />}>
-        <Route element={<Layout />}>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/quant" element={<Suspense fallback={<div className="placeholder muted">불러오는 중…</div>}><QuantPage /></Suspense>} />
-          <Route path="/account" element={<AccountPage />} />
-          <Route path="/admin" element={<AdminPage />} />
-          <Route path="/orders" element={<Navigate to="/account" replace />} />
-          <Route path="/auto" element={<AutoTradePage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+    <>
+      <HoverTooltip />
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/otp" element={<OtpPage />} />
+        <Route element={<ProtectedRoute />}>
+          <Route element={<Layout />}>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/quant" element={<Suspense fallback={<div className="placeholder muted">불러오는 중…</div>}><QuantPage /></Suspense>} />
+            <Route path="/account" element={<AccountPage />} />
+            <Route path="/admin" element={<AdminPage />} />
+            <Route path="/orders" element={<Navigate to="/account" replace />} />
+            <Route path="/auto" element={<AutoTradePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Route>
         </Route>
-      </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
   )
 }

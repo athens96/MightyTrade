@@ -5,10 +5,10 @@ import { useAuth } from '../auth/AuthContext'
 import { useOrderEvents } from '../hooks/useOrderEvents'
 
 const MAIN_TABS = [
-  { to: '/', label: '시세', long: '시세/차트', icon: '📈', end: true },
-  { to: '/quant', label: '퀀트', long: '퀀트 랩', icon: '🧪' },
-  { to: '/account', label: '계좌', long: '계좌', icon: '💼' },
-  { to: '/auto', label: '자동매매', long: '자동매매', icon: '🤖' },
+  { to: '/', label: '시세', long: '시세/차트', icon: '📈', end: true, tip: '국내·미국 실시간 차트와 호가를 보고 직접 매수·매도 주문을 넣는 화면입니다.' },
+  { to: '/quant', label: '퀀트', long: '퀀트 랩', icon: '🧪', tip: '유망 종목 발굴부터 백테스트·최적화·포트폴리오 실험까지 내 전략을 검증하는 실험실입니다.' },
+  { to: '/account', label: '계좌', long: '계좌', icon: '💼', tip: '보유 종목 수익률, 매수 가능 현금, 미체결 주문, 익절·손절(OCO) 예약을 관리합니다.' },
+  { to: '/auto', label: '자동매매', long: '자동매매', icon: '🤖', tip: '스윙봇·단타봇·자산배분 리밸런싱 봇을 모의 또는 실거래로 자동 운용합니다.' },
 ]
 
 export default function Layout() {
@@ -40,17 +40,17 @@ export default function Layout() {
       {/* three columns: menu | centered title | user — the title stays centred whatever the menu width */}
       <header className="topbar">
         <nav className="topbar-left desktop-only">
-          {MAIN_TABS.map((t) => <NavLink key={t.to} to={t.to} end={t.end}>{t.long}</NavLink>)}
-          <NavLink to="/settings">설정</NavLink>
-          {isAdmin && <NavLink to="/admin">관리자{badge}</NavLink>}
+          {MAIN_TABS.map((t) => <NavLink key={t.to} to={t.to} end={t.end} title={t.tip}>{t.long}</NavLink>)}
+          <NavLink to="/settings" title="내 토스증권 Open API 키를 안전하게 등록·확인하는 설정 화면입니다.">설정</NavLink>
+          {isAdmin && <NavLink to="/admin" title="가입 신청 승인 및 사용자 계정을 관리하는 관리자 전용 화면입니다.">관리자{badge}</NavLink>}
         </nav>
         <strong className="brand">
           <img src="/favicon.svg" alt="" width={24} height={24} />
           <span>Mighty Trade</span>
         </strong>
         <div className="topbar-right">
-          <span className="muted desktop-only">{user?.email}</span>
-          <button className="desktop-only" onClick={logout}>로그아웃</button>
+          <span className="muted desktop-only" title="현재 로그인된 Google 계정 이메일입니다.">{user?.email}</span>
+          <button className="desktop-only" onClick={logout} title="현재 기기에서 안전하게 로그아웃합니다.">로그아웃</button>
         </div>
       </header>
       <main>
@@ -60,12 +60,12 @@ export default function Layout() {
       {/* mobile navigation: bottom tab bar + "more" sheet */}
       <nav className="tabbar mobile-only" aria-label="주요 메뉴">
         {MAIN_TABS.map((t) => (
-          <NavLink key={t.to} to={t.to} end={t.end}>
+          <NavLink key={t.to} to={t.to} end={t.end} title={t.tip}>
             <span className="tab-icon" aria-hidden>{t.icon}</span>
             <span>{t.label}</span>
           </NavLink>
         ))}
-        <button className={moreActive || more ? 'active' : ''} onClick={() => setMore((v) => !v)} aria-expanded={more}>
+        <button className={moreActive || more ? 'active' : ''} onClick={() => setMore((v) => !v)} aria-expanded={more} title="설정·관리자·로그아웃 메뉴를 엽니다.">
           <span className="tab-icon" aria-hidden>☰</span>
           <span>더보기{badge}</span>
         </button>

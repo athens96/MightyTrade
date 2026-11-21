@@ -65,7 +65,7 @@ export default function ChartDiagnosis({
 
   return (
     <details className={`chart-diag tone-${diag.overallTone}`} open={defaultOpen}>
-      <summary>
+      <summary title="클릭하면 10여 개 보조지표를 종합한 현재 차트 추세·타이밍·거래량 해설을 펼치거나 접습니다">
         <span className="diag-badge">{diag.badge}</span>
         <span className="diag-score">종합 {diag.score}점</span>
         <span className="diag-headline">{diag.headline}</span>

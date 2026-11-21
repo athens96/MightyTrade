@@ -48,7 +48,14 @@ export default function OrdersSection({ nameOf }: { nameOf: (symbol: string) => 
         <h4>주문 내역</h4>
         <div className="tabs">
           {(['OPEN', 'CLOSED'] as const).map((s) => (
-            <button key={s} className={status === s ? 'active' : ''} onClick={() => setStatus(s)}>{s === 'OPEN' ? '미체결' : '체결·취소 (30일)'}</button>
+            <button
+              key={s}
+              className={status === s ? 'active' : ''}
+              title={s === 'OPEN' ? '아직 체결되지 않고 호가창에 대기 중인 주문을 확인하고 가격 정정이나 취소를 합니다' : '최근 30일 동안 체결되었거나 취소된 일반 주문 내역을 확인합니다'}
+              onClick={() => setStatus(s)}
+            >
+              {s === 'OPEN' ? '미체결' : '체결·취소 (30일)'}
+            </button>
           ))}
         </div>
         <div className="spacer" />
@@ -74,8 +81,12 @@ export default function OrdersSection({ nameOf }: { nameOf: (symbol: string) => 
                   <td data-label="체결">{o.execution.filledQuantity ? `${o.execution.filledQuantity.toLocaleString()} @ ${fmt(o.execution.averageFilledPrice ?? 0)}` : '-'}</td>
                   <td data-label="상태">{ORDER_STATUS[o.status] ?? o.status}</td>
                   <td className="card-actions">
-                    {open && o.orderType === 'LIMIT' && <button className="link" onClick={() => modify(o)}>정정</button>}
-                    {open && <button className="link danger-link" onClick={() => confirm('주문을 취소할까요?') && act(() => tradingApi.cancel(o.orderId))}>취소</button>}
+                    {open && o.orderType === 'LIMIT' && (
+                      <button className="link" title="아직 체결되지 않은 지정가 주문의 희망 가격을 변경합니다 (거래 잠금 해제 필요)" onClick={() => modify(o)}>정정</button>
+                    )}
+                    {open && (
+                      <button className="link danger-link" title="아직 체결되지 않고 대기 중인 이 주문을 취소합니다" onClick={() => confirm('주문을 취소할까요?') && act(() => tradingApi.cancel(o.orderId))}>취소</button>
+                    )}
                   </td>
                 </tr>
               )

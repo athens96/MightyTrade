@@ -107,6 +107,7 @@ export default function ScreenerView({ result, preset, onBacktest, onPortfolio }
             <div className="screener-actions">
               <button
                 type="button"
+                title="발굴된 상위 종목들을 포트폴리오 탭에 자동으로 담아 분산 투자 성과를 바로 백테스트합니다"
                 onClick={() => {
                   const { assets, modelId } = buildTopPortfolio(5)
                   onPortfolio(assets, modelId)
@@ -114,7 +115,12 @@ export default function ScreenerView({ result, preset, onBacktest, onPortfolio }
               >
                 상위 {Math.min(5, result.items.length)}종 포트폴리오 실험 →
               </button>
-              <button type="button" className="primary" onClick={sendTopToRebalBot}>
+              <button
+                type="button"
+                className="primary"
+                title="발굴된 상위 종목들을 묶어 정기적으로 비중을 맞추는 자동매매 리밸런싱 봇 생성 창을 엽니다 (모의 모드 시작)"
+                onClick={sendTopToRebalBot}
+              >
                 상위 {Math.min(5, result.items.length)}종 리밸런싱 봇 →
               </button>
             </div>
@@ -289,8 +295,21 @@ export default function ScreenerView({ result, preset, onBacktest, onPortfolio }
                   </td>
                   <td className="card-actions" data-label="바로 연결">
                     <div className="row-btns">
-                      <button type="button" onClick={() => onBacktest(r.symbol, result.strategy)}>백테스트</button>
-                      <button type="button" className="primary" onClick={() => sendToBot(r)}>봇 만들기</button>
+                      <button
+                        type="button"
+                        title={`${r.name} 종목을 추천 전략으로 백테스트해 과거 수익률과 매수·매도 타점을 확인합니다`}
+                        onClick={() => onBacktest(r.symbol, result.strategy)}
+                      >
+                        백테스트
+                      </button>
+                      <button
+                        type="button"
+                        className="primary"
+                        title={`${r.name} 종목으로 자동매매 봇 생성 창을 엽니다 (안전하게 모의 모드·꺼진 상태로 시작)`}
+                        onClick={() => sendToBot(r)}
+                      >
+                        봇 만들기
+                      </button>
                     </div>
                   </td>
                 </tr>

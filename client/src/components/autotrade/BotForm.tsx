@@ -3,6 +3,7 @@ import type { Bot, BotCategory, BotInput } from '../../api/autotrade'
 import { marketApi } from '../../api/market'
 import type { PortfolioAsset, PortfolioModelMeta, PortfolioRole, RebalanceMode, StrategyMeta } from '../../api/quant'
 import type { Market, WatchItem } from '../../api/types'
+import { getParamHint } from '../../lib/paramHints'
 import { StrategyGuideBox } from '../GuideBox'
 
 const ROLE_LABELS: Record<PortfolioRole, string> = {
@@ -155,11 +156,11 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
         {!bot && (
           <div className="tabs" style={{ marginBottom: 12 }}>
             {([
-              ['swing', '스윙봇 (일봉)'],
-              ['daytrade', '단타봇 (장중·분봉)'],
-              ['rebalance', '리밸런싱 봇 (포트폴리오)'],
-            ] as [BotCategory, string][]).map(([id, label]) => (
-              <button type="button" key={id} className={category === id ? 'active' : ''} onClick={() => switchCategory(id)}>
+              ['swing', '스윙봇 (일봉)', '하루 한 번 일봉 종가를 보고 며칠~몇 주 추세를 타는 스윙 매매 봇입니다'],
+              ['daytrade', '단타봇 (장중·분봉)', '장중 분봉이나 시초가 돌파를 노리고 장 마감 전 당일 모두 청산하는 단타 봇입니다'],
+              ['rebalance', '리밸런싱 봇 (포트폴리오)', '여러 주식·채권·금 ETF를 담아 매월·분기마다 목표 비중을 자동으로 맞춰주는 포트폴리오 봇입니다'],
+            ] as [BotCategory, string, string][]).map(([id, label, tip]) => (
+              <button type="button" key={id} className={category === id ? 'active' : ''} title={tip} onClick={() => switchCategory(id)}>
                 {label}
               </button>
             ))}
@@ -167,9 +168,14 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
         )}
 
         <div className="modal-grid">
-          <label>
+          <label title="봇이 거래할 시장(국내 KRX 또는 미국 나스닥·뉴욕)을 선택합니다 (보유 수량이 있을 때는 변경 불가)">
             <span>시장</span>
-            <select value={market} disabled={holding} onChange={(e) => switchMarket(e.target.value as Market)}>
+            <select
+              value={market}
+              disabled={holding}
+              title="봇이 거래할 시장(국내 KRX 또는 미국 나스닥·뉴욕)을 선택합니다"
+              onChange={(e) => switchMarket(e.target.value as Market)}
+            >
               <option value="KR">국내</option>
               <option value="US">미국</option>
             </select>
@@ -177,16 +183,28 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
 
           {!isRebal && (
             <>
-              <label>
+              <label title="봇이 감시하고 매매할 종목 코드(예: 005930, AAPL)를 입력하거나 관심종목에서 고릅니다">
                 <span>종목 코드</span>
-                <input list="bot-watch" value={symbol} disabled={holding} onChange={(e) => setSymbol(e.target.value.toUpperCase())} placeholder={market === 'KR' ? '005930' : 'AAPL'} />
+                <input
+                  list="bot-watch"
+                  value={symbol}
+                  disabled={holding}
+                  title="봇이 감시하고 매매할 종목 코드(예: 005930, AAPL)를 입력하거나 관심종목에서 고릅니다"
+                  onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+                  placeholder={market === 'KR' ? '005930' : 'AAPL'}
+                />
                 <datalist id="bot-watch">
                   {watch.filter((w) => w.market === market).map((w) => <option key={w.symbol} value={w.symbol}>{w.name}</option>)}
                 </datalist>
               </label>
-              <label>
+              <label title="봇이 어떤 매매 공식에 따라 자동으로 사고팔지 금융 전략을 선택합니다">
                 <span>금융 이론 전략</span>
-                <select value={meta?.id ?? strategy} disabled={holding} onChange={(e) => { setStrategy(e.target.value); setParams({}) }}>
+                <select
+                  value={meta?.id ?? strategy}
+                  disabled={holding}
+                  title="봇이 어떤 매매 공식에 따라 자동으로 사고팔지 금융 전략을 선택합니다"
+                  onChange={(e) => { setStrategy(e.target.value); setParams({}) }}
+                >
                   {catStrategies.map((s) => (
                     <option key={s.id} value={s.id}>{s.name}{s.timeframe !== '1d' ? ` (${s.timeframe})` : ''}</option>
                   ))}
@@ -197,51 +215,71 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
 
           {isRebal && pModel && (
             <>
-              <label>
+              <label title="여러 자산의 목표 비중을 계산할 자산배분 모델을 선택합니다">
                 <span>자산배분 이론</span>
-                <select value={pModel.id} disabled={holding} onChange={(e) => switchModel(e.target.value)}>
+                <select value={pModel.id} disabled={holding} title="여러 자산의 목표 비중을 계산할 자산배분 모델을 선택합니다" onChange={(e) => switchModel(e.target.value)}>
                   {portfolioModels.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
               </label>
-              <label>
+              <label title="얼마나 자주 포트폴리오 비중을 점검하고 다시 맞출지 주기를 선택합니다">
                 <span>리밸런싱 주기</span>
-                <select value={rebalance} onChange={(e) => setRebalance(e.target.value as RebalanceMode)}>
+                <select value={rebalance} title="얼마나 자주 포트폴리오 비중을 점검하고 다시 맞출지 주기를 선택합니다" onChange={(e) => setRebalance(e.target.value as RebalanceMode)}>
                   {REBAL_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                 </select>
               </label>
               {rebalance === 'drift' && (
-                <label>
+                <label title="목표 비중에서 몇 %p 이상 벗어났을 때만 사고팔아 비중을 다시 맞출지 정합니다">
                   <span>허용 비중 편차 (%)</span>
-                  <input type="number" min={0.5} max={50} step={0.5} value={driftPct} onChange={(e) => setDriftPct(Number(e.target.value))} />
+                  <input
+                    type="number"
+                    min={0.5}
+                    max={50}
+                    step={0.5}
+                    value={driftPct}
+                    title="목표 비중에서 몇 %p 이상 벗어났을 때만 사고팔아 비중을 다시 맞출지 정합니다"
+                    onChange={(e) => setDriftPct(Number(e.target.value))}
+                  />
                 </label>
               )}
             </>
           )}
 
-          <label>
+          <label title="이 봇 하나에 맡길 최대 운용 금액입니다 (계좌 전체 현금이 아니라 이 한도 안에서만 주문 수량을 계산합니다)">
             <span>운용 자금 ({market === 'KR' ? '원' : 'USD'}) <span className="muted small">· 이 봇의 최대 자금</span></span>
-            <input type="number" min={1} value={capital} onChange={(e) => setCapital(Number(e.target.value))} />
+            <input
+              type="number"
+              min={1}
+              value={capital}
+              title="이 봇 하나에 맡길 최대 운용 금액입니다"
+              onChange={(e) => setCapital(Number(e.target.value))}
+            />
           </label>
 
-          {!isRebal && meta?.params.map((p) => (
-            <label key={p.key}>
-              <span>{p.label}</span>
-              <input type="number" step={p.step} min={p.min} max={p.max} value={value(p.key, p.default)}
-                     onChange={(e) => setParams({ ...params, [p.key]: Number(e.target.value) })} />
-            </label>
-          ))}
+          {!isRebal && meta?.params.map((p) => {
+            const tip = getParamHint(meta.id, p.key, p.label, p.min, p.max)
+            return (
+              <label key={p.key} title={tip}>
+                <span>{p.label}</span>
+                <input type="number" step={p.step} min={p.min} max={p.max} value={value(p.key, p.default)} title={tip}
+                       onChange={(e) => setParams({ ...params, [p.key]: Number(e.target.value) })} />
+              </label>
+            )
+          })}
 
-          {isRebal && pModel?.params.map((p) => (
-            <label key={p.key}>
-              <span>{p.label}</span>
-              <input type="number" step={p.step} min={p.min} max={p.max} value={value(p.key, p.default)}
-                     onChange={(e) => setParams({ ...params, [p.key]: Number(e.target.value) })} />
-            </label>
-          ))}
+          {isRebal && pModel?.params.map((p) => {
+            const tip = getParamHint(pModel.id, p.key, p.label, p.min, p.max)
+            return (
+              <label key={p.key} title={tip}>
+                <span>{p.label}</span>
+                <input type="number" step={p.step} min={p.min} max={p.max} value={value(p.key, p.default)} title={tip}
+                       onChange={(e) => setParams({ ...params, [p.key]: Number(e.target.value) })} />
+              </label>
+            )
+          })}
 
-          <label>
+          <label title="봇 목록에서 구분하기 쉬운 별명을 입력합니다 (비워두면 전략과 종목 이름으로 자동 지정됩니다)">
             <span>이름 <span className="muted small">(선택)</span></span>
-            <input value={name} onChange={(e) => setName(e.target.value)}
+            <input value={name} title="봇 목록에서 구분하기 쉬운 별명을 입력합니다 (비워두면 자동 생성)" onChange={(e) => setName(e.target.value)}
                    placeholder={isRebal ? (pModel ? `${pModel.name} (${market})` : '') : (meta ? `${meta.name} · ${symbol}` : '')} />
           </label>
         </div>
@@ -255,9 +293,11 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
               {assets.map((a, idx) => (
                 <div key={idx} className="asset-row">
                   <input value={a.symbol} disabled={holding} placeholder={market === 'KR' ? '069500' : 'SPY'}
+                         title="포트폴리오에 담을 주식·ETF 종목 코드를 입력합니다 (예: 069500, SPY)"
                          onChange={(e) => setAssets(assets.map((x, i) => (i === idx ? { ...x, symbol: e.target.value.toUpperCase() } : x)))} />
                   {pModel.uses_roles && (
                     <select value={a.role} disabled={holding}
+                            title="이 종목의 역할을 지정합니다 (공격: 수익 추구 / 방어: 하락장 대피처 / 감시병: 시장 위험 감지기 / 고정: 상시 보유)"
                             onChange={(e) => setAssets(assets.map((x, i) => (i === idx ? { ...x, role: e.target.value as PortfolioRole } : x)))}>
                       {(pModel.allowed_roles ?? ['offensive', 'defensive']).map((role) => (
                         <option key={role} value={role}>{ROLE_LABELS[role]}</option>
@@ -265,11 +305,12 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
                     </select>
                   )}
                   {pModel.uses_weights && (
-                    <input type="number" min={0} max={100} step={0.5} value={a.weight} title="목표 비중 (%)"
+                    <input type="number" min={0} max={100} step={0.5} value={a.weight} title="전체 운용 자금 중 이 종목을 몇 % 담을지 목표 비중을 입력합니다"
                            onChange={(e) => setAssets(assets.map((x, i) => (i === idx ? { ...x, weight: Number(e.target.value) } : x)))} />
                   )}
                   {!holding && (
                     <button type="button" className="link danger-link" disabled={assets.length <= 2}
+                            title="이 종목을 포트폴리오에서 뺍니다 (최소 2종목 필요)"
                             onClick={() => setAssets(assets.filter((_, i) => i !== idx))}>×</button>
                   )}
                 </div>
@@ -277,8 +318,9 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
               {!holding && (
                 <div className="tabs">
                   <button type="button" disabled={assets.length >= 16}
+                          title="포트폴리오에 새 종목 입력 칸을 추가합니다 (최대 16종목)"
                           onClick={() => setAssets([...assets, { symbol: '', role: (pModel.allowed_roles ?? ['offensive'])[0], weight: 10 }])}>+ 종목 추가</button>
-                  <button type="button" onClick={() => setAssets(pModel.presets[market] ?? [])}>기본 프리셋</button>
+                  <button type="button" title="선택한 자산배분 이론의 표준 추천 ETF 구성으로 채웁니다" onClick={() => setAssets(pModel.presets[market] ?? [])}>기본 프리셋</button>
                 </div>
               )}
             </div>
@@ -303,8 +345,14 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
         )}
         {error && <p className="error">{error}</p>}
         <div className="modal-actions">
-          <button type="button" onClick={onClose}>취소</button>
-          <button type="submit" disabled={busy || !canSubmit}>{busy ? '저장 중…' : bot ? '저장' : '만들기'}</button>
+          <button type="button" title="변경한 내용을 저장하지 않고 창을 닫습니다" onClick={onClose}>취소</button>
+          <button
+            type="submit"
+            disabled={busy || !canSubmit}
+            title={bot ? '수정한 봇 설정을 저장합니다' : '모의 모드·꺼진 상태로 안전하게 새 자동매매 봇을 만듭니다'}
+          >
+            {busy ? '저장 중…' : bot ? '저장' : '만들기'}
+          </button>
         </div>
       </form>
     </div>

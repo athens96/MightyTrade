@@ -17,6 +17,14 @@ import { FEATURE_GUIDES } from '../lib/featureGuides'
 import { investingUrl } from '../lib/externalLinks'
 
 const INTERVALS: Interval[] = ['1m', '5m', '15m', '1h', '1d', '1w']
+const INTERVAL_HINTS: Record<Interval, string> = {
+  '1m': '1분봉: 1분마다 기둥 하나씩 그려 초단기 체결 흐름을 봅니다',
+  '5m': '5분봉: 장중 단타 매매에서 가장 많이 보는 단기 흐름입니다',
+  '15m': '15분봉: 장중 잔파도를 줄이고 당일 추세를 깔끔하게 봅니다',
+  '1h': '1시간봉: 며칠간의 단기 흐름과 지지·저항을 확인합니다',
+  '1d': '일봉: 하루 1봉 기준으로 스윙·중기 추세를 보는 기본 차트입니다',
+  '1w': '주봉: 1주일 1봉 기준으로 몇 달~몇 년의 큰 흐름을 확인합니다',
+}
 const REFRESH_MS = 15_000
 // Enough history for long indicators (MA120, Ichimoku 52+26) while showing ~150 bars.
 const CHART_LIMIT = 500
@@ -184,7 +192,12 @@ export default function DashboardPage() {
       <aside className="sidebar">
         <div className="tabs">
           {(['KR', 'US'] as Market[]).map((m) => (
-            <button key={m} className={m === market ? 'active' : ''} onClick={() => setMarket(m)}>
+            <button
+              key={m}
+              className={m === market ? 'active' : ''}
+              title={m === 'KR' ? '국내(코스피·코스닥) 주식과 ETF 시세를 봅니다' : '미국(나스닥·뉴욕) 주식과 ETF 시세를 봅니다'}
+              onClick={() => setMarket(m)}
+            >
               {m === 'KR' ? '국내' : '미국'}
             </button>
           ))}
@@ -194,6 +207,7 @@ export default function DashboardPage() {
           <input
             className="search-input"
             placeholder={market === 'KR' ? '종목명 / 코드 검색' : '티커 / 영문명 / 한글명 검색'}
+            title="종목 이름, 6자리 코드(예: 005930), 또는 미국 티커·영문명을 입력해 관심종목에 추가합니다"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -202,7 +216,7 @@ export default function DashboardPage() {
               {searching && results.length === 0 && <li className="muted">검색 중… (첫 검색은 몇 초 걸려요)</li>}
               {!searching && results.length === 0 && <li className="muted">결과 없음</li>}
               {results.map((r) => (
-                <li key={r.symbol} onClick={() => addItem(r)}>
+                <li key={r.symbol} title="클릭하면 관심종목에 추가하고 바로 차트를 엽니다" onClick={() => addItem(r)}>
                   <span>
                     {r.name}
                     {r.english_name && r.english_name !== r.name && <span className="muted small"> · {r.english_name}</span>}
@@ -219,6 +233,7 @@ export default function DashboardPage() {
             <li
               key={w.symbol}
               className={selected?.symbol === w.symbol ? 'active' : ''}
+              title={`${w.name} (${w.symbol}) 차트와 실시간 호가 열기`}
               onClick={() => setSelected(w)}
             >
               <div className="wl-left">
@@ -268,7 +283,7 @@ export default function DashboardPage() {
           <IndicatorPanel value={indicators} onChange={changeIndicators} />
           <div className="tabs">
             {INTERVALS.map((i) => (
-              <button key={i} className={i === interval ? 'active' : ''} onClick={() => setChartInterval(i)}>
+              <button key={i} className={i === interval ? 'active' : ''} title={INTERVAL_HINTS[i]} onClick={() => setChartInterval(i)}>
                 {i}
               </button>
             ))}

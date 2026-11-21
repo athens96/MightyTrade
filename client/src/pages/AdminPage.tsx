@@ -44,19 +44,39 @@ function DeleteDialog({ user, onClose, onDone }: { user: AdminUser; onClose: () 
           이 계정과 데이터가 <b>영구 삭제</b>됩니다: 프로필·OTP, 관심종목·설정, 토스 API 키, 자동매매 봇({user.bots}개)과 기록, 주문 기록.
           토스증권 계좌의 실제 주문·보유는 영향을 받지 않습니다. 같은 Google 계정으로 다시 로그인하면 새 가입 신청이 됩니다.
         </p>
-        <label className="modal-grid" style={{ gridTemplateColumns: '1fr' }}>
+        <label className="modal-grid" style={{ gridTemplateColumns: '1fr' }} title="실수로 다른 계정을 삭제하지 않도록 삭제 대상 이메일 주소를 똑같이 입력하세요">
           <span className="small muted">확인을 위해 이메일을 입력하세요</span>
-          <input className="otp-input" style={{ width: '100%' }} value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={user.email} />
+          <input
+            className="otp-input"
+            style={{ width: '100%' }}
+            value={typed}
+            title="삭제할 계정의 이메일 주소를 정확히 입력하세요"
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={user.email}
+          />
         </label>
         {needForce && (
-          <label className="check small">
+          <label className="check small" title="실거래 봇 기록까지 강제로 지우고 계정을 영구 삭제하는 데 동의합니다">
             <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} /> 실거래 봇 보유·미체결 주문 추적을 포기하고 삭제합니다
           </label>
         )}
         <div className="modal-actions">
-          <button onClick={onClose}>취소</button>
-          <input className="otp-input" inputMode="numeric" maxLength={6} placeholder="OTP" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} />
-          <button className="danger" disabled={busy || otp.length !== 6 || typed.trim().toLowerCase() !== (user.email ?? '').toLowerCase() || (needForce && !force)} onClick={submit}>
+          <button title="삭제하지 않고 창을 닫습니다" onClick={onClose}>취소</button>
+          <input
+            className="otp-input"
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="OTP"
+            value={otp}
+            title="관리자 본인 확인을 위해 6자리 OTP 숫자를 입력하세요"
+            onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+          />
+          <button
+            className="danger"
+            disabled={busy || otp.length !== 6 || typed.trim().toLowerCase() !== (user.email ?? '').toLowerCase() || (needForce && !force)}
+            title="이메일과 관리자 OTP가 일치하면 이 계정과 앱 내 데이터를 영구 삭제합니다"
+            onClick={submit}
+          >
             {busy ? '삭제 중…' : '영구 삭제'}
           </button>
         </div>
@@ -101,13 +121,13 @@ export default function AdminPage() {
         <h2>관리자 · 사용자 관리</h2>
         <div className="tabs">
           {TABS.map((t) => (
-            <button key={t.id} className={tab === t.id ? 'active' : ''} onClick={() => setTab(t.id)}>
+            <button key={t.id} className={tab === t.id ? 'active' : ''} title={`${t.label} 상태의 사용자 목록을 확인합니다`} onClick={() => setTab(t.id)}>
               {t.label}{counts ? ` ${counts[t.id]}` : ''}
             </button>
           ))}
         </div>
         <div className="spacer" />
-        <button onClick={load}>새로고침</button>
+        <button title="가입 신청 및 사용자 목록을 최신 상태로 새로고침합니다" onClick={load}>새로고침</button>
       </div>
       <p className="muted small">
         새 Google 로그인은 승인 대기로 등록됩니다. 승인 전에는 OTP 등록과 모든 기능 이용이 막혀 있습니다. 관리자 계정은 서버 설정(ADMIN_EMAILS)으로 정해집니다.
@@ -140,13 +160,18 @@ export default function AdminPage() {
                   <td data-label="토스 키">{u.has_toss_key ? '등록' : '-'}</td>
                   <td data-label="봇">{u.bots ? `${u.bots}개${u.live_bots ? ` · 실거래 ${u.live_bots}` : ''}` : '-'}</td>
                   <td className="card-actions actions">
-                    {u.status !== 'approved' && <button className="primary" onClick={() => act(() => adminApi.approve(u.id))}>승인</button>}
+                    {u.status !== 'approved' && (
+                      <button className="primary" title="이 사용자의 가입을 승인해 OTP 등록과 서비스 이용을 허용합니다" onClick={() => act(() => adminApi.approve(u.id))}>승인</button>
+                    )}
                     {!self && !admin && u.status !== 'rejected' && (
-                      <button onClick={() => confirm(`${u.email} ${u.status === 'approved' ? '승인을 취소' : '가입을 거절'}할까요?`) && act(() => adminApi.reject(u.id))}>
+                      <button
+                        title={u.status === 'approved' ? '이 사용자의 서비스 이용 승인을 취소하고 접근을 차단합니다' : '이 가입 신청을 거절합니다'}
+                        onClick={() => confirm(`${u.email} ${u.status === 'approved' ? '승인을 취소' : '가입을 거절'}할까요?`) && act(() => adminApi.reject(u.id))}
+                      >
                         {u.status === 'approved' ? '승인 취소' : '거절'}
                       </button>
                     )}
-                    {!self && !admin && <button className="link danger-link" onClick={() => setDeleting(u)}>삭제</button>}
+                    {!self && !admin && <button className="link danger-link" title="이 사용자 계정과 앱 내 저장 데이터를 영구 삭제합니다" onClick={() => setDeleting(u)}>삭제</button>}
                   </td>
                 </tr>
               )

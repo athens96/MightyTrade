@@ -44,7 +44,11 @@ export default function PortfolioView({ result, model }: { result: PortfolioBack
         <div className="account-head">
           <h3>{model?.name ?? result.model} · 포트폴리오 백테스트</h3>
           <div className="spacer" />
-          <button className="primary" onClick={makeBot} title="모의 모드로 리밸런싱 봇을 만듭니다">
+          <button
+            className="primary"
+            onClick={makeBot}
+            title="지금 실험한 자산배분 이론과 편입 종목 그대로 리밸런싱 자동매매 봇 생성 창을 엽니다 (모의 모드·꺼진 상태로 시작)"
+          >
             이 포트폴리오로 리밸런싱 봇 만들기 →
           </button>
         </div>

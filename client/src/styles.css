@@ -365,6 +365,11 @@ b.plain { color: #e6edf3; }
 .diag-item.sig-cool .diag-status { background: rgba(88,166,255,.16); color: #58a6ff; }
 .diag-disclaimer { margin: 0; }
 
+/* Global Hover Tooltip */
+.hover-tooltip { position: fixed; z-index: 9999; max-width: 300px; padding: 7px 11px; border-radius: 7px; background: #18202c; color: #e6edf3; border: 1px solid #384659; font-size: 12px; line-height: 1.48; white-space: pre-line; word-break: keep-all; pointer-events: none; box-shadow: 0 8px 24px rgba(0,0,0,.55); }
+.hover-tooltip.above { transform: translate(-50%, -100%); }
+.hover-tooltip.below { transform: translate(-50%, 0); }
+
 /* ======================================================================
    Responsive. Desktop rules above stay as-is; these only kick in on
    narrower screens. Tablet <= 1100px, mobile <= 768px.
