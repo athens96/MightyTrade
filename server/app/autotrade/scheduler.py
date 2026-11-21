@@ -102,6 +102,8 @@ def _step(bot: dict, date: str, start: datetime, end: datetime, now: datetime) -
         if bot["mode"] in ("live", "semi") and st["pending"] and not _recent(st.get("last_reconcile"), RECONCILE_EVERY, now):
             executor.reconcile_live(bot, date)
             bots.save(bot)
+        if bots.bot_kind(bot) == "webhook":
+            return
         if bot["mode"] == "semi":
             if now < start + OPEN_DELAY or _recent((st.get("last_error") or {}).get("at"), ERROR_BACKOFF, now):
                 return

@@ -12,7 +12,7 @@ import UnlockBar from '../components/trading/UnlockBar'
 import { investingUrl } from '../lib/externalLinks'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
 
-const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱', rotation: '순환매', dca: '적립식' }
+const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱', rotation: '순환매', dca: '적립식', webhook: '웹훅' }
 const MODE_LABEL: Record<BotMode, string> = { paper: '모의', semi: '승인 후 주문', live: '실거래' }
 const REBAL_LABEL: Record<string, string> = { daily: '매일', weekly: '매주', biweekly: '격주(2주)', monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈' }
 
@@ -64,6 +64,8 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
   const [otp, setOtp] = useState('')
   const [targetMode, setTargetMode] = useState<BotMode>('semi')
   const [approveOtp, setApproveOtp] = useState('')
+  const [whSecret, setWhSecret] = useState('')
+  const [whCopied, setWhCopied] = useState('')
   const [confirmLive, setConfirmLive] = useState(false)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState('')
@@ -71,7 +73,8 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
   const isRebal = bot.kind === 'rebalance' || bot.kind === 'rotation'
   const isRot = bot.kind === 'rotation'
   const isDca = bot.kind === 'dca'
-  const meta = !isRebal && !isDca ? strategies.find((s) => s.id === bot.strategy) : undefined
+  const isWebhook = bot.kind === 'webhook'
+  const meta = !isRebal && !isDca && !isWebhook ? strategies.find((s) => s.id === bot.strategy) : undefined
   const pModel = bot.kind === 'rebalance' ? portfolioModels.find((m) => m.id === bot.model) : undefined
 
   const loadEvents = useCallback(() => {
@@ -81,6 +84,8 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
     setEvaluation(null)
     setError('')
     setConfirmLive(false)
+    setWhSecret('')
+    setWhCopied('')
     loadEvents()
   }, [bot.id, loadEvents])
 
@@ -141,6 +146,10 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
           <>
             <b>종목발굴 순환매 ({bot.preset})</b> · 후보군 {bot.universe} · 상위 {bot.top_n}종목 (유지버퍼 {bot.hold_buffer}위) · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
           </>
+        ) : isWebhook ? (
+          <>
+            {bot.symbol} · <b>외부 신호 웹훅 봇 (TradingView 연동)</b> · 토큰 {bot.webhook_secret_hint ?? '설정됨'} · 운용 자금 {money(bot, bot.capital)} · 외부 웹훅 신호 수신 즉시 실행
+          </>
         ) : isDca ? (
           <>
             {bot.symbol} · <b>스마트 적립식 모으기</b> ({REBAL_LABEL[bot.rebalance ?? 'weekly']} · 기본 {money(bot, bot.base_amount)}
@@ -173,6 +182,114 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         theory={isRebal ? pModel?.theory : meta?.theory}
         guide={isRebal ? pModel?.guide : meta?.guide}
       />
+      {isWebhook && (
+        <div className="panel" style={{ marginBottom: 12 }}>
+          <div className="account-head">
+            <h4>🔗 외부 웹훅(TradingView) 연동 설정</h4>
+            <span className="muted small">수신 시 봇이 <b>켜짐</b> 상태여야 동작하며, 현재 운용 모드({MODE_LABEL[bot.mode]}) 규칙을 그대로 따릅니다.</span>
+          </div>
+          <p className="small" style={{ wordBreak: 'break-all', margin: '6px 0' }}>
+            <b>웹훅 수신 URL:</b> <code>{`${window.location.origin}/api/autotrade/webhook/${bot.id}`}</code>{' '}
+            <button
+              type="button"
+              className="small"
+              title="트레이딩뷰 알림창의 Webhook URL 칸에 붙여넣을 주소를 복사합니다"
+              onClick={() => {
+                navigator.clipboard?.writeText(`${window.location.origin}/api/autotrade/webhook/${bot.id}`)
+                setWhCopied('url')
+              }}
+            >
+              {whCopied === 'url' ? '복사됨 ✓' : 'URL 복사'}
+            </button>
+          </p>
+          <div className="bot-actions" style={{ marginBottom: 8 }}>
+            <button
+              type="button"
+              disabled={!!busy}
+              title="암호화 저장된 비밀 토큰을 확인해 아래 JSON 템플릿에 자동으로 채워 넣습니다"
+              onClick={() => act('wh_show', async () => {
+                const r = await autotradeApi.webhookSecret(bot.id, false)
+                setWhSecret(r.secret)
+                return r
+              })}
+            >
+              🔑 비밀 토큰 확인
+            </button>
+            <button
+              type="button"
+              disabled={!!busy}
+              title="기존 비밀 토큰을 즉시 폐기하고 새 보안 토큰으로 교체합니다 (유출 의심 시 사용)"
+              onClick={() => confirm('비밀 토큰을 새로 발급하면 기존 트레이딩뷰 알림의 토큰도 바꿔야 합니다. 재발급할까요?') && act('wh_rot', async () => {
+                const r = await autotradeApi.webhookSecret(bot.id, true)
+                setWhSecret(r.secret)
+                return r
+              })}
+            >
+              🔄 새 토큰 재발급
+            </button>
+            {bot.mode === 'paper' && bot.enabled && (
+              <>
+                <button
+                  type="button"
+                  disabled={!!busy}
+                  title="모의 모드에서 실제 웹훅 매수 신호가 들어왔을 때 정상 체결되는지 지금 바로 테스트합니다"
+                  onClick={() => act('wh_test_buy', async () => {
+                    const sec = whSecret || (await autotradeApi.webhookSecret(bot.id, false)).secret
+                    setWhSecret(sec)
+                    await autotradeApi.sendTestWebhook(bot.id, sec, 'buy')
+                    return await autotradeApi.bot(bot.id)
+                  })}
+                >
+                  🧪 모의 매수 신호 테스트
+                </button>
+                <button
+                  type="button"
+                  disabled={!!busy}
+                  title="모의 모드에서 웹훅 전량 청산(exit) 신호가 들어왔을 때 정상 매도되는지 테스트합니다"
+                  onClick={() => act('wh_test_exit', async () => {
+                    const sec = whSecret || (await autotradeApi.webhookSecret(bot.id, false)).secret
+                    setWhSecret(sec)
+                    await autotradeApi.sendTestWebhook(bot.id, sec, 'exit')
+                    return await autotradeApi.bot(bot.id)
+                  })}
+                >
+                  🧪 모의 청산 신호 테스트
+                </button>
+              </>
+            )}
+          </div>
+          {(() => {
+            const tpl = JSON.stringify({
+              secret: whSecret || '<비밀 토큰 확인 클릭>',
+              symbol: bot.symbol,
+              action: '{{strategy.order.action}}',
+              price: '{{close}}',
+              qty_pct: 100,
+              bar_time: '{{timenow}}',
+              reason: 'TradingView 알림 신호',
+            }, null, 2)
+            return (
+              <div>
+                <div className="small muted" style={{ marginBottom: 4 }}>
+                  트레이딩뷰(TradingView) Alert Message 예시 (<code>action</code>: <code>buy</code> / <code>sell</code> / <code>exit</code>):{' '}
+                  <button
+                    type="button"
+                    className="small"
+                    title="트레이딩뷰 알림 메시지 칸에 그대로 붙여넣을 JSON 본문을 복사합니다"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(tpl)
+                      setWhCopied('json')
+                    }}
+                  >
+                    {whCopied === 'json' ? 'JSON 복사됨 ✓' : 'JSON 복사'}
+                  </button>
+                </div>
+                <pre className="small" style={{ background: '#0d1117', padding: 8, borderRadius: 6, overflowX: 'auto', margin: 0 }}>{tpl}</pre>
+              </div>
+            )
+          })()}
+        </div>
+      )}
       {s.pending_approval && (
         <div className="panel" style={{ borderColor: '#388bfd', marginBottom: 12 }}>
           <div className="account-head">
@@ -260,7 +377,11 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
               <b>{(s.rebalances ?? []).length}회</b>
               <span className="small muted">{REBAL_LABEL[bot.rebalance ?? 'monthly']}</span>
             </>
-          ) : isDca ? (
+          ) : isWebhook ? (
+          <>
+            {bot.symbol} · <b>외부 신호 웹훅 봇 (TradingView 연동)</b> · 토큰 {bot.webhook_secret_hint ?? '설정됨'} · 운용 자금 {money(bot, bot.capital)} · 외부 웹훅 신호 수신 즉시 실행
+          </>
+        ) : isDca ? (
             <>
               <b>{s.dca_stats?.steps ?? 0}회 적립</b>
               <span className="small muted">
@@ -286,7 +407,7 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         >
           {busy === 'eval' ? '점검 중…' : '지금 점검 (주문 없음)'}
         </button>
-        {bot.mode === 'paper' && (
+        {bot.mode === 'paper' && !isWebhook && (
           <>
             <button
               disabled={!!busy}
@@ -631,10 +752,18 @@ export default function AutoTradePage() {
         )}
         <button
           className="primary"
-          title="새로운 스윙·단타·리밸런싱·순환매 자동매매 봇을 만듭니다 (처음엔 안전한 모의 모드·꺼진 상태로 생성)"
+          title="새로운 스윙·단타·리밸런싱·순환매·적립식·웹훅 자동매매 봇을 만듭니다 (처음엔 안전한 모의 모드·꺼진 상태로 생성)"
           onClick={() => setCreating({
             category: filter === 'all' ? 'swing' : filter,
-            ...(filter === 'rebalance' ? { kind: 'rebalance' } : filter === 'rotation' ? { kind: 'rotation' } : filter === 'dca' ? { kind: 'dca' } : {}),
+            ...(filter === 'rebalance'
+              ? { kind: 'rebalance' }
+              : filter === 'rotation'
+                ? { kind: 'rotation' }
+                : filter === 'dca'
+                  ? { kind: 'dca' }
+                  : filter === 'webhook'
+                    ? { kind: 'webhook' }
+                    : {}),
           })}
         >
           + 봇 만들기
@@ -648,6 +777,7 @@ export default function AutoTradePage() {
         <button className={filter === 'rebalance' ? 'active' : ''} title="여러 ETF를 묶어 정기적으로 목표 비중을 맞춰주는 자산배분 리밸런싱 봇만 봅니다" onClick={() => setFilter('rebalance')}>리밸런싱 봇 {countOf('rebalance')}</button>
         <button className={filter === 'rotation' ? 'active' : ''} title="종목 발굴 상위 N종목을 매주·매월 자동 교체해 굴리는 순환매 봇만 봅니다" onClick={() => setFilter('rotation')}>순환매 봇 {countOf('rotation')}</button>
         <button className={filter === 'dca' ? 'active' : ''} title="세일 구간에 더 사고 과열 구간에 덜 사며 꾸준히 모으는 스마트 적립식 봇만 봅니다" onClick={() => setFilter('dca')}>적립식 봇 {countOf('dca')}</button>
+        <button className={filter === 'webhook' ? 'active' : ''} title="트레이딩뷰 등 외부 차트 웹훅 알림을 받아 자동 주문하는 웹훅 봇만 봅니다" onClick={() => setFilter('webhook')}>웹훅 봇 {countOf('webhook')}</button>
       </div>
       <FeatureGuideBox guide={FEATURE_GUIDES.autotrade} />
       {overview && bots.length > 0 && (

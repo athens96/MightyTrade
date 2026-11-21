@@ -2,8 +2,8 @@ import { api } from './client'
 import type { MarketTimingRules, PortfolioAsset, RebalanceMode, RiskRules } from './quant'
 import type { Interval, Market } from './types'
 
-export type BotKind = 'single' | 'rebalance' | 'rotation' | 'dca'
-export type BotCategory = 'swing' | 'daytrade' | 'rebalance' | 'rotation' | 'dca'
+export type BotKind = 'single' | 'rebalance' | 'rotation' | 'dca' | 'webhook'
+export type BotCategory = 'swing' | 'daytrade' | 'rebalance' | 'rotation' | 'dca' | 'webhook'
 export type RotationCadence = 'weekly' | 'biweekly' | 'monthly'
 export type DcaCadence = 'daily' | 'weekly' | 'biweekly' | 'monthly'
 
@@ -89,6 +89,7 @@ export interface Bot {
   smart_scale?: boolean
   dip_mult?: number
   peak_mult?: number
+  webhook_secret_hint?: string
   params: Record<string, number>
   risk?: RiskRules
   guard?: GuardRules
@@ -166,6 +167,7 @@ export interface BotInput {
   smart_scale?: boolean
   dip_mult?: number
   peak_mult?: number
+  webhook_secret_hint?: string
   params?: Record<string, number>
   risk?: RiskRules
   guard?: GuardRules
@@ -269,6 +271,13 @@ export const autotradeApi = {
   approve: (id: string, otp_code?: string) =>
     api<{ result: { sent: number }; bot: Bot }>(`/autotrade/bots/${id}/approve`, { method: 'POST', json: otp_code ? { otp_code } : {} }),
   skip: (id: string) => api<{ bot: Bot }>(`/autotrade/bots/${id}/skip`, { method: 'POST' }),
+  webhookSecret: (id: string, rotate = false) =>
+    api<{ secret: string; bot: Bot }>(`/autotrade/bots/${id}/webhook-secret`, { method: 'POST', json: { rotate } }),
+  sendTestWebhook: (id: string, secret: string, action: 'buy' | 'sell' | 'exit') =>
+    api<{ ok: boolean; mode?: string; qty?: number; skipped?: string }>(`/autotrade/webhook/${id}`, {
+      method: 'POST',
+      json: { secret, action, reason: '화면 모의 신호 테스트' },
+    }),
   evaluate: (id: string) => api<Evaluation>(`/autotrade/bots/${id}/evaluate`, { method: 'POST' }),
   run: (id: string) => api<{ result: unknown; bot: Bot }>(`/autotrade/bots/${id}/run`, { method: 'POST' }),
   reset: (id: string) => api<{ bot: Bot }>(`/autotrade/bots/${id}/reset`, { method: 'POST' }),

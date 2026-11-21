@@ -11,7 +11,7 @@ from ..errors import ApiError
 from ..trading import orders as trading
 from ..users import credentials
 from ..users import repository as users
-from . import analytics, bots, executor, protections, semi
+from . import analytics, bots, executor, protections, semi, webhook
 from .scheduler import active_session, target_date
 
 bp = Blueprint("autotrade", __name__)
@@ -96,7 +96,7 @@ def update_bot(bot_id: str):
     locked_keys = (
         ("market", "model", "assets") if kind == "rebalance"
         else (("market", "preset", "universe") if kind == "rotation"
-              else (("market", "symbol") if kind == "dca" else ("market", "symbol", "strategy")))
+              else (("market", "symbol") if kind in ("dca", "webhook") else ("market", "symbol", "strategy")))
     )
     if holding and any(k in body and body[k] != bot.get(k) for k in locked_keys):
         raise ApiError(409, "bot_has_position", "보유 중인 봇은 종목·전략(이론)을 바꿀 수 없습니다")
@@ -214,6 +214,25 @@ def run_now(bot_id: str):
     result = executor.run_intraday(bot, sess[0], now, sess[2]) if executor.is_intraday(bot) else executor.run(bot, sess[0])
     bot = bots.get(g.user["id"], bot_id)
     return jsonify(result=result, bot=bots.public(bot))
+
+
+@bp.post("/bots/<bot_id>/webhook-secret")
+@login_required
+def manage_webhook_secret(bot_id: str):
+    """Reveal or rotate the bot's encrypted inbound webhook secret for TradingView integration."""
+    bot = bots.get(g.user["id"], bot_id)
+    rotate = bool((request.get_json(silent=True) or {}).get("rotate", False))
+    secret = webhook.get_or_rotate_secret(bot, rotate=rotate)
+    return jsonify(secret=secret, bot=bots.public(bot))
+
+
+@bp.post("/webhook/<bot_id>")
+def inbound_webhook(bot_id: str):
+    """Unauthenticated external webhook receiver (authenticates via per-bot secret + rate limits)."""
+    body = request.get_json(silent=True) or {}
+    hdr_secret = request.headers.get("X-Webhook-Secret")
+    ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip()
+    return jsonify(webhook.receive_webhook(bot_id, body, hdr_secret, ip))
 
 
 @bp.post("/bots/<bot_id>/reset")

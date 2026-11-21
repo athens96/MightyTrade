@@ -28,14 +28,14 @@ def bot_kind(bot: dict) -> str:
 
 def bot_category(bot: dict) -> str:
     k = bot_kind(bot)
-    if k in ("rebalance", "rotation", "dca"):
+    if k in ("rebalance", "rotation", "dca", "webhook"):
         return k
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return getattr(cls, "category", "swing") if cls else "swing"
 
 
 def bot_timeframe(bot: dict) -> str:
-    if bot_kind(bot) in ("rebalance", "rotation", "dca"):
+    if bot_kind(bot) in ("rebalance", "rotation", "dca", "webhook"):
         return "1d"
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return getattr(cls, "timeframe", "1d") if cls else "1d"
@@ -65,7 +65,7 @@ def has_open_position(bot: dict, mode: Optional[str] = None) -> bool:
 def validate(body: dict, existing: Optional[dict] = None) -> dict:
     src = {**(existing or {}), **body}
     kind = str(src.get("kind") or "single")
-    if kind not in ("single", "rebalance", "rotation", "dca"):
+    if kind not in ("single", "rebalance", "rotation", "dca", "webhook"):
         raise ApiError(400, "invalid_kind")
     try:
         market = Market(str(src.get("market", "")).upper()).value
@@ -182,6 +182,29 @@ def validate(body: dict, existing: Optional[dict] = None) -> dict:
             "strategy": strat_id, "top_n": top_n, "hold_buffer": hold_buffer,
             "rebalance": cadence, "exclude_warnings": bool(src.get("exclude_warnings", True)),
             "params": {}, "guard": guard, "market_timing": mt_cfg, "capital": capital,
+        }
+
+    if kind == "webhook":
+        from . import webhook
+        symbol = str(src.get("symbol", "")).strip().upper()
+        if not SYMBOL_RE[market].fullmatch(symbol):
+            raise ApiError(400, "invalid_symbol")
+        try:
+            risk = RiskRules.from_dict(src.get("risk")).to_dict()
+        except (TypeError, ValueError) as e:
+            raise ApiError(400, "invalid_risk", str(e))
+        guard = protections.validate_guard(src.get("guard"))
+        name = str(src.get("name") or f"웹훅 · {symbol}")[:60]
+        secret_fields = (
+            {"webhook_secret_enc": existing["webhook_secret_enc"], "webhook_secret_hint": existing.get("webhook_secret_hint", "")}
+            if existing and existing.get("webhook_secret_enc")
+            else webhook.generate_secret_fields()[1]
+        )
+        return {
+            "kind": "webhook", "category": "webhook", "timeframe": "1d",
+            "name": name, "market": market, "symbol": symbol,
+            "params": {}, "risk": risk, "guard": guard, "capital": capital,
+            **secret_fields,
         }
 
     symbol = str(src.get("symbol", "")).strip().upper()
@@ -305,7 +328,7 @@ def events(bot: dict, limit: int = 100) -> list:
 
 
 def public(bot: dict) -> dict:
-    out = {k: v for k, v in bot.items() if k != "state"}
+    out = {k: v for k, v in bot.items() if k not in ("state", "webhook_secret_enc")}
     out["kind"] = bot_kind(bot)
     out["category"] = bot_category(bot)
     out["timeframe"] = bot_timeframe(bot)

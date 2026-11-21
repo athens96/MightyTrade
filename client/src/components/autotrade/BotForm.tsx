@@ -32,13 +32,15 @@ const REBAL_OPTIONS: { id: RebalanceMode; label: string }[] = [
 export default function BotForm({ strategies, portfolioModels, initial, bot, onSubmit, onClose }: Props) {
   const initialCat: BotCategory =
     bot?.category ??
-    (initial?.kind === 'dca'
-      ? 'dca'
-      : initial?.kind === 'rotation'
-        ? 'rotation'
-        : initial?.kind === 'rebalance'
-          ? 'rebalance'
-          : initial?.category ?? strategies.find((s) => s.id === initial?.strategy)?.category ?? 'swing')
+    (initial?.kind === 'webhook'
+      ? 'webhook'
+      : initial?.kind === 'dca'
+        ? 'dca'
+        : initial?.kind === 'rotation'
+          ? 'rotation'
+          : initial?.kind === 'rebalance'
+            ? 'rebalance'
+            : initial?.category ?? strategies.find((s) => s.id === initial?.strategy)?.category ?? 'swing')
 
   const [category, setCategory] = useState<BotCategory>(initialCat)
   const [market, setMarket] = useState<Market>(initial?.market ?? (initialCat === 'rebalance' ? 'US' : 'KR'))
@@ -106,6 +108,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
   const isRebal = category === 'rebalance'
   const isRot = category === 'rotation'
   const isDca = category === 'dca'
+  const isWebhook = category === 'webhook'
   const catStrategies = strategies.filter((s) => s.category === (category === 'daytrade' ? 'daytrade' : 'swing'))
   const meta = catStrategies.find((s) => s.id === strategy) ?? catStrategies[0]
   const pModel = portfolioModels.find((m) => m.id === modelId) ?? portfolioModels[0]
@@ -179,6 +182,20 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             ma_short: 20,
             ma_long: 60,
           },
+          capital,
+        })
+      } else if (isWebhook) {
+        await onSubmit({
+          kind: 'webhook',
+          name: name || undefined,
+          market,
+          symbol: symbol.trim().toUpperCase(),
+          risk: {
+            stop_loss_pct: stopLossPct || 0,
+            take_profit_pct: takeProfitPct || 0,
+            trailing_stop_pct: trailingStopPct || 0,
+          },
+          guard,
           capital,
         })
       } else if (isDca) {
@@ -271,6 +288,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
               ['rebalance', '리밸런싱 봇', '여러 주식·채권·금 ETF를 담아 매월·분기마다 목표 비중을 자동으로 맞춰주는 포트폴리오 봇입니다'],
               ['rotation', '순환매 봇', '매주·매월 퀀트 종목발굴 상위 N종목을 자동으로 뽑아 순위 밖 종목만 교체해 주는 랭킹 봇입니다'],
               ['dca', '적립식 봇 (모으기)', '매주·매월 꾸준히 모으되 차트 세일 구간엔 더 사고 과열 구간엔 덜 사서 평균단가를 낮추는 스마트 적립 봇입니다'],
+              ['webhook', '웹훅 봇 (TradingView)', '트레이딩뷰(TradingView) 등 외부 차트 알림(Webhook) 신호를 받아 즉시 모의·반자동·실거래 주문을 실행하는 봇입니다'],
             ] as [BotCategory, string, string][]).map(([id, label, tip]) => (
               <button type="button" key={id} className={category === id ? 'active' : ''} title={tip} onClick={() => switchCategory(id)}>
                 {label}
@@ -309,7 +327,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
                   {watch.filter((w) => w.market === market).map((w) => <option key={w.symbol} value={w.symbol}>{w.name}</option>)}
                 </datalist>
               </label>
-              {!isDca && (
+              {!isDca && !isWebhook && (
                 <label title="봇이 어떤 매매 공식에 따라 자동으로 사고팔지 금융 전략을 선택합니다">
                   <span>금융 이론 전략</span>
                   <select
@@ -469,7 +487,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             />
           </label>
 
-          {!isRebal && !isRot && !isDca && meta?.params.map((p) => {
+          {!isRebal && !isRot && !isDca && !isWebhook && meta?.params.map((p) => {
             const tip = getParamHint(meta.id, p.key, p.label, p.min, p.max)
             return (
               <label key={p.key} title={tip}>
@@ -524,7 +542,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
           </fieldset>
         )}
 
-        {!isRebal && (
+        {!isRebal && !isWebhook && (
           <fieldset className="costs" style={{ marginTop: 10 }}>
             <legend>🚦 마켓 타이밍 신호등 필터 (하락장 방어)</legend>
             <div className="modal-grid">
@@ -632,7 +650,13 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
           </div>
         )}
 
-        {!isRebal && !isRot && !isDca && meta && (
+        {isWebhook && (
+          <p className="muted small" style={{ marginTop: 10 }}>
+            <b>🔗 외부 신호 웹훅(Webhook) 연동 안내</b><br />
+            봇을 만든 뒤 상세 화면에서 전용 웹훅 주소(URL)와 <b>암호화 비밀 토큰</b>, 그리고 트레이딩뷰(TradingView) 알림창에 그대로 복사해 붙여넣을 수 있는 JSON 템플릿이 제공됩니다.
+          </p>
+        )}
+        {!isRebal && !isRot && !isDca && !isWebhook && meta && (
           <>
             <p className="muted small" style={{ marginTop: 10 }}>
               <b>{meta.theory}</b><br />{meta.summary}

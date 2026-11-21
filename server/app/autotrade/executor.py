@@ -51,8 +51,12 @@ def is_dca(bot: dict) -> bool:
     return bots.bot_kind(bot) == "dca"
 
 
+def is_webhook(bot: dict) -> bool:
+    return bots.bot_kind(bot) == "webhook"
+
+
 def is_intraday(bot: dict) -> bool:
-    if is_rebalance(bot) or is_rotation(bot) or is_dca(bot):
+    if is_rebalance(bot) or is_rotation(bot) or is_dca(bot) or is_webhook(bot):
         return False
     cls = STRATEGIES.get(bot.get("strategy", ""))
     return cls is not None and getattr(cls, "timeframe", "1d") != "1d"
@@ -201,6 +205,9 @@ def preview(bot: dict, today: str) -> dict:
     if is_dca(bot):
         from . import dca
         return dca.preview(bot, today)
+    if is_webhook(bot):
+        from . import webhook
+        return webhook.preview(bot, today)
     d = decide_intraday(bot, today) if is_intraday(bot) else decide(bot, today)
     tb = d["today_bar"]
     return {

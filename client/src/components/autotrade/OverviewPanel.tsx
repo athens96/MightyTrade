@@ -7,6 +7,7 @@ const CAT_LABEL: Record<BotCategory, string> = {
   rebalance: '리밸런싱',
   rotation: '순환매',
   dca: '적립식',
+  webhook: '웹훅',
 }
 const MODE_LABEL: Record<BotMode, string> = {
   paper: '모의',
