@@ -1,8 +1,14 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { brokerApi, type NotificationEvents, type NotificationSettingsView, type TossCredentialStatus } from '../api/broker'
 import { useAuth } from '../auth/AuthContext'
 import { FeatureGuideBox } from '../components/GuideBox'
+import NotificationGuideModal from '../components/settings/NotificationGuideModal'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
+import {
+  guideTargetForField,
+  NOTIFY_CHANNEL_LIST,
+  type NotifyChannelId,
+} from '../lib/notificationGuides'
 import { APP_VERSION, fetchHealth, forceReloadApp, isNewerVersion } from '../lib/version'
 
 const DEFAULT_EVENTS: NotificationEvents = {
@@ -33,6 +39,30 @@ export default function SettingsPage() {
   const [nBusy, setNBusy] = useState(false)
   const [nMsg, setNMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [serverVer, setServerVer] = useState<string | null>(null)
+  const [guideModal, setGuideModal] = useState<{
+    channel: NotifyChannelId
+    step: number
+    view?: 'guide' | 'preview'
+  } | null>(null)
+  const [focusHighlight, setFocusHighlight] = useState<NotifyChannelId | null>(null)
+
+  const tgTokenRef = useRef<HTMLInputElement | null>(null)
+  const discordUrlRef = useRef<HTMLInputElement | null>(null)
+  const slackUrlRef = useRef<HTMLInputElement | null>(null)
+
+  const openFieldGuide = (anchor: 'tg-token' | 'tg-chat-id' | 'discord-url' | 'slack-url') => {
+    const t = guideTargetForField(anchor)
+    setGuideModal({ channel: t.channel, step: t.stepIndex, view: 'guide' })
+  }
+
+  const focusChannelInput = (ch: NotifyChannelId) => {
+    const el = ch === 'telegram' ? tgTokenRef.current : ch === 'discord' ? discordUrlRef.current : slackUrlRef.current
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setTimeout(() => el.focus(), 180)
+    setFocusHighlight(ch)
+    setTimeout(() => setFocusHighlight((cur) => (cur === ch ? null : cur)), 2200)
+  }
 
   const applyNotify = (v: NotificationSettingsView) => {
     setNotify(v)
@@ -161,11 +191,67 @@ export default function SettingsPage() {
       </section>
 
       <section className="panel" style={{ marginTop: 18 }}>
-        <h3>실시간 매매 알림 · 일일 브리핑 연결</h3>
+        <div className="ng-panel-head">
+          <h3>실시간 매매 알림 · 일일 브리핑 연결</h3>
+          <div className="ng-panel-head-btns">
+            <button
+              type="button"
+              className="primary small"
+              title="텔레그램·디스코드·슬랙 화면을 단계별로 보면서 1~2분 안에 따라 할 수 있는 도움말을 엽니다"
+              onClick={() => setGuideModal({ channel: 'telegram', step: 0, view: 'guide' })}
+            >
+              📖 화면 보면서 따라 하기
+            </button>
+            <button
+              type="button"
+              className="small"
+              title="연결 후 실제로 도착하는 매매 알림과 장 마감 일일 성적표 예시를 미리 봅니다"
+              onClick={() => setGuideModal({ channel: 'telegram', step: 0, view: 'preview' })}
+            >
+              📊 알림 예시
+            </button>
+          </div>
+        </div>
         <p className="muted small">
           화면을 보고 있지 않아도 자동매매 주문 접수·체결 완료·잔고 부족 스킵·비상 정지 알림과 장 마감 후 <b>오늘의 봇 성적표</b>를
           텔레그램·디스코드·슬랙으로 바로 받아볼 수 있습니다. 토큰과 웹훅 주소는 암호화되어 저장됩니다.
         </p>
+
+        {/* Quick messenger guide cards */}
+        <div className="ng-channel-strip">
+          {NOTIFY_CHANNEL_LIST.map((ch) => {
+            const isConn =
+              ch.id === 'telegram'
+                ? Boolean(notify?.telegram_configured)
+                : ch.id === 'discord'
+                  ? Boolean(notify?.discord_configured)
+                  : Boolean(notify?.slack_configured)
+            return (
+              <div key={ch.id} className={`ng-channel-card ${isConn ? 'connected' : ''}`}>
+                <div className="ng-channel-card-top">
+                  <b>{ch.emoji} {ch.name}</b>
+                  <span className={`status-badge ${isConn ? 'approved' : 'closed'}`}>
+                    {isConn ? '연결됨 ✓' : '미연결'}
+                  </span>
+                </div>
+                <div className="ng-channel-card-meta small muted">
+                  <span>{ch.badge}</span>
+                  <span>· {ch.duration}</span>
+                </div>
+                <p className="small muted ng-channel-card-desc">{ch.bestFor}</p>
+                <button
+                  type="button"
+                  className="ng-card-btn"
+                  title={`${ch.name} 연결 방법을 화면 하나하나 보면서 따라 합니다 (${ch.steps.length}단계)`}
+                  onClick={() => setGuideModal({ channel: ch.id, step: 0, view: 'guide' })}
+                >
+                  화면별 도움말 ({ch.steps.length}단계) →
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
         {notify?.configured && (
           <dl className="kv" style={{ marginBottom: 12 }}>
             <dt>연결된 채널</dt>
@@ -213,9 +299,24 @@ export default function SettingsPage() {
             <span>모의(Paper) 모드 매매 내역도 알림 받기</span>
           </label>
 
-          <label title="텔레그램 @BotFather에서 발급받은 봇 토큰을 입력하세요 (비워두면 기존 저장된 토큰을 유지합니다)">
-            텔레그램 Bot Token {notify?.telegram_configured && <span className="muted small">· 등록됨 ({notify.telegram_bot_token_masked})</span>}
+          <div className="ng-field">
+            <div className="ng-label-row">
+              <label htmlFor="ng-tg-token" title="텔레그램 @BotFather에서 발급받은 봇 토큰을 입력하세요 (비워두면 기존 저장된 토큰을 유지합니다)">
+                ✈️ 텔레그램 Bot Token {notify?.telegram_configured && <span className="muted small">· 등록됨 ({notify.telegram_bot_token_masked})</span>}
+              </label>
+              <button
+                type="button"
+                className="ng-help-link"
+                title="텔레그램 @BotFather에서 봇 토큰을 발급받는 화면을 바로 봅니다"
+                onClick={() => openFieldGuide('tg-token')}
+              >
+                ? 발급 화면 보기
+              </button>
+            </div>
             <input
+              id="ng-tg-token"
+              ref={tgTokenRef}
+              className={focusHighlight === 'telegram' ? 'ng-input-pulse' : ''}
               type="password"
               autoComplete="new-password"
               value={tgToken}
@@ -224,20 +325,51 @@ export default function SettingsPage() {
               title="텔레그램 @BotFather에서 발급받은 봇 토큰을 입력하세요"
               spellCheck={false}
             />
-          </label>
-          <label title="알림을 받을 내 텔레그램 대화방 ID(숫자)를 입력하세요">
-            텔레그램 Chat ID
+          </div>
+
+          <div className="ng-field">
+            <div className="ng-label-row">
+              <label htmlFor="ng-tg-chatid" title="알림을 받을 내 텔레그램 대화방 ID(숫자)를 입력하세요">
+                ✈️ 텔레그램 Chat ID
+              </label>
+              <button
+                type="button"
+                className="ng-help-link"
+                title="내 텔레그램 숫자 Chat ID를 10초 만에 확인하는 화면을 바로 봅니다"
+                onClick={() => openFieldGuide('tg-chat-id')}
+              >
+                ? Chat ID 찾는 법
+              </button>
+            </div>
             <input
+              id="ng-tg-chatid"
+              className={focusHighlight === 'telegram' ? 'ng-input-pulse' : ''}
               value={tgChatId}
               onChange={(e) => setTgChatId(e.target.value)}
               placeholder="예: 123456789"
               title="알림을 받을 내 텔레그램 Chat ID를 입력하세요"
               spellCheck={false}
             />
-          </label>
-          <label title="디스코드 채널 설정 → 연동 → 웹후크에서 복사한 https:// 주소를 붙여넣으세요">
-            디스코드 Webhook URL {notify?.discord_configured && <span className="muted small">· 등록됨 ({notify.discord_webhook_masked})</span>}
+          </div>
+
+          <div className="ng-field">
+            <div className="ng-label-row">
+              <label htmlFor="ng-dc-url" title="디스코드 채널 설정 → 연동 → 웹후크에서 복사한 https:// 주소를 붙여넣으세요">
+                💬 디스코드 Webhook URL {notify?.discord_configured && <span className="muted small">· 등록됨 ({notify.discord_webhook_masked})</span>}
+              </label>
+              <button
+                type="button"
+                className="ng-help-link"
+                title="디스코드 채널에서 웹후크 URL을 복사하는 화면을 바로 봅니다"
+                onClick={() => openFieldGuide('discord-url')}
+              >
+                ? 웹후크 복사 방법
+              </button>
+            </div>
             <input
+              id="ng-dc-url"
+              ref={discordUrlRef}
+              className={focusHighlight === 'discord' ? 'ng-input-pulse' : ''}
               type="password"
               autoComplete="new-password"
               value={discordUrl}
@@ -246,10 +378,26 @@ export default function SettingsPage() {
               title="디스코드 채널 웹훅 https:// 주소를 입력하세요"
               spellCheck={false}
             />
-          </label>
-          <label title="슬랙 Incoming Webhook에서 발급받은 https://hooks.slack.com/... 주소를 붙여넣으세요">
-            슬랙 Webhook URL {notify?.slack_configured && <span className="muted small">· 등록됨 ({notify.slack_webhook_masked})</span>}
+          </div>
+
+          <div className="ng-field">
+            <div className="ng-label-row">
+              <label htmlFor="ng-sl-url" title="슬랙 Incoming Webhook에서 발급받은 https://hooks.slack.com/... 주소를 붙여넣으세요">
+                💼 슬랙 Webhook URL {notify?.slack_configured && <span className="muted small">· 등록됨 ({notify.slack_webhook_masked})</span>}
+              </label>
+              <button
+                type="button"
+                className="ng-help-link"
+                title="슬랙 Incoming Webhook URL을 발급받는 화면을 바로 봅니다"
+                onClick={() => openFieldGuide('slack-url')}
+              >
+                ? 웹훅 발급 화면
+              </button>
+            </div>
             <input
+              id="ng-sl-url"
+              ref={slackUrlRef}
+              className={focusHighlight === 'slack' ? 'ng-input-pulse' : ''}
               type="password"
               autoComplete="new-password"
               value={slackUrl}
@@ -258,7 +406,7 @@ export default function SettingsPage() {
               title="슬랙 Incoming Webhook https:// 주소를 입력하세요"
               spellCheck={false}
             />
-          </label>
+          </div>
 
           <fieldset className="costs">
             <legend>수신할 알림 종류</legend>
@@ -352,6 +500,21 @@ export default function SettingsPage() {
           </dd>
         </dl>
       </section>
+
+      {guideModal && (
+        <NotificationGuideModal
+          initialChannel={guideModal.channel}
+          initialStep={guideModal.step}
+          initialView={guideModal.view}
+          configured={{
+            telegram: Boolean(notify?.telegram_configured),
+            discord: Boolean(notify?.discord_configured),
+            slack: Boolean(notify?.slack_configured),
+          }}
+          onClose={() => setGuideModal(null)}
+          onFocusField={focusChannelInput}
+        />
+      )}
     </div>
   )
 }
