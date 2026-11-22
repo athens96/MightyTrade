@@ -18,5 +18,6 @@ def test_version_files_and_health_endpoint_in_sync(client):
 
     res = client.get("/api/health")
     assert res.status_code == 200
+    assert res.headers.get("Cache-Control") == "no-store"
     assert res.json["status"] == "ok"
     assert res.json["version"] == root_ver

@@ -4,6 +4,7 @@ import { adminApi } from '../api/admin'
 import { useAuth } from '../auth/AuthContext'
 import { useOrderEvents } from '../hooks/useOrderEvents'
 import { APP_VERSION } from '../lib/version'
+import { OPEN_UPDATE_MODAL_EVENT, UPDATE_AVAILABLE_EVENT } from './VersionUpdateModal'
 
 const MAIN_TABS = [
   { to: '/', label: '시세', long: '시세/차트', icon: '📈', end: true, tip: '국내·미국 실시간 차트와 호가를 보고 직접 매수·매도 주문을 넣는 화면입니다.' },
@@ -18,9 +19,18 @@ export default function Layout() {
   const isAdmin = user?.role === 'admin'
   const [pending, setPending] = useState(0)
   const [more, setMore] = useState(false)
+  const [newerVer, setNewerVer] = useState<string | null>(null)
   const location = useLocation()
 
   useEffect(() => setMore(false), [location.pathname])
+  useEffect(() => {
+    const onUpdate = (e: Event) => {
+      const v = (e as CustomEvent<{ version?: string }>).detail?.version
+      if (v) setNewerVer(v)
+    }
+    window.addEventListener(UPDATE_AVAILABLE_EVENT, onUpdate)
+    return () => window.removeEventListener(UPDATE_AVAILABLE_EVENT, onUpdate)
+  }, [])
   useEffect(() => {
     if (!isAdmin) return
     const load = () => adminApi.summary().then((r) => setPending(r.pending)).catch(() => undefined)
@@ -48,7 +58,18 @@ export default function Layout() {
         <strong className="brand">
           <img src="/favicon.svg" alt="" width={24} height={24} />
           <span>Mighty Trade</span>
-          <span className="ver-badge" title={`현재 실행 중인 마이티 트레이드 버전 (v${APP_VERSION})`}>v{APP_VERSION}</span>
+          {newerVer ? (
+            <button
+              type="button"
+              className="ver-badge update"
+              title={`새 버전(v${newerVer})이 준비되었습니다. 클릭하면 업데이트 안내창을 엽니다`}
+              onClick={() => window.dispatchEvent(new Event(OPEN_UPDATE_MODAL_EVENT))}
+            >
+              🔄 v{newerVer} 업데이트
+            </button>
+          ) : (
+            <span className="ver-badge" title={`현재 실행 중인 마이티 트레이드 버전 (v${APP_VERSION})`}>v{APP_VERSION}</span>
+          )}
         </strong>
         <div className="topbar-right">
           <span className="muted desktop-only" title="현재 로그인된 Google 계정 이메일입니다.">{user?.email}</span>

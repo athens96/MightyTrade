@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import HoverTooltip from './components/HoverTooltip'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
+import VersionUpdateModal from './components/VersionUpdateModal'
 import LoginPage from './pages/LoginPage'
 import OtpPage from './pages/OtpPage'
 import DashboardPage from './pages/DashboardPage'
@@ -18,6 +19,7 @@ export default function App() {
   return (
     <>
       <HoverTooltip />
+      <VersionUpdateModal />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/otp" element={<OtpPage />} />

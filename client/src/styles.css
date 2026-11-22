@@ -52,6 +52,7 @@ input { background: #0d1117; color: inherit; border: 1px solid #30363d; border-r
 .topbar .brand { grid-column: 2; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 18px; letter-spacing: 0.02em; white-space: nowrap; }
 .topbar .brand img { display: block; flex: none; }
 .ver-badge { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 999px; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; color: #8b949e; background: #161b22; border: 1px solid #30363d; }
+button.ver-badge.update { color: #58a6ff; border-color: #2f81f7; background: rgba(47,129,247,.14); cursor: pointer; min-height: 0; padding: 2px 8px; }
 .topbar-right { grid-column: 3; display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
 .topbar nav { display: flex; gap: 12px; }
 .topbar nav a { color: #8b949e; text-decoration: none; }

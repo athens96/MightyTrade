@@ -2,6 +2,14 @@
 
 이 프로젝트의 주요 변경 사항은 [Semantic Versioning](https://semver.org/lang/ko/) 규칙에 따라 기록됩니다.
 
+## [0.1.3] - 2026-11-22
+
+### Added
+- **새 버전 자동 감지 및 취소 가능한 강제 새로고침 팝업 (`MT-15`)**:
+  - 서버 `/api/health`(`Cache-Control: no-store`)를 주기적(60초)·탭 복귀(`visibilitychange`/`focus`)·청크 교체(`vite:preloadError`) 시 자동 점검하여 현재 웹 화면보다 높은 버전이 배포되면 안내 팝업(`VersionUpdateModal`) 표시.
+  - **`[지금 새로고침]`**: 브라우저 CacheStorage 및 HTML 캐시를 우회(`cache: 'reload'` + 버전 쿼리 리플레이스 후 주소 정리)하여 최신 웹 번들을 강제 로딩.
+  - **`[나중에 (취소)]`**: 입력 중인 작업을 방해받지 않도록 현재 세션에서 해당 버전 팝업을 닫고, 상단 브랜드 옆에 `🔄 vX.Y.Z 업데이트` 버튼을 띄워 원할 때 언제든 다시 열 수 있도록 지원.
+
 ## [0.1.2] - 2026-11-22
 
 ### Fixed

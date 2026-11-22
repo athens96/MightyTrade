@@ -3,7 +3,7 @@ import { brokerApi, type NotificationEvents, type NotificationSettingsView, type
 import { useAuth } from '../auth/AuthContext'
 import { FeatureGuideBox } from '../components/GuideBox'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
-import { APP_VERSION, fetchHealth } from '../lib/version'
+import { APP_VERSION, fetchHealth, forceReloadApp, isNewerVersion } from '../lib/version'
 
 const DEFAULT_EVENTS: NotificationEvents = {
   order: true,
@@ -333,10 +333,21 @@ export default function SettingsPage() {
           <dt>서버 API 버전</dt>
           <dd>
             <code>{serverVer ? `v${serverVer}` : '확인 중…'}</code>
-            {serverVer && serverVer !== APP_VERSION && (
-              <span className="warn small" style={{ marginLeft: 8 }}>
-                새 버전이 배포되었습니다. 브라우저 새로고침(⌘R / F5)으로 최신 화면을 불러오세요.
-              </span>
+            {serverVer && isNewerVersion(serverVer, APP_VERSION) && (
+              <>
+                <span className="warn small" style={{ marginLeft: 8 }}>
+                  새 버전이 배포되었습니다.
+                </span>{' '}
+                <button
+                  type="button"
+                  className="primary small"
+                  style={{ marginLeft: 6 }}
+                  title="이전 캐시를 비우고 최신 버전 웹 화면을 즉시 다시 불러옵니다"
+                  onClick={() => void forceReloadApp(serverVer)}
+                >
+                  지금 새로고침
+                </button>
+              </>
             )}
           </dd>
         </dl>

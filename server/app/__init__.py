@@ -52,6 +52,8 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
 
     @app.get("/api/health")
     def health():
-        return jsonify(status="ok", version=APP_VERSION)
+        resp = jsonify(status="ok", version=APP_VERSION)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     return app
