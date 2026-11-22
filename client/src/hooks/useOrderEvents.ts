@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { authApi } from '../api/auth'
 
 export interface Toast {
   id: number
@@ -32,7 +33,10 @@ export function useOrderEvents() {
       window.dispatchEvent(new Event('mt:order-event'))
     })
     es.onerror = () => {
-      if (es.readyState === EventSource.CLOSED) es.close() // no Toss key / not available: stay quiet
+      if (es.readyState === EventSource.CLOSED) {
+        es.close() // no Toss key / session expired: verify session once so expired tabs redirect cleanly
+        authApi.me().catch(() => undefined)
+      }
     }
     return () => es.close()
   }, [])

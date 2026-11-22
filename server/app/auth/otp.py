@@ -45,7 +45,7 @@ def verify(user: dict[str, Any], code: str) -> dict[str, Any]:
     else:
         enc = user.get("otp_pending_secret_enc")
     if not enc:
-        raise ApiError(400, "otp_not_setup")
+        raise ApiError(400, "otp_not_setup", "OTP가 아직 등록되지 않았습니다")
 
     code = (code or "").strip().replace(" ", "")
     step = _matched_step(pyotp.TOTP(decrypt(enc)), code, now) if code.isdigit() else None
@@ -61,7 +61,7 @@ def verify(user: dict[str, Any], code: str) -> dict[str, Any]:
                 now + timedelta(minutes=current_app.config["OTP_LOCK_MIN"])
             ).isoformat()
         users.update_user(user["id"], **fields)
-        raise ApiError(401, "invalid_otp")
+        raise ApiError(401, "invalid_otp", "OTP 코드가 올바르지 않거나 이미 사용된 번호입니다")
 
     fields = {"otp_fail_count": 0, "otp_locked_until": None, "otp_last_step": step}
     if not user.get("otp_enabled"):

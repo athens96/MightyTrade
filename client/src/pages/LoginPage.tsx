@@ -9,7 +9,7 @@ import { APP_VERSION } from '../lib/version'
 const buttonWidth = () => Math.min(356, window.innerWidth - 84)
 
 export default function LoginPage() {
-  const { status, loginWithGoogle } = useAuth()
+  const { status, sessionExpired, loginWithGoogle } = useAuth()
   const navigate = useNavigate()
   const [error, setError] = useState('')
   const [gate, setGate] = useState<'approval_pending' | 'rejected' | null>(null)
@@ -21,6 +21,11 @@ export default function LoginPage() {
       <img className="auth-mascot" src="/mascot-256.png" alt="" width={112} height={112} />
       <h1 className="auth-title">Mighty <span>Trade</span></h1>
       <p className="auth-tag">시장을 읽고, 전략을 검증하고, 자동으로 실행합니다.</p>
+      {sessionExpired && (
+        <p className="warn small" style={{ width: '100%', marginBottom: 14, textAlign: 'center' }}>
+          로그인 유효시간이 만료되어 안전을 위해 로그인 화면으로 이동했습니다. 다시 로그인해 주세요.
+        </p>
+      )}
       <div className="auth-google">
         <GoogleLogin
           theme="outline"

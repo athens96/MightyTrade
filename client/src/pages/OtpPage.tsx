@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { QRCodeSVG } from 'qrcode.react'
 import { authApi } from '../api/auth'
-import { useAuth } from '../auth/AuthContext'
+import { isSessionExpiredError } from '../api/client'
+import { consumeReturnTo, useAuth } from '../auth/AuthContext'
 import AuthShell from '../components/auth/AuthShell'
 
 export default function OtpPage() {
@@ -28,9 +29,9 @@ export default function OtpPage() {
     setError('')
     try {
       await verifyOtp(code)
-      navigate('/')
+      navigate(consumeReturnTo() ?? '/', { replace: true })
     } catch (err) {
-      setError((err as Error).message)
+      if (!isSessionExpiredError(err)) setError((err as Error).message)
     }
   }
 

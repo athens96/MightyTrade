@@ -17,11 +17,11 @@ def _require(stage: tokens.Stage) -> Callable:
             user_id = tokens.read(stage)
             user = users.get_user(user_id) if user_id else None
             if user is None:
-                raise ApiError(401, "unauthorized")
+                raise ApiError(401, "unauthorized", "로그인이 만료되었습니다. 다시 로그인해 주세요")
             if users.status_of(user) != "approved":  # pending / rejected, or approval revoked
                 raise ApiError(401, "not_approved", "관리자 승인 후 이용할 수 있습니다")
             if stage == "session" and not user.get("otp_enabled"):
-                raise ApiError(401, "otp_required")
+                raise ApiError(401, "otp_required", "OTP 2단계 인증이 필요합니다")
             g.user = user
             return fn(*args, **kwargs)
 
