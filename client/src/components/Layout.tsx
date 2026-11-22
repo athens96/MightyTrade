@@ -4,6 +4,7 @@ import { adminApi } from '../api/admin'
 import { useAuth } from '../auth/AuthContext'
 import { useOrderEvents } from '../hooks/useOrderEvents'
 import { APP_VERSION } from '../lib/version'
+import RequestModal from './RequestModal'
 import { OPEN_UPDATE_MODAL_EVENT, UPDATE_AVAILABLE_EVENT } from './VersionUpdateModal'
 
 const MAIN_TABS = [
@@ -17,8 +18,9 @@ export default function Layout() {
   const { user, logout } = useAuth()
   const toasts = useOrderEvents()
   const isAdmin = user?.role === 'admin'
-  const [pending, setPending] = useState(0)
+  const [adminCounts, setAdminCounts] = useState({ pending: 0, openRequests: 0 })
   const [more, setMore] = useState(false)
+  const [requestOpen, setRequestOpen] = useState(false)
   const [newerVer, setNewerVer] = useState<string | null>(null)
   const location = useLocation()
 
@@ -33,7 +35,11 @@ export default function Layout() {
   }, [])
   useEffect(() => {
     if (!isAdmin) return
-    const load = () => adminApi.summary().then((r) => setPending(r.pending)).catch(() => undefined)
+    const load = () =>
+      adminApi
+        .summary()
+        .then((r) => setAdminCounts({ pending: r.pending, openRequests: r.open_requests ?? 0 }))
+        .catch(() => undefined)
     load()
     const t = window.setInterval(load, 60_000)
     window.addEventListener('mt:admin-changed', load)
@@ -43,7 +49,9 @@ export default function Layout() {
     }
   }, [isAdmin])
 
-  const badge = pending > 0 && <span className="nav-badge" title="승인 대기">{pending}</span>
+  const adminTotal = adminCounts.pending + adminCounts.openRequests
+  const badgeTip = `승인 대기 ${adminCounts.pending}명 · 미처리 요청사항 ${adminCounts.openRequests}건`
+  const badge = adminTotal > 0 && <span className="nav-badge" title={badgeTip}>{adminTotal}</span>
   const moreActive = ['/settings', '/admin'].some((p) => location.pathname.startsWith(p))
 
   return (
@@ -52,8 +60,8 @@ export default function Layout() {
       <header className="topbar">
         <nav className="topbar-left desktop-only">
           {MAIN_TABS.map((t) => <NavLink key={t.to} to={t.to} end={t.end} title={t.tip}>{t.long}</NavLink>)}
-          <NavLink to="/settings" title="내 토스증권 Open API 키를 안전하게 등록·확인하는 설정 화면입니다.">설정</NavLink>
-          {isAdmin && <NavLink to="/admin" title="가입 신청 승인 및 사용자 계정을 관리하는 관리자 전용 화면입니다.">관리자{badge}</NavLink>}
+          <NavLink to="/settings" title="내 토스증권 Open API 키와 실시간 알림을 안전하게 등록·확인하는 설정 화면입니다.">설정</NavLink>
+          {isAdmin && <NavLink to="/admin" title="가입 신청 승인 및 사용자 요청사항을 처리하는 관리자 전용 화면입니다.">관리자{badge}</NavLink>}
         </nav>
         <strong className="brand">
           <img src="/favicon.svg" alt="" width={24} height={24} />
@@ -72,6 +80,14 @@ export default function Layout() {
           )}
         </strong>
         <div className="topbar-right">
+          <button
+            type="button"
+            className="desktop-only"
+            onClick={() => setRequestOpen(true)}
+            title="기능 건의나 오류 제보를 관리자에게 직접 보냅니다 (관리자만 열람 가능)"
+          >
+            💬 요청사항
+          </button>
           <span className="muted desktop-only" title="현재 로그인된 Google 계정 이메일입니다.">{user?.email}</span>
           <button className="desktop-only" onClick={logout} title="현재 기기에서 안전하게 로그아웃합니다.">로그아웃</button>
         </div>
@@ -88,7 +104,7 @@ export default function Layout() {
             <span>{t.label}</span>
           </NavLink>
         ))}
-        <button className={moreActive || more ? 'active' : ''} onClick={() => setMore((v) => !v)} aria-expanded={more} title="설정·관리자·로그아웃 메뉴를 엽니다.">
+        <button className={moreActive || more ? 'active' : ''} onClick={() => setMore((v) => !v)} aria-expanded={more} title="요청사항·설정·관리자·로그아웃 메뉴를 엽니다.">
           <span className="tab-icon" aria-hidden>☰</span>
           <span>더보기{badge}</span>
         </button>
@@ -100,12 +116,21 @@ export default function Layout() {
               <b>{user?.name ?? '사용자'} <span className="ver-badge">v{APP_VERSION}</span></b>
               <span className="muted small">{user?.email}</span>
             </div>
+            <button
+              type="button"
+              title="기능 건의나 오류 제보를 관리자에게 직접 보냅니다 (관리자만 열람 가능)"
+              onClick={() => { setMore(false); setRequestOpen(true) }}
+            >
+              💬 요청사항 보내기
+            </button>
             <NavLink to="/settings">⚙️ 설정 · 토스 API 연결</NavLink>
-            {isAdmin && <NavLink to="/admin">🛡️ 관리자 · 사용자 관리 {badge}</NavLink>}
+            {isAdmin && <NavLink to="/admin">🛡️ 관리자 · 계정 및 요청사항 {badge}</NavLink>}
             <button onClick={logout}>로그아웃</button>
           </div>
         </div>
       )}
+
+      {requestOpen && <RequestModal currentPage={location.pathname} onClose={() => setRequestOpen(false)} />}
 
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => <div key={t.id} className={`toast ${t.tone}`}>{t.text}</div>)}

@@ -9,7 +9,7 @@ from ..autotrade import bots
 from ..errors import ApiError
 from ..integrations.toss import forget_client
 from ..storage import get_store
-from ..users import credentials
+from ..users import credentials, requests_repo
 from ..users import repository as users
 from ..users.repository import now_iso
 
@@ -17,7 +17,7 @@ bp = Blueprint("admin", __name__)
 
 # Per-account data removed on deletion (collection -> how records point at the user)
 BY_ID = ("users", "watchlists", "settings", "broker_credentials")
-BY_USER_ID = ("bots", "bot_events", "orders")
+BY_USER_ID = ("bots", "bot_events", "orders", "user_requests")
 
 
 def _summary(u: dict) -> dict:
@@ -53,7 +53,10 @@ def _guard(u: dict, action: str) -> None:
 def summary():
     """Badge counts for the admin menu."""
     all_users = get_store().find("users")
-    return jsonify(pending=sum(1 for u in all_users if users.status_of(u) == "pending"))
+    return jsonify(
+        pending=sum(1 for u in all_users if users.status_of(u) == "pending"),
+        open_requests=requests_repo.open_count(),
+    )
 
 
 @bp.get("/users")
@@ -119,3 +122,26 @@ def delete_user(user_id: str):
     for coll in BY_ID:
         removed[coll] = int(store.delete(coll, u["id"]))
     return jsonify(ok=True, removed=removed)
+
+
+# ------------------------------------------------------------------ user requests inbox (admin-only, MT-16)
+@bp.get("/requests")
+@admin_required
+def list_requests():
+    status = request.args.get("status", "all")
+    items, counts = requests_repo.list_all_for_admin(status)
+    return jsonify(items=items, counts=counts)
+
+
+@bp.patch("/requests/<req_id>")
+@admin_required
+def update_request(req_id: str):
+    body = request.get_json(silent=True) or {}
+    return jsonify(item=requests_repo.update_by_admin(req_id, g.user, body))
+
+
+@bp.delete("/requests/<req_id>")
+@admin_required
+def delete_request(req_id: str):
+    requests_repo.delete_by_admin(req_id)
+    return jsonify(ok=True)

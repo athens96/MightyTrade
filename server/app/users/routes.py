@@ -10,7 +10,7 @@ from ..errors import ApiError
 from ..integrations.toss import forget_client, verify_credentials
 from ..market.models import Market
 from ..storage import get_store
-from . import credentials
+from . import credentials, requests_repo
 from .repository import now_iso
 
 bp = Blueprint("users", __name__)
@@ -139,3 +139,17 @@ def delete_notifications():
 def test_notifications():
     from ..autotrade import notifier
     return jsonify(notifier.send_test(g.user["id"]))
+
+
+# ------------------------------------------------------------------ user feedback / requests (MT-16)
+@bp.get("/me/requests")
+@login_required
+def list_my_requests():
+    return jsonify(items=requests_repo.list_for_user(g.user["id"]))
+
+
+@bp.post("/me/requests")
+@login_required
+def create_my_request():
+    body = request.get_json(silent=True) or {}
+    return jsonify(item=requests_repo.create_request(g.user, body)), 201

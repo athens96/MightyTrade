@@ -38,7 +38,7 @@ def test_new_signup_waits_for_approval(app, client, monkeypatch):
 def test_approve_then_normal_login(app, client, admin, monkeypatch):
     a, _ = admin
     uid = google(client, monkeypatch, "u1", "user@example.com").json["user"]["id"]
-    assert a.get("/api/admin/summary").json == {"pending": 1}
+    assert a.get("/api/admin/summary").json == {"pending": 1, "open_requests": 0}
     listing = a.get("/api/admin/users?status=pending").json
     assert [u["email"] for u in listing["items"]] == ["user@example.com"] and listing["counts"]["pending"] == 1
     r = a.post(f"/api/admin/users/{uid}/approve")
