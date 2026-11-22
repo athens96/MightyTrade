@@ -2,6 +2,14 @@
 
 이 프로젝트의 주요 변경 사항은 [Semantic Versioning](https://semver.org/lang/ko/) 규칙에 따라 기록됩니다.
 
+## [0.2.2] - 2026-11-23
+
+### Added
+- **설정 토스증권 Open API 연결 화면 단계별 시각적 도움말 (`MT-19`)**:
+  - 설정 화면의 `토스증권 API 연결` 패널에 **토스증권 PC 웹(WTS) 로그인 → 설정(⚙️)·Open API 신청 → Client ID·Secret 복사 → 허용 IP 관리 등록 → MightyTrade 입력·6자리 OTP 검증** 5단계 실제 앱 화면 모형(시각적 목업)을 제공하는 인터랙티브 도움말 모달(`TossGuideModal`) 추가.
+  - `GET /api/users/me/broker/toss`에서 로그인·승인 사용자에게 이 서비스 서버의 공인 IP(`server_ip`, 런타임 `SERVER_PUBLIC_IP` 또는 `Host` DNS 동적 확인)를 함께 안내하여, 설정 화면과 4단계 `허용 IP 관리` 화면에서 **원클릭 서버 IP 복사** 가능.
+  - 3단계 요약 바로가기 카드, `Client ID` / `Client Secret` / `OTP 코드` 각 칸 옆 `? 발급 화면 보기` 바로가기, `🛡️ 보안 · 자주 막히는 Q&A` 탭(이중 암호화 원리·`403` IP 미등록·Secret 분실 재발급·1키 1접속 제한 안내), 마지막 단계 `[토스 키 입력창으로 바로 이동 →]` 자동 포커스 및 모바일 반응형 UI 적용.
+
 ## [0.2.1] - 2026-11-23
 
 ### Added

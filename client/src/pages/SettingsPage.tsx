@@ -3,12 +3,18 @@ import { brokerApi, type NotificationEvents, type NotificationSettingsView, type
 import { useAuth } from '../auth/AuthContext'
 import { FeatureGuideBox } from '../components/GuideBox'
 import NotificationGuideModal from '../components/settings/NotificationGuideModal'
+import TossGuideModal from '../components/settings/TossGuideModal'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
 import {
   guideTargetForField,
   NOTIFY_CHANNEL_LIST,
   type NotifyChannelId,
 } from '../lib/notificationGuides'
+import {
+  TOSS_QUICK_CARDS,
+  tossGuideTargetForField,
+  type TossFieldAnchor,
+} from '../lib/tossGuide'
 import { APP_VERSION, fetchHealth, forceReloadApp, isNewerVersion } from '../lib/version'
 
 const DEFAULT_EVENTS: NotificationEvents = {
@@ -44,11 +50,47 @@ export default function SettingsPage() {
     step: number
     view?: 'guide' | 'preview'
   } | null>(null)
+  const [tossGuideModal, setTossGuideModal] = useState<{
+    step: number
+    view?: 'guide' | 'qa'
+  } | null>(null)
   const [focusHighlight, setFocusHighlight] = useState<NotifyChannelId | null>(null)
+  const [tossFocusPulse, setTossFocusPulse] = useState(false)
+  const [ipCopied, setIpCopied] = useState(false)
 
+  const tossClientIdRef = useRef<HTMLInputElement | null>(null)
   const tgTokenRef = useRef<HTMLInputElement | null>(null)
   const discordUrlRef = useRef<HTMLInputElement | null>(null)
   const slackUrlRef = useRef<HTMLInputElement | null>(null)
+
+  const openTossFieldGuide = (anchor: TossFieldAnchor) => {
+    setTossGuideModal({ step: tossGuideTargetForField(anchor), view: 'guide' })
+  }
+
+  const focusTossInput = () => {
+    const el = tossClientIdRef.current
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setTimeout(() => el.focus(), 180)
+    setTossFocusPulse(true)
+    setTimeout(() => setTossFocusPulse(false), 2200)
+  }
+
+  const copyServerIp = async () => {
+    if (!status?.server_ip) return
+    try {
+      await navigator.clipboard.writeText(status.server_ip)
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = status.server_ip
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    setIpCopied(true)
+    setTimeout(() => setIpCopied(false), 1800)
+  }
 
   const openFieldGuide = (anchor: 'tg-token' | 'tg-chat-id' | 'discord-url' | 'slack-url') => {
     const t = guideTargetForField(anchor)
@@ -139,48 +181,162 @@ export default function SettingsPage() {
       </section>
 
       <section className="panel">
-        <h3>{status?.configured ? '키 변경' : '키 등록'}</h3>
-        <ol className="muted small">
-          <li>토스증권 PC 웹(WTS) → 설정 → Open API에서 client_id / client_secret 발급</li>
-          <li>같은 화면의 <b>허용 IP 관리</b>에 이 서비스 서버의 IP 등록</li>
-          <li>아래에 입력 후 OTP 코드로 확인 (키는 브라우저에서 암호화되어 전송되고, 서버에도 암호화되어 저장됩니다)</li>
-        </ol>
+        <div className="ng-panel-head">
+          <h3>{status?.configured ? '키 변경' : '키 등록'}</h3>
+          <div className="ng-panel-head-btns">
+            <button
+              type="button"
+              className="primary small"
+              title="토스증권 PC 웹(WTS) 키 발급부터 허용 IP 등록·OTP 확인까지 5단계 화면을 보면서 따라 합니다"
+              onClick={() => setTossGuideModal({ step: 0, view: 'guide' })}
+            >
+              📖 화면 보면서 따라 하기
+            </button>
+            <button
+              type="button"
+              className="small"
+              title="이중 암호화 보안 원리와 403 오류·Secret 분실 등 자주 막히는 질문 해결법을 봅니다"
+              onClick={() => setTossGuideModal({ step: 0, view: 'qa' })}
+            >
+              🛡️ 보안 · Q&amp;A
+            </button>
+          </div>
+        </div>
+        <p className="muted small" style={{ marginTop: 4 }}>
+          처음 연결하시나요? 아래 3단계 카드를 누르거나 <b>[📖 화면 보면서 따라 하기]</b>를 열면 토스증권 WTS 화면을 보면서 3분 안에 등록할 수 있습니다.
+        </p>
+
+        {/* 3-step Toss registration quick cards */}
+        <div className="ng-channel-strip">
+          {TOSS_QUICK_CARDS.map((card) => (
+            <div key={card.id} className="ng-channel-card">
+              <div className="ng-channel-card-top">
+                <b>{card.title}</b>
+                <span className="ng-pill">{card.stepBadge}</span>
+              </div>
+              <p className="small muted ng-channel-card-desc">{card.desc}</p>
+              <button
+                type="button"
+                className="ng-card-btn"
+                title={`${card.title} 화면별 안내를 바로 엽니다`}
+                onClick={() => setTossGuideModal({ step: card.stepIndex, view: 'guide' })}
+              >
+                해당 화면 보기 →
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {status?.server_ip && (
+          <div className="ng-toss-ip-bar small">
+            <span>
+              🌐 토스 <b>허용 IP 관리</b>에 넣을 이 서버 IP: <code>{status.server_ip}</code>
+            </span>
+            <div className="ng-toss-ip-actions">
+              <button
+                type="button"
+                className="ng-copy-btn"
+                title="토스증권 WTS 허용 IP 관리에 붙여넣을 서버 IP를 복사합니다"
+                onClick={() => void copyServerIp()}
+              >
+                {ipCopied ? '✓ 복사됨!' : '📋 IP 복사'}
+              </button>
+              <button
+                type="button"
+                className="ng-help-link"
+                title="토스증권 WTS 허용 IP 등록 화면을 바로 봅니다"
+                onClick={() => openTossFieldGuide('allowed-ip')}
+              >
+                ? 등록 화면
+              </button>
+            </div>
+          </div>
+        )}
+
         <form className="form" onSubmit={submit} autoComplete="off">
-          <label title="토스증권 PC 웹(WTS) → 설정 → Open API에서 발급받은 Client ID를 붙여넣으세요">
-            Client ID
+          <div className="ng-field">
+            <div className="ng-label-row">
+              <label htmlFor="toss-client-id" title="토스증권 PC 웹(WTS) → 설정 → Open API에서 발급받은 Client ID를 붙여넣으세요">
+                Client ID
+              </label>
+              <button
+                type="button"
+                className="ng-help-link"
+                title="토스증권 WTS에서 Client ID를 발급·복사하는 화면을 바로 봅니다"
+                onClick={() => openTossFieldGuide('client-id')}
+              >
+                ? 발급 화면 보기
+              </button>
+            </div>
             <input
+              id="toss-client-id"
+              ref={tossClientIdRef}
+              className={tossFocusPulse ? 'ng-input-pulse' : ''}
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               placeholder="tsck_live_…"
               title="토스증권 Open API에서 발급받은 Client ID(tsck_live_... 등)를 붙여넣으세요"
               spellCheck={false}
             />
-          </label>
-          <label title="토스증권 Open API에서 함께 발급받은 비밀 키(Client Secret)를 입력하세요 (암호화되어 전송·저장됩니다)">
-            Client Secret
+          </div>
+
+          <div className="ng-field">
+            <div className="ng-label-row">
+              <label htmlFor="toss-client-secret" title="토스증권 Open API에서 함께 발급받은 비밀 키(Client Secret)를 입력하세요 (암호화되어 전송·저장됩니다)">
+                Client Secret
+              </label>
+              <button
+                type="button"
+                className="ng-help-link"
+                title="Client Secret 1회 노출 주의사항과 재발급 방법을 바로 봅니다"
+                onClick={() => openTossFieldGuide('client-secret')}
+              >
+                ? Secret 복사 주의
+              </button>
+            </div>
             <input
+              id="toss-client-secret"
+              className={tossFocusPulse ? 'ng-input-pulse' : ''}
               type="password"
               autoComplete="new-password"
               value={clientSecret}
               onChange={(e) => setClientSecret(e.target.value)}
+              placeholder="발급 직후 복사한 Client Secret 붙여넣기"
               title="토스증권 Open API에서 발급받은 Client Secret을 입력하세요 (암호화되어 전송·저장됩니다)"
               spellCheck={false}
             />
-          </label>
-          <label title="본인 확인을 위해 스마트폰 인증 앱(Google Authenticator 등)에 표시된 6자리 숫자를 입력하세요">
-            OTP 코드
+          </div>
+
+          <div className="ng-field">
+            <div className="ng-label-row">
+              <label htmlFor="toss-otp-code" title="본인 확인을 위해 스마트폰 인증 앱(Google Authenticator 등)에 표시된 6자리 숫자를 입력하세요">
+                OTP 코드
+              </label>
+              <button
+                type="button"
+                className="ng-help-link"
+                title="허용 IP 확인 및 OTP 6자리 검증 단계를 바로 봅니다"
+                onClick={() => openTossFieldGuide('otp')}
+              >
+                ? OTP · 저장 확인
+              </button>
+            </div>
             <input
+              id="toss-otp-code"
+              className={tossFocusPulse ? 'ng-input-pulse' : ''}
               inputMode="numeric"
               autoComplete="one-time-code"
               maxLength={6}
               value={otpCode}
               onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-              placeholder="6자리"
+              placeholder="스마트폰 인증 앱 6자리 숫자"
               title="스마트폰 인증 앱에 표시된 6자리 일회용 숫자를 입력하세요"
             />
-          </label>
+          </div>
+
           <button
             type="submit"
+            className="primary"
             disabled={busy || !clientId.trim() || !clientSecret.trim() || otpCode.length !== 6}
             title="입력한 API 키가 정상 작동하는지 토스증권에 먼저 확인한 뒤 암호화해 안전하게 저장합니다"
           >
@@ -500,6 +656,17 @@ export default function SettingsPage() {
           </dd>
         </dl>
       </section>
+
+      {tossGuideModal && (
+        <TossGuideModal
+          initialStep={tossGuideModal.step}
+          initialView={tossGuideModal.view}
+          configured={Boolean(status?.configured)}
+          serverIp={status?.server_ip ?? null}
+          onClose={() => setTossGuideModal(null)}
+          onFocusField={focusTossInput}
+        />
+      )}
 
       {guideModal && (
         <NotificationGuideModal

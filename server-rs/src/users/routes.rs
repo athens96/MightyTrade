@@ -1,8 +1,10 @@
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
 
 use crate::auth::extractors::AuthUser;
 use crate::auth::otp;
@@ -128,17 +130,104 @@ async fn transport_key(
     Ok(Json(info))
 }
 
+fn is_public_ipv4(ip: Ipv4Addr) -> bool {
+    !(ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_multicast()
+        || ip.is_unspecified())
+}
+
+fn extract_host_for_ip(raw_host: &str) -> Option<String> {
+    let trimmed = raw_host.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let host = if trimmed.starts_with('[') {
+        trimmed
+            .trim_start_matches('[')
+            .split(']')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    } else {
+        trimmed.split(':').next().unwrap_or("").to_string()
+    };
+    if host.is_empty()
+        || host == "localhost"
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host == "0.0.0.0"
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+    {
+        return None;
+    }
+    Some(host)
+}
+
+async fn resolve_server_public_ip(state: &AppState, headers: &HeaderMap) -> Option<String> {
+    if let Ok(explicit) = std::env::var("SERVER_PUBLIC_IP") {
+        let s = explicit.trim().to_string();
+        if !s.is_empty() {
+            return Some(s);
+        }
+    }
+    if state.config.testing {
+        return None;
+    }
+    let raw_host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(axum::http::header::HOST))
+        .and_then(|v| v.to_str().ok())?;
+    let host = extract_host_for_ip(raw_host)?;
+    if let Ok(IpAddr::V4(v4)) = host.parse::<IpAddr>() {
+        return is_public_ipv4(v4).then(|| v4.to_string());
+    }
+    let lookup = tokio::time::timeout(
+        Duration::from_millis(400),
+        tokio::net::lookup_host((host.as_str(), 443)),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    for addr in lookup {
+        if let IpAddr::V4(v4) = addr.ip() {
+            if is_public_ipv4(v4) {
+                return Some(v4.to_string());
+            }
+        }
+    }
+    None
+}
+
+async fn toss_status_view(state: &AppState, uid: &str, headers: &HeaderMap) -> Value {
+    let mut view = credentials::public_view(state, uid);
+    let ip = resolve_server_public_ip(state, headers).await;
+    if let Some(obj) = view.as_object_mut() {
+        obj.insert(
+            "server_ip".to_string(),
+            ip.map(Value::String).unwrap_or(Value::Null),
+        );
+    }
+    view
+}
+
 async fn get_toss_credentials(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    headers: HeaderMap,
 ) -> Json<Value> {
     let uid = user["id"].as_str().unwrap_or("");
-    Json(credentials::public_view(&state, uid))
+    Json(toss_status_view(&state, uid, &headers).await)
 }
 
 async fn put_toss_credentials(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    headers: HeaderMap,
     body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
     let uid = user["id"].as_str().unwrap_or("");
@@ -182,18 +271,19 @@ async fn put_toss_credentials(
         .filter(|p| p.client_id != client_id)
         .map(|p| p.client_id.as_str());
     state.forget_toss_client(uid, old_cid);
-    Ok(Json(credentials::public_view(&state, uid)))
+    Ok(Json(toss_status_view(&state, uid, &headers).await))
 }
 
 async fn delete_toss_credentials(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    headers: HeaderMap,
 ) -> Json<Value> {
     let uid = user["id"].as_str().unwrap_or("");
     let previous = credentials::get_toss(&state, uid);
     credentials::delete_toss(&state, uid);
     state.forget_toss_client(uid, previous.as_ref().map(|p| p.client_id.as_str()));
-    Json(credentials::public_view(&state, uid))
+    Json(toss_status_view(&state, uid, &headers).await)
 }
 
 async fn get_notifications(State(state): State<AppState>, AuthUser(user): AuthUser) -> Json<Value> {
@@ -240,4 +330,28 @@ async fn create_my_request(
     let body = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
     let item = requests_repo::create_request(&state, &user, &body).await?;
     Ok((StatusCode::CREATED, Json(json!({ "item": item }))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_extraction_filters_local_and_strips_port() {
+        assert_eq!(extract_host_for_ip("localhost:5173"), None);
+        assert_eq!(extract_host_for_ip("127.0.0.1:5001"), None);
+        assert_eq!(extract_host_for_ip("[::1]:5001"), None);
+        assert_eq!(
+            extract_host_for_ip("MightyTrade.DuckDNS.org:443"),
+            Some("mightytrade.duckdns.org".to_string())
+        );
+    }
+
+    #[test]
+    fn public_ipv4_check_blocks_private_and_loopback() {
+        assert!(!is_public_ipv4(Ipv4Addr::new(127, 0, 0, 1)));
+        assert!(!is_public_ipv4(Ipv4Addr::new(10, 0, 0, 5)));
+        assert!(!is_public_ipv4(Ipv4Addr::new(192, 168, 1, 10)));
+        assert!(is_public_ipv4(Ipv4Addr::new(1, 1, 1, 1)));
+    }
 }

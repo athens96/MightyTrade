@@ -6,6 +6,7 @@ export interface TossCredentialStatus {
   client_id_masked?: string
   account_seq?: number | null
   verified_at?: string
+  server_ip?: string | null
 }
 
 export interface NotificationEvents {
