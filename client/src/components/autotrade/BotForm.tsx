@@ -281,7 +281,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
         <p className="muted small">새 봇은 <b>모의 모드·꺼진 상태</b>로 만들어집니다. 퀀트 랩에서 검증한 이론·설정을 쓰는 걸 권장합니다.</p>
 
         {!bot && (
-          <div className="tabs" style={{ marginBottom: 12 }}>
+          <div className="tabs bot-cat-tabs" style={{ marginBottom: 12 }}>
             {([
               ['swing', '스윙봇 (일봉)', '하루 한 번 일봉 종가를 보고 며칠~몇 주 추세를 타는 스윙 매매 봇입니다'],
               ['daytrade', '단타봇 (분봉)', '장중 분봉이나 시초가 돌파를 노리고 장 마감 전 당일 모두 청산하는 단타 봇입니다'],

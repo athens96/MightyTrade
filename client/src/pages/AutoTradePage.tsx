@@ -770,7 +770,7 @@ export default function AutoTradePage() {
         </button>
       </div>
 
-      <div className="tabs" style={{ marginBottom: 10 }}>
+      <div className="tabs bot-filter-tabs" style={{ marginBottom: 10 }}>
         <button className={filter === 'all' ? 'active' : ''} title="만들어 둔 모든 자동매매 봇을 한꺼번에 봅니다" onClick={() => setFilter('all')}>전체 {bots.length}</button>
         <button className={filter === 'swing' ? 'active' : ''} title="일봉 기준으로 며칠~몇 주 추세를 타는 스윙봇만 모아서 봅니다" onClick={() => setFilter('swing')}>스윙봇 {countOf('swing')}</button>
         <button className={filter === 'daytrade' ? 'active' : ''} title="장중 분봉·시초가 돌파를 노리고 당일 마감 전에 청산하는 단타봇만 봅니다" onClick={() => setFilter('daytrade')}>단타봇 {countOf('daytrade')}</button>

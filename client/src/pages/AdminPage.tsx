@@ -119,15 +119,15 @@ export default function AdminPage() {
     <div className="account">
       <div className="account-head">
         <h2>관리자 · 사용자 관리</h2>
-        <div className="tabs">
-          {TABS.map((t) => (
-            <button key={t.id} className={tab === t.id ? 'active' : ''} title={`${t.label} 상태의 사용자 목록을 확인합니다`} onClick={() => setTab(t.id)}>
-              {t.label}{counts ? ` ${counts[t.id]}` : ''}
-            </button>
-          ))}
-        </div>
         <div className="spacer" />
         <button title="가입 신청 및 사용자 목록을 최신 상태로 새로고침합니다" onClick={load}>새로고침</button>
+      </div>
+      <div className="tabs">
+        {TABS.map((t) => (
+          <button key={t.id} className={tab === t.id ? 'active' : ''} title={`${t.label} 상태의 사용자 목록을 확인합니다`} onClick={() => setTab(t.id)}>
+            {t.label}{counts ? ` ${counts[t.id]}` : ''}
+          </button>
+        ))}
       </div>
       <p className="muted small">
         새 Google 로그인은 승인 대기로 등록됩니다. 승인 전에는 OTP 등록과 모든 기능 이용이 막혀 있습니다. 관리자 계정은 서버 설정(ADMIN_EMAILS)으로 정해집니다.

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AutotradeOverview, BotCategory, BotMode } from '../../api/autotrade'
+import { MOBILE, useMediaQuery } from '../../hooks/useMediaQuery'
 
 const CAT_LABEL: Record<BotCategory, string> = {
   swing: '스윙',
@@ -92,7 +93,8 @@ interface Props {
 }
 
 export default function OverviewPanel({ overview, onSelectBot }: Props) {
-  const [open, setOpen] = useState(true)
+  const isMobile = useMediaQuery(MOBILE)
+  const [open, setOpen] = useState(() => typeof window === 'undefined' || !window.matchMedia(MOBILE).matches)
   const [tab, setTab] = useState<'summary' | 'scorecard' | 'schedule'>('summary')
 
   const { paper, live, execution, duplicate_symbols: dupes } = overview
@@ -100,16 +102,18 @@ export default function OverviewPanel({ overview, onSelectBot }: Props) {
 
   return (
     <section className="panel" style={{ marginBottom: 12 }}>
-      <div className="account-head">
+      <div className="account-head" style={{ justifyContent: 'space-between' }}>
         <h3 style={{ margin: 0, fontSize: 15 }}>📊 통합 관제 · 체결 성적표</h3>
-        <span className="muted small">
-          전체 {overview.total_bots}개 중 <b>{overview.enabled_bots}개 가동</b>
-          {overview.pending_approvals_count > 0 && <> · <b className="up">✋ 승인 대기 {overview.pending_approvals_count}건</b></>}
-          {overview.tripped_count > 0 && <> · <b className="down">🛑 보호 잠금 {overview.tripped_count}건</b></>}
-          {dupes.length > 0 && <> · <b>⚠️ 중복 종목 {dupes.length}건</b></>}
-        </span>
+        {!isMobile && (
+          <span className="muted small">
+            전체 {overview.total_bots}개 중 <b>{overview.enabled_bots}개 가동</b>
+            {overview.pending_approvals_count > 0 && <> · <b className="up">✋ 승인 대기 {overview.pending_approvals_count}건</b></>}
+            {overview.tripped_count > 0 && <> · <b className="down">🛑 보호 잠금 {overview.tripped_count}건</b></>}
+            {dupes.length > 0 && <> · <b>⚠️ 중복 종목 {dupes.length}건</b></>}
+          </span>
+        )}
         <div className="spacer" />
-        {open && (
+        {open && !isMobile && (
           <div className="tabs">
             <button
               type="button"
@@ -146,6 +150,42 @@ export default function OverviewPanel({ overview, onSelectBot }: Props) {
           {open ? '접기 ▲' : '펼치기 ▼'}
         </button>
       </div>
+      {isMobile && (
+        <div className="muted small" style={{ marginTop: 4 }}>
+          전체 {overview.total_bots}개 중 <b>{overview.enabled_bots}개 가동</b>
+          {overview.pending_approvals_count > 0 && <> · <b className="up">✋ 승인 대기 {overview.pending_approvals_count}건</b></>}
+          {overview.tripped_count > 0 && <> · <b className="down">🛑 보호 잠금 {overview.tripped_count}건</b></>}
+          {dupes.length > 0 && <> · <b>⚠️ 중복 종목 {dupes.length}건</b></>}
+        </div>
+      )}
+      {open && isMobile && (
+        <div className="tabs" style={{ marginTop: 8 }}>
+          <button
+            type="button"
+            className={tab === 'summary' ? 'active' : ''}
+            title="모의·실거래 분리 합산 자산과 전체 수익률 추이, 중복 종목 경고를 한눈에 봅니다"
+            onClick={() => setTab('summary')}
+          >
+            통합 요약
+          </button>
+          <button
+            type="button"
+            className={tab === 'scorecard' ? 'active' : ''}
+            title="봇별 모의 수익률 대비 실거래 수익률 격차와 실제 체결 슬리피지(bps) 성적표를 확인합니다"
+            onClick={() => setTab('scorecard')}
+          >
+            체결 성적표 ({execution.total_fills}건)
+          </button>
+          <button
+            type="button"
+            className={tab === 'schedule' ? 'active' : ''}
+            title="모든 봇의 다음 자동 실행 예정 시각·주기와 최근 실행일을 확인합니다"
+            onClick={() => setTab('schedule')}
+          >
+            실행 스케줄
+          </button>
+        </div>
+      )}
 
       {open && (
         <>
