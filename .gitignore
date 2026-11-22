@@ -16,6 +16,11 @@ dist/
 # File DB (user data, encrypted secrets)
 server/data/
 
+# Rust
+server-rs/target/
+server-rs/mighty-trade-server
+server-rs/mighty-trade-server.new
+
 # OS / tools
 .DS_Store
 .omc/

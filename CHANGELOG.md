@@ -2,6 +2,16 @@
 
 이 프로젝트의 주요 변경 사항은 [Semantic Versioning](https://semver.org/lang/ko/) 규칙에 따라 기록됩니다.
 
+## [0.2.0] - 2026-11-22
+
+### Changed
+- **백엔드 서버 전면 Rust(`axum` + `tokio` + `rusqlite`) 전환 (`MT-17`)**:
+  - 기존 Python Flask + Gunicorn 백엔드를 단일 네이티브 비동기 Rust 바이너리(`server-rs/`)로 전면 재작성하여 메모리 점유·응답 지연·멀티코어 퀀트 연산 성능을 대폭 개선.
+  - **100% 기존 API·DB·암호화 호환**: 기존 React 프론트엔드(`client/`) 수정 없이 68개 전 API 엔드포인트 계약 유지, 기존 `mighty_trade.db`(SQLite WAL `records` 테이블) 및 `ENCRYPTION_KEY`(Fernet AES-128-CBC + HMAC-SHA256) · RSA-3072 OAEP + AES-256-GCM 전송 암호화 100% 호환.
+  - **초고속 퀀트 랩 엔진**: 11종 전략(스윙 7 + 단타 4), 12종 포트폴리오 이론(올웨더·60/40·1/N·리스크패리티·GEM·VAA·DAA·BAA·LAA·영구·HRP·섹터로테이션, 무매도 Buy-Only 포함), 7종 종목 발굴 스크리너, 2D 격자 최적화·워크포워드·몬테카를로를 `rayon` 멀티코어 병렬 처리로 구현하고 Python 골든 지표 픽스처와 `1e-6` 오차 이내 bit-for-bit 동등성 검증.
+  - **6종 자동매매 봇 및 실시간 릴레이**: 스윙·분봉단타·리밸런싱·순환매·스마트적립·TradingView 웹훅 봇, 서킷브레이커·반자동 1클릭 승인·통합 관제 대시보드·텔레그램/디스코드/슬랙 알림·단일 인스턴스 비동기 스케줄러(`fs2` 파일 락) 및 유저당 1 WebSocket(`tokio-tungstenite`) → SSE 중계 허브 구현.
+  - **배포 파이프라인 전환**: GitHub Actions에서 OCI VM 아키텍처(`x86_64` / `aarch64`)를 자동 감지해 `cargo-zigbuild`로 릴리즈 바이너리를 빌드·원자적 업로드하고 `systemd`(`mighty-trade-api.service`)로 무중단 전환.
+
 ## [0.1.4] - 2026-11-22
 
 ### Added

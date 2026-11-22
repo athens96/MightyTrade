@@ -1,16 +1,17 @@
 # /etc/systemd/system/mighty-trade-api.service
 [Unit]
-Description=MightyTrade Flask API
+Description=MightyTrade Rust API (axum + tokio)
 After=network.target
 
 [Service]
 User=ubuntu
 WorkingDirectory=/opt/mighty-trade/server
 EnvironmentFile=/opt/mighty-trade/server/.env
-# One process with threads: the realtime relay keeps one Toss WebSocket per user in memory (Toss allows
-# only 2 per account), and SSE connections are long-lived — so a single gthread worker, not several workers.
-ExecStart=/opt/mighty-trade/server/.venv/bin/gunicorn --worker-class gthread --workers 1 --threads 32 --timeout 120 -b 127.0.0.1:5001 wsgi:app
+# Single async Rust binary: holds one Toss WebSocket per user in memory, serves SSE streams,
+# runs Rayon-parallel quant jobs, and executes the background autotrade scheduler.
+ExecStart=/opt/mighty-trade/server-rs/mighty-trade-server
 Restart=always
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target

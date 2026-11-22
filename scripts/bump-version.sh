@@ -26,12 +26,18 @@ esac
 
 printf '%s\n' "$NEXT" > VERSION
 python3 - "$NEXT" <<'PY'
-import json, pathlib, sys
+import json, pathlib, re, sys
 ver = sys.argv[1]
 p = pathlib.Path("client/package.json")
 data = json.loads(p.read_text(encoding="utf-8"))
 data["version"] = ver
 p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+cargo = pathlib.Path("server-rs/Cargo.toml")
+if cargo.exists():
+    txt = cargo.read_text(encoding="utf-8")
+    txt = re.sub(r'(?m)^version = "[^"]+"', f'version = "{ver}"', txt, count=1)
+    cargo.write_text(txt, encoding="utf-8")
 PY
 
-echo "버전 갱신 완료: $CUR -> $NEXT (VERSION, client/package.json)"
+echo "버전 갱신 완료: $CUR -> $NEXT (VERSION, client/package.json, server-rs/Cargo.toml)"

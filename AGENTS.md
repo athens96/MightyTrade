@@ -20,7 +20,8 @@
 ## 2. 프로젝트 공통 원칙
 - **쉬운 한글 설명**: 화면 안내, 툴팁(`title` / `HoverTooltip`), 전략·차트 해설은 금융·개발 비전공자도 바로 이해할 수 있는 쉬운 일상 한국어로 작성합니다.
 - **검증 필수**:
+  - 백엔드 (Rust, 프로덕션 기본): `cd server-rs && cargo test`
   - 프론트엔드: `cd client && npm test && npm run build`
-  - 백엔드: `cd server && .venv/bin/pytest -q`
-- **버전 관리**: 루트 `VERSION`과 `client/package.json`을 `./scripts/bump-version.sh <patch|minor|major|X.Y.Z>`로 함께 갱신하고, `CHANGELOG.md`와 Git 태그(`vX.Y.Z`)를 유지합니다.
+  - 백엔드 (Python 레거시 참조용): `cd server && .venv/bin/pytest -q`
+- **버전 관리**: 루트 `VERSION`, `client/package.json`, `server-rs/Cargo.toml`을 `./scripts/bump-version.sh <patch|minor|major|X.Y.Z>`로 함께 갱신하고, `CHANGELOG.md`와 Git 태그(`vX.Y.Z`)를 유지합니다.
 - **보안·안전장치**: `.env`, `deploy/.env.deploy`, `server/data/*` 등 민감 정보는 절대 노출하거나 커밋하지 않으며, 실거래 주문 관련 변경 시 OTP 잠금·일일/건당 주문 한도·중복 주문 방지(`clientOrderId`) 원칙을 유지합니다.

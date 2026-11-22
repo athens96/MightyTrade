@@ -58,6 +58,13 @@ cmd_update() {
   say "클라이언트 빌드"
   (cd client && npm run build >/dev/null)
 
+  if [ -n "${DEPLOY_SERVER_BIN:-}" ]; then
+    [ -f "$DEPLOY_SERVER_BIN" ] || { echo "! DEPLOY_SERVER_BIN 파일이 없습니다: $DEPLOY_SERVER_BIN" >&2; exit 1; }
+    say "서버 바이너리 업로드 ($(basename "$DEPLOY_SERVER_BIN"))"
+    "${SSH[@]}" "mkdir -p $APP_DIR/server-rs"
+    rsync -az -e "ssh -i $DEPLOY_KEY -o BatchMode=yes" "$DEPLOY_SERVER_BIN" "$DEPLOY_HOST:$APP_DIR/server-rs/mighty-trade-server.new"
+  fi
+
   say "서버 업데이트"
   remote <<'EOF'
 cd "$APP_DIR" && git pull -q --ff-only && git log --oneline -1

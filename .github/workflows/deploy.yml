@@ -11,29 +11,26 @@ concurrency:
 
 jobs:
   deploy:
-    name: Test, Build & Deploy to OCI
+    name: Test, Build (Rust + Vite) & Deploy to OCI
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: |
-            server/requirements.txt
-            server/requirements-dev.txt
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Run backend tests (pytest)
-        working-directory: server
-        run: |
-          pip install -q -r requirements-dev.txt
-          pytest -q
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server-rs
+
+      - name: Run Rust backend tests (cargo test)
+        working-directory: server-rs
+        run: cargo test
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
@@ -64,14 +61,48 @@ jobs:
           fi
           chmod 600 "$HOME/.ssh/known_hosts"
 
+      - name: Detect OCI VM architecture
+        id: arch
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          REMOTE_ARCH="$(ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes "$DEPLOY_HOST" 'uname -m')"
+          REMOTE_GLIBC="$(ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes "$DEPLOY_HOST" 'ldd --version | head -n1')"
+          echo "OCI VM arch: $REMOTE_ARCH | $REMOTE_GLIBC"
+          if [ "$REMOTE_ARCH" = "aarch64" ] || [ "$REMOTE_ARCH" = "arm64" ]; then
+            echo "rust_target=aarch64-unknown-linux-gnu" >> "$GITHUB_OUTPUT"
+            echo "zig_target=aarch64-unknown-linux-gnu.2.31" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust_target=x86_64-unknown-linux-gnu" >> "$GITHUB_OUTPUT"
+            echo "zig_target=x86_64-unknown-linux-gnu.2.31" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Zig & cargo-zigbuild
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@cargo-zigbuild
+
+      - name: Build Rust release binary for OCI (${{ steps.arch.outputs.zig_target }})
+        working-directory: server-rs
+        run: |
+          rustup target add "${{ steps.arch.outputs.rust_target }}"
+          cargo zigbuild --release --target "${{ steps.arch.outputs.zig_target }}"
+          BIN="target/${{ steps.arch.outputs.rust_target }}/release/mighty-trade-server"
+          ls -lh "$BIN"
+          file "$BIN"
+
       - name: Deploy to OCI via scripts/deploy.sh
         env:
           DEPLOY_YES: '1'
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_KEY: ${{ runner.temp }}/../.ssh/deploy_key
           VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
         run: |
-          DEPLOY_KEY="$HOME/.ssh/deploy_key" ./scripts/deploy.sh update
+          DEPLOY_KEY="$HOME/.ssh/deploy_key" \
+          DEPLOY_SERVER_BIN="$PWD/server-rs/target/${{ steps.arch.outputs.rust_target }}/release/mighty-trade-server" \
+          ./scripts/deploy.sh update
 
       - name: Verify live /api/health version
         run: |
