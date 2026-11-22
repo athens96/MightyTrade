@@ -1,0 +1,81 @@
+name: Deploy to OCI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: oci-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Test, Build & Deploy to OCI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            server/requirements.txt
+            server/requirements-dev.txt
+
+      - name: Run backend tests (pytest)
+        working-directory: server
+        run: |
+          pip install -q -r requirements-dev.txt
+          pytest -q
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Run frontend tests (vitest)
+        working-directory: client
+        run: |
+          npm ci
+          npm test
+
+      - name: Configure SSH credentials
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >> "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -H "${DEPLOY_HOST#*@}" >> "$HOME/.ssh/known_hosts"
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Deploy to OCI via scripts/deploy.sh
+        env:
+          DEPLOY_YES: '1'
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KEY: ${{ runner.temp }}/../.ssh/deploy_key
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
+        run: |
+          DEPLOY_KEY="$HOME/.ssh/deploy_key" ./scripts/deploy.sh update
+
+      - name: Verify live /api/health version
+        run: |
+          EXPECTED="$(tr -d '[:space:]' < VERSION)"
+          BODY="$(curl -fsS --max-time 15 https://mightytrade.duckdns.org/api/health)"
+          echo "Live /api/health: $BODY"
+          python3 -c 'import json, sys; d = json.loads(sys.argv[1]); assert d.get("status") == "ok" and d.get("version") == sys.argv[2], (d, sys.argv[2])' "$BODY" "$EXPECTED"
