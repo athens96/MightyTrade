@@ -3,6 +3,7 @@ import { Navigate, useNavigate } from 'react-router-dom'
 import { GoogleLogin } from '@react-oauth/google'
 import { useAuth } from '../auth/AuthContext'
 import AuthShell from '../components/auth/AuthShell'
+import { APP_VERSION } from '../lib/version'
 
 // Google's button takes a fixed pixel width: fill the card (card 420px - padding), narrower on phones.
 const buttonWidth = () => Math.min(356, window.innerWidth - 84)
@@ -58,7 +59,7 @@ export default function LoginPage() {
         <li>API 키 암호화 저장</li>
         <li>관리자 승인제</li>
       </ul>
-      <p className="auth-note">처음 로그인하면 관리자 승인 후 이용할 수 있습니다.</p>
+      <p className="auth-note">처음 로그인하면 관리자 승인 후 이용할 수 있습니다 · <span title="현재 배포된 마이티 트레이드 버전">v{APP_VERSION}</span></p>
     </AuthShell>
   )
 }

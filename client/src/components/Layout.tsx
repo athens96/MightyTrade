@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { adminApi } from '../api/admin'
 import { useAuth } from '../auth/AuthContext'
 import { useOrderEvents } from '../hooks/useOrderEvents'
+import { APP_VERSION } from '../lib/version'
 
 const MAIN_TABS = [
   { to: '/', label: '시세', long: '시세/차트', icon: '📈', end: true, tip: '국내·미국 실시간 차트와 호가를 보고 직접 매수·매도 주문을 넣는 화면입니다.' },
@@ -47,6 +48,7 @@ export default function Layout() {
         <strong className="brand">
           <img src="/favicon.svg" alt="" width={24} height={24} />
           <span>Mighty Trade</span>
+          <span className="ver-badge" title={`현재 실행 중인 마이티 트레이드 버전 (v${APP_VERSION})`}>v{APP_VERSION}</span>
         </strong>
         <div className="topbar-right">
           <span className="muted desktop-only" title="현재 로그인된 Google 계정 이메일입니다.">{user?.email}</span>
@@ -74,7 +76,7 @@ export default function Layout() {
         <div className="sheet-backdrop mobile-only" onClick={() => setMore(false)}>
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-user">
-              <b>{user?.name ?? '사용자'}</b>
+              <b>{user?.name ?? '사용자'} <span className="ver-badge">v{APP_VERSION}</span></b>
               <span className="muted small">{user?.email}</span>
             </div>
             <NavLink to="/settings">⚙️ 설정 · 토스 API 연결</NavLink>

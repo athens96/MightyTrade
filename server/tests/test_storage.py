@@ -86,5 +86,5 @@ def test_app_boots_with_sqlite_backend(tmp_path):
     })
     assert isinstance(app.extensions["store"], SqliteStore)
     client = app.test_client()
-    assert client.get("/api/health").json == {"status": "ok"}
+    assert client.get("/api/health").json["status"] == "ok"
     app.extensions["store"].close()

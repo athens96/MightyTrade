@@ -7,6 +7,7 @@ load_dotenv()
 
 from .config import get_config  # noqa: E402  (env must be loaded first)
 from .errors import register_error_handlers  # noqa: E402
+from .version import APP_VERSION  # noqa: E402
 
 
 def create_app(config_name: str | None = None, overrides: dict | None = None) -> Flask:
@@ -51,6 +52,6 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
 
     @app.get("/api/health")
     def health():
-        return jsonify(status="ok")
+        return jsonify(status="ok", version=APP_VERSION)
 
     return app

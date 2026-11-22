@@ -3,6 +3,7 @@ import { brokerApi, type NotificationEvents, type NotificationSettingsView, type
 import { useAuth } from '../auth/AuthContext'
 import { FeatureGuideBox } from '../components/GuideBox'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
+import { APP_VERSION, fetchHealth } from '../lib/version'
 
 const DEFAULT_EVENTS: NotificationEvents = {
   order: true,
@@ -31,6 +32,7 @@ export default function SettingsPage() {
   const [events, setEvents] = useState<NotificationEvents>(DEFAULT_EVENTS)
   const [nBusy, setNBusy] = useState(false)
   const [nMsg, setNMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [serverVer, setServerVer] = useState<string | null>(null)
 
   const applyNotify = (v: NotificationSettingsView) => {
     setNotify(v)
@@ -46,6 +48,7 @@ export default function SettingsPage() {
   useEffect(() => {
     brokerApi.tossStatus().then(setStatus).catch((e) => setMessage({ ok: false, text: e.message }))
     brokerApi.notificationsStatus().then(applyNotify).catch(() => undefined)
+    fetchHealth().then((h) => setServerVer(h.version ?? null)).catch(() => undefined)
   }, [])
 
   const submit = async (e: FormEvent) => {
@@ -320,6 +323,23 @@ export default function SettingsPage() {
           </div>
         </form>
         {nMsg && <p className={nMsg.ok ? 'ok' : 'error'}>{nMsg.text}</p>}
+      </section>
+
+      <section className="panel" style={{ marginTop: 18 }}>
+        <h3>앱 버전 · 시스템 정보</h3>
+        <dl className="kv" style={{ marginBottom: 0 }}>
+          <dt>웹 화면 버전</dt>
+          <dd><code>v{APP_VERSION}</code></dd>
+          <dt>서버 API 버전</dt>
+          <dd>
+            <code>{serverVer ? `v${serverVer}` : '확인 중…'}</code>
+            {serverVer && serverVer !== APP_VERSION && (
+              <span className="warn small" style={{ marginLeft: 8 }}>
+                새 버전이 배포되었습니다. 브라우저 새로고침(⌘R / F5)으로 최신 화면을 불러오세요.
+              </span>
+            )}
+          </dd>
+        </dl>
       </section>
     </div>
   )

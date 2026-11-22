@@ -1,6 +1,7 @@
 import pyotp
 
 from app.auth import routes as auth_routes
+from app.version import APP_VERSION
 from fakes import approve_all
 
 GOOGLE_INFO = {"sub": "g-123", "email": "me@example.com", "email_verified": True, "name": "Me"}
@@ -14,7 +15,7 @@ def _login(client, monkeypatch):
 
 
 def test_health(client):
-    assert client.get("/api/health").json == {"status": "ok"}
+    assert client.get("/api/health").json == {"status": "ok", "version": APP_VERSION}
 
 
 def test_protected_requires_login(client):

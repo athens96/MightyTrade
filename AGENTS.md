@@ -22,4 +22,5 @@
 - **검증 필수**:
   - 프론트엔드: `cd client && npm test && npm run build`
   - 백엔드: `cd server && .venv/bin/pytest -q`
+- **버전 관리**: 루트 `VERSION`과 `client/package.json`을 `./scripts/bump-version.sh <patch|minor|major|X.Y.Z>`로 함께 갱신하고, `CHANGELOG.md`와 Git 태그(`vX.Y.Z`)를 유지합니다.
 - **보안·안전장치**: `.env`, `deploy/.env.deploy`, `server/data/*` 등 민감 정보는 절대 노출하거나 커밋하지 않으며, 실거래 주문 관련 변경 시 OTP 잠금·일일/건당 주문 한도·중복 주문 방지(`clientOrderId`) 원칙을 유지합니다.
