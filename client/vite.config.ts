@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import pkg from './package.json'
+import pkg from './package.json' with { type: 'json' }
 
 // Dev: /api is proxied to Flask so the browser sees one origin (cookies stay SameSite=Strict).
 // Prod: nginx does the same (see deploy/nginx.conf).
