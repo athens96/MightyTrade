@@ -283,11 +283,19 @@ impl TossMarketProvider {
             .get("lastPrice")
             .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
             .ok_or_else(|| ApiError::not_found("stock_not_found", symbol))?;
-        let daily = self.fetch_base(state, user_id, symbol, "1d", 2).await?;
-        let prev = if daily.len() >= 2 {
-            daily[daily.len() - 2].close
+        let prev_from_price = p
+            .get("prevClose")
+            .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .filter(|x| x.is_finite() && *x > 0.0);
+        let prev = if let Some(pc) = prev_from_price {
+            pc
         } else {
-            price
+            let daily = self.fetch_base(state, user_id, symbol, "1d", 2).await?;
+            if daily.len() >= 2 {
+                daily[daily.len() - 2].close
+            } else {
+                price
+            }
         };
         let change = price - prev;
         let ts = p

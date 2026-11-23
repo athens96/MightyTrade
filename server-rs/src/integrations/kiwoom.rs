@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 use chrono::{Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc, Weekday};
+use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -25,6 +26,8 @@ pub const KIWOOM_LIVE_URL: &str = "https://api.kiwoom.com";
 pub const KIWOOM_MOCK_URL: &str = "https://mockapi.kiwoom.com";
 pub const KIWOOM_LIVE_WS_URL: &str = "wss://api.kiwoom.com:10000/api/dostk/websocket";
 pub const KIWOOM_MOCK_WS_URL: &str = "wss://mockapi.kiwoom.com:10000/api/dostk/websocket";
+pub const KIWOOM_LIVE_US_WS_URL: &str = "wss://api.kiwoom.com:10000/api/us/websocket";
+pub const KIWOOM_MOCK_US_WS_URL: &str = "wss://mockapi.kiwoom.com:10000/api/us/websocket";
 pub const KIWOOM_TOKENS: &str = "integration_tokens";
 const TOKEN_MARGIN_SECS: f64 = 300.0;
 
@@ -181,6 +184,23 @@ fn parse_kst_minute_rfc3339(raw: &str) -> Option<String> {
     Some(aware.with_timezone(&Utc).to_rfc3339())
 }
 
+fn parse_us_et_minute_rfc3339(raw: &str) -> Option<String> {
+    let d: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+    if d.len() < 12 {
+        return None;
+    }
+    let padded = if d.len() >= 14 {
+        d[..14].to_string()
+    } else {
+        format!("{}00", &d[..12])
+    };
+    let ndt = NaiveDateTime::parse_from_str(&padded, "%Y%m%d%H%M%S").ok()?;
+    let off_hrs = if is_us_dst(ndt.date()) { -4 } else { -5 };
+    let et = FixedOffset::east_opt(off_hrs * 3600)?;
+    let aware = et.from_local_datetime(&ndt).single()?;
+    Some(aware.with_timezone(&Utc).to_rfc3339())
+}
+
 fn is_us_dst(date: NaiveDate) -> bool {
     let year = date.year();
     // 2nd Sunday of March
@@ -273,6 +293,7 @@ pub struct KiwoomClient {
     pub is_mock: bool,
     base_url: String,
     ws_url: String,
+    us_ws_url: String,
     appkey: String,
     secretkey: String,
     pub account_no: String,
@@ -282,6 +303,7 @@ pub struct KiwoomClient {
     tok_id: String,
     mem: AsyncMutex<(Option<String>, f64)>,
     pace: AsyncMutex<Instant>,
+    us_exch_cache: DashMap<String, String>,
     override_backend: Option<Arc<dyn KiwoomHttpOverride>>,
 }
 
@@ -312,11 +334,17 @@ impl KiwoomClient {
         } else {
             KIWOOM_LIVE_WS_URL.to_string()
         };
+        let us_ws_url = if is_mock {
+            KIWOOM_MOCK_US_WS_URL.to_string()
+        } else {
+            KIWOOM_LIVE_US_WS_URL.to_string()
+        };
         let tok_id = kiwoom_token_id(&appkey, is_mock);
         Ok(Self {
             is_mock,
             base_url,
             ws_url,
+            us_ws_url,
             appkey,
             secretkey,
             account_no,
@@ -326,12 +354,39 @@ impl KiwoomClient {
             tok_id,
             mem: AsyncMutex::new((None, 0.0)),
             pace: AsyncMutex::new(Instant::now() - Duration::from_secs(2)),
+            us_exch_cache: DashMap::new(),
             override_backend,
         })
     }
 
     pub fn ws_url(&self) -> &str {
         &self.ws_url
+    }
+
+    pub fn us_ws_url(&self) -> &str {
+        &self.us_ws_url
+    }
+
+    pub async fn resolve_us_exch(&self, sym: &str) -> String {
+        let key = sym.trim().to_uppercase();
+        if let Some(hit) = self.us_exch_cache.get(&key) {
+            return hit.value().clone();
+        }
+        if let Ok((v, _, _)) = self
+            .tr_post("/api/us/stkinfo", "usa10098", &json!({ "stk_cd": key }), "N", "")
+            .await
+        {
+            let rows = first_arr(&v, &["list", "result_list", "output"]);
+            if let Some(exch) = rows
+                .first()
+                .and_then(|r| first_str(r, &["stex_tp"]))
+                .filter(|s| matches!(*s, "ND" | "NY" | "NA"))
+            {
+                self.us_exch_cache.insert(key, exch.to_string());
+                return exch.to_string();
+            }
+        }
+        guess_us_exch(&key).to_string()
     }
 
     async fn pace_request(&self) {
@@ -728,6 +783,10 @@ impl KiwoomClient {
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
+            if syms.len() == 1 {
+                let row = self.fetch_price(syms[0]).await?;
+                return Ok(Some(Value::Array(vec![row])));
+            }
             let mut rows = Vec::with_capacity(syms.len());
             for sym in syms {
                 if let Ok(row) = self.fetch_price(sym).await {
@@ -875,39 +934,66 @@ impl KiwoomClient {
             let px = parse_kiwoom_abs(v.get("cur_prc"))
                 .or_else(|| parse_kiwoom_abs(v.get("stck_prpr")))
                 .ok_or_else(|| ApiError::not_found("stock_not_found", sym))?;
+            let prev = parse_kiwoom_abs(v.get("base_pric"))
+                .filter(|x| *x > 0.0)
+                .or_else(|| {
+                    parse_kiwoom_signed(v.get("pred_pre"))
+                        .map(|d| (px - d).max(0.0))
+                        .filter(|x| *x > 0.0)
+                });
             Ok(json!({
                 "symbol": sym,
                 "lastPrice": px,
+                "prevClose": prev,
                 "currency": "KRW",
                 "timestamp": Utc::now().to_rfc3339(),
             }))
         } else {
-            let primary = guess_us_exch(sym);
+            let primary = self.resolve_us_exch(sym).await;
+            let mut tried = Vec::with_capacity(3);
+            let mut candidates = vec![primary];
+            for fallback in ["ND", "NY", "NA"] {
+                if !candidates.iter().any(|c| c == fallback) {
+                    candidates.push(fallback.to_string());
+                }
+            }
             let mut last_err = None;
-            for exch in [primary, "ND", "NY", "NA"] {
+            for exch in candidates {
+                if tried.contains(&exch) {
+                    continue;
+                }
+                tried.push(exch.clone());
                 let res = self
                     .tr_post(
                         "/api/us/mrkcond",
-                        "usa20101",
-                        &json!({ "stk_cd": sym, "stex_tp": exch }),
+                        "usa20100",
+                        &json!({ "stex_tp": exch, "stk_cd": sym }),
                         "N",
                         "",
                     )
                     .await;
                 match res {
                     Ok((v, _, _)) => {
-                        if let Some(px) = parse_kiwoom_abs(v.get("cur_prc"))
-                            .or_else(|| parse_kiwoom_abs(v.get("last_pric")))
-                            .or_else(|| parse_kiwoom_abs(v.get("last")))
-                        {
-                            if px > 0.0 {
-                                return Ok(json!({
-                                    "symbol": sym,
-                                    "lastPrice": px,
-                                    "currency": "USD",
-                                    "timestamp": Utc::now().to_rfc3339(),
-                                }));
-                            }
+                        let px = parse_kiwoom_abs(v.get("cur_prc"))
+                            .filter(|p| *p > 0.0)
+                            .or_else(|| parse_kiwoom_abs(v.get("base_close_pric")).filter(|p| *p > 0.0))
+                            .or_else(|| parse_kiwoom_abs(v.get("pre_open_pric")).filter(|p| *p > 0.0));
+                        if let Some(p) = px {
+                            let prev = parse_kiwoom_abs(v.get("base_close_pric"))
+                                .filter(|x| *x > 0.0)
+                                .or_else(|| {
+                                    parse_kiwoom_signed(v.get("pred_pre"))
+                                        .map(|d| (p - d).max(0.0))
+                                        .filter(|x| *x > 0.0)
+                                });
+                            self.us_exch_cache.insert(sym.to_uppercase(), exch);
+                            return Ok(json!({
+                                "symbol": sym,
+                                "lastPrice": p,
+                                "prevClose": prev,
+                                "currency": "USD",
+                                "timestamp": Utc::now().to_rfc3339(),
+                            }));
                         }
                     }
                     Err(e) => last_err = Some(e),
@@ -924,17 +1010,22 @@ impl KiwoomClient {
         count: usize,
         before: Option<&str>,
     ) -> ApiResult<Value> {
+        let kst = FixedOffset::east_opt(9 * 3600).unwrap();
+        let now_kst = Utc::now().with_timezone(&kst);
+        let cont_token = before.and_then(|b| b.strip_prefix("CONT:"));
         let base_dt = before
+            .filter(|b| !b.starts_with("CONT:"))
             .and_then(|s| s.get(..10))
             .map(|s| s.replace('-', ""))
             .filter(|s| s.len() == 8 && s.chars().all(|c| c.is_ascii_digit()))
-            .unwrap_or_else(|| {
-                let kst = FixedOffset::east_opt(9 * 3600).unwrap();
-                Utc::now().with_timezone(&kst).format("%Y%m%d").to_string()
-            });
+            .unwrap_or_else(|| now_kst.format("%Y%m%d").to_string());
 
         let (v, cont_yn, next_key) = if is_kr_symbol(sym) {
             if interval == "1m" {
+                let (c_yn, n_key) = match cont_token {
+                    Some(k) => ("Y", k),
+                    None => (if before.is_some() { "Y" } else { "N" }, before.unwrap_or("")),
+                };
                 self.tr_post(
                     "/api/dostk/chart",
                     "ka10080",
@@ -942,9 +1033,10 @@ impl KiwoomClient {
                         "stk_cd": sym,
                         "tic_scope": "1",
                         "upd_stkpc_tp": "1",
+                        "base_dt": now_kst.format("%Y%m%d").to_string(),
                     }),
-                    if before.is_some() { "Y" } else { "N" },
-                    before.unwrap_or(""),
+                    c_yn,
+                    n_key,
                 )
                 .await?
             } else {
@@ -962,21 +1054,75 @@ impl KiwoomClient {
                 .await?
             }
         } else {
-            let exch = guess_us_exch(sym);
-            let api_id = if interval == "1m" { "usa20302" } else { "usa20301" };
-            self.tr_post(
-                "/api/us/chart",
-                api_id,
-                &json!({
-                    "stk_cd": sym,
-                    "stex_tp": exch,
-                    "base_dt": base_dt,
-                    "upd_stkpc_tp": "1",
-                }),
-                "N",
-                "",
-            )
-            .await?
+            let primary = self.resolve_us_exch(sym).await;
+            let (c_yn, n_key) = match cont_token {
+                Some(k) => ("Y", k),
+                None => ("N", ""),
+            };
+            let mut candidates = vec![primary];
+            if cont_token.is_none() {
+                for fallback in ["ND", "NY", "NA"] {
+                    if !candidates.iter().any(|c| c == fallback) {
+                        candidates.push(fallback.to_string());
+                    }
+                }
+            }
+            let (api_id, start_dt) = if interval == "1m" {
+                (
+                    "usa06011",
+                    (now_kst.date_naive() - ChronoDuration::days(14))
+                        .format("%Y%m%d")
+                        .to_string(),
+                )
+            } else {
+                // `usa06012` uses `strt_dt` as earliest cutoff; `exrt_appl_tp: "0"` returns native USD prices
+                (
+                    "usa06012",
+                    (now_kst.date_naive() - ChronoDuration::days(365 * 5))
+                        .format("%Y%m%d")
+                        .to_string(),
+                )
+            };
+            let mut last_err: Option<ApiError> = None;
+            let mut last_ok: Option<(Value, String, String)> = None;
+            let mut resolved: Option<(Value, String, String)> = None;
+            for exch in candidates {
+                let body = if interval == "1m" {
+                    json!({
+                        "stex_tp": exch,
+                        "stk_cd": sym,
+                        "strt_dt": start_dt,
+                        "tic_scope": "1",
+                        "upd_stkpc_tp": "1",
+                        "exrt_appl_tp": "0",
+                    })
+                } else {
+                    json!({
+                        "stex_tp": exch,
+                        "stk_cd": sym,
+                        "strt_dt": start_dt,
+                        "upd_stkpc_tp": "1",
+                        "exrt_appl_tp": "0",
+                    })
+                };
+                match self.tr_post("/api/us/chart", api_id, &body, c_yn, n_key).await {
+                    Ok(triple) => {
+                        let has_rows = !first_arr(&triple.0, &["result_list", "output", "candles"]).is_empty();
+                        if has_rows {
+                            self.us_exch_cache.insert(sym.to_uppercase(), exch);
+                            resolved = Some(triple);
+                            break;
+                        }
+                        last_ok = Some(triple);
+                    }
+                    Err(e) => last_err = Some(e),
+                }
+            }
+            if let Some(triple) = resolved.or(last_ok) {
+                triple
+            } else {
+                return Err(last_err.unwrap_or_else(|| ApiError::not_found("stock_not_found", sym)));
+            }
         };
 
         let raw_rows = first_arr(
@@ -984,23 +1130,29 @@ impl KiwoomClient {
             &[
                 "stk_dt_pole_chart_qry",
                 "stk_min_pole_chart_qry",
-                "us_dt_pole_chart_qry",
-                "us_min_pole_chart_qry",
+                "result_list",
                 "output",
                 "candles",
             ],
         );
 
+        let kr_sym = is_kr_symbol(sym);
         let mut candles = Vec::with_capacity(raw_rows.len().min(count));
         let mut oldest_dt: Option<String> = None;
         for r in raw_rows.iter().take(count) {
             let ts = if interval == "1m" {
                 let combined = first_str(r, &["cntr_tm", "dt_tm", "timestamp"]).map(|s| s.to_string()).or_else(|| {
-                    let d = first_str(r, &["stck_bsop_date", "dt"])?;
+                    let d = first_str(r, &["stck_bsop_date", "bus_dt", "dt"])?;
                     let h = first_str(r, &["stck_cntg_hour", "tm"])?;
                     Some(format!("{d}{h}"))
                 });
-                combined.and_then(|s| parse_kst_minute_rfc3339(&s))
+                combined.and_then(|s| {
+                    if kr_sym {
+                        parse_kst_minute_rfc3339(&s)
+                    } else {
+                        parse_us_et_minute_rfc3339(&s)
+                    }
+                })
             } else {
                 let d_str = first_str(r, &["dt", "stck_bsop_date", "xymd", "date"]);
                 if let Some(d) = d_str {
@@ -1019,7 +1171,12 @@ impl KiwoomClient {
                     .or_else(|| r.get("clos_pric"))
                     .or_else(|| r.get("close")),
             );
-            let vol = parse_kiwoom_abs(r.get("trde_qty").or_else(|| r.get("vol"))).unwrap_or(0.0);
+            let vol = parse_kiwoom_abs(
+                r.get("trde_qty")
+                    .or_else(|| r.get("acc_trde_qty"))
+                    .or_else(|| r.get("vol")),
+            )
+            .unwrap_or(0.0);
             if let (Some(o), Some(h), Some(l), Some(c)) = (open, high, low, close) {
                 candles.push(json!({
                     "timestamp": timestamp,
@@ -1032,9 +1189,9 @@ impl KiwoomClient {
             }
         }
 
-        let next_before = if interval == "1m" {
+        let next_before = if !is_kr_symbol(sym) || interval == "1m" {
             if cont_yn == "Y" && !next_key.is_empty() {
-                Value::String(next_key)
+                Value::String(format!("CONT:{next_key}"))
             } else {
                 Value::Null
             }
@@ -1088,7 +1245,7 @@ impl KiwoomClient {
             return Ok(out);
         }
 
-        // US markets: attempt Kiwoom US list TR, with curated popular fallback if empty on mock
+        // Official Kiwoom US stock list TR (`usa10099`) + seed fallback if empty
         let exch = match market_code {
             "NASDAQ" => "ND",
             "NYSE" => "NY",
@@ -1096,17 +1253,21 @@ impl KiwoomClient {
             _ => return Ok(vec![]),
         };
         if let Ok((v, _, _)) = self
-            .tr_post("/api/us/stkinfo", "usa20001", &json!({ "stex_tp": exch }), "N", "")
+            .tr_post("/api/us/stkinfo", "usa10099", &json!({ "stex_tp": exch }), "N", "")
             .await
         {
-            let rows = first_arr(&v, &["list", "output"]);
+            let rows = first_arr(&v, &["list", "result_list", "output"]);
             if !rows.is_empty() {
                 let out = rows
                     .iter()
                     .filter_map(|r| {
                         let sym = first_str(r, &["stk_cd", "symb", "code"])?.to_uppercase();
+                        let stex = first_str(r, &["stex_tp"]).unwrap_or(exch);
+                        if matches!(stex, "ND" | "NY" | "NA") {
+                            self.us_exch_cache.insert(sym.clone(), stex.to_string());
+                        }
                         let name = first_str(r, &["stk_nm", "kor_nm", "name"]).unwrap_or(&sym);
-                        let eng = first_str(r, &["eng_nm", "englishName"]).unwrap_or(name);
+                        let eng = first_str(r, &["stk_enm", "eng_nm", "englishName"]).unwrap_or(name);
                         Some(json!({
                             "symbol": sym,
                             "name": name,
@@ -1124,6 +1285,12 @@ impl KiwoomClient {
     }
 
     async fn fetch_price_limits(&self, sym: &str) -> ApiResult<Value> {
+        if !is_kr_symbol(sym) {
+            return Ok(json!({
+                "upperLimitPrice": Value::Null,
+                "lowerLimitPrice": Value::Null,
+            }));
+        }
         let (v, _, _) = self
             .tr_post("/api/dostk/stkinfo", "ka10001", &json!({ "stk_cd": sym }), "N", "")
             .await?;
@@ -1135,7 +1302,61 @@ impl KiwoomClient {
 
     async fn fetch_orderbook(&self, sym: &str) -> ApiResult<Value> {
         if !is_kr_symbol(sym) {
-            return Ok(json!({ "asks": [], "bids": [], "totalAskVolume": 0, "totalBidVolume": 0 }));
+            let exch = self.resolve_us_exch(sym).await;
+            let Ok((v, _, _)) = self
+                .tr_post(
+                    "/api/us/mrkcond",
+                    "usa20101",
+                    &json!({ "stex_tp": exch, "stk_cd": sym }),
+                    "N",
+                    "",
+                )
+                .await
+            else {
+                return Ok(json!({ "asks": [], "bids": [], "totalAskVolume": 0, "totalBidVolume": 0 }));
+            };
+            let mut asks = Vec::new();
+            let mut bids = Vec::new();
+            for i in 1..=10 {
+                let apk = format!("sel_{i}bid");
+                let aqk = format!("sel_{i}bid_req");
+                let px_opt = parse_kiwoom_abs(v.get(&apk)).or_else(|| {
+                    if i == 1 { parse_kiwoom_abs(v.get("fpr_sel_bid")) } else { None }
+                });
+                if let Some(px) = px_opt {
+                    if px > 0.0 {
+                        asks.push(json!({
+                            "price": px,
+                            "volume": parse_kiwoom_abs(v.get(&aqk)).unwrap_or(0.0),
+                        }));
+                    }
+                }
+                let bpk = format!("buy_{i}bid");
+                let bqk = format!("buy_{i}bid_req");
+                let bpx_opt = parse_kiwoom_abs(v.get(&bpk)).or_else(|| {
+                    if i == 1 { parse_kiwoom_abs(v.get("fpr_buy_bid")) } else { None }
+                });
+                if let Some(px) = bpx_opt {
+                    if px > 0.0 {
+                        bids.push(json!({
+                            "price": px,
+                            "volume": parse_kiwoom_abs(v.get(&bqk)).unwrap_or(0.0),
+                        }));
+                    }
+                }
+            }
+            let tot_ask = parse_kiwoom_abs(v.get("tot_sel_req")).unwrap_or_else(|| {
+                asks.iter().filter_map(|x| x["volume"].as_f64()).sum()
+            });
+            let tot_bid = parse_kiwoom_abs(v.get("tot_buy_req")).unwrap_or_else(|| {
+                bids.iter().filter_map(|x| x["volume"].as_f64()).sum()
+            });
+            return Ok(json!({
+                "asks": asks,
+                "bids": bids,
+                "totalAskVolume": tot_ask,
+                "totalBidVolume": tot_bid,
+            }));
         }
         let (v, _, _) = self
             .tr_post("/api/dostk/mrkcond", "ka10004", &json!({ "stk_cd": sym }), "N", "")
@@ -1200,7 +1421,36 @@ impl KiwoomClient {
 
     async fn fetch_trades(&self, sym: &str, count: usize) -> ApiResult<Vec<Value>> {
         if !is_kr_symbol(sym) {
-            return Ok(vec![]);
+            let exch = self.resolve_us_exch(sym).await;
+            let Ok((v, _, _)) = self
+                .tr_post(
+                    "/api/us/mrkcond",
+                    "usa20151",
+                    &json!({ "stex_tp": exch, "stk_cd": sym, "base_dt": "" }),
+                    "N",
+                    "",
+                )
+                .await
+            else {
+                return Ok(vec![]);
+            };
+            let rows = first_arr(&v, &["result_list", "output"]);
+            let mut out = Vec::with_capacity(rows.len().min(count));
+            for r in rows.iter().take(count) {
+                let px = parse_kiwoom_abs(r.get("cur_prc")).unwrap_or(0.0);
+                let diff = parse_kiwoom_signed(r.get("pred_pre")).unwrap_or(0.0);
+                let vol = parse_kiwoom_abs(r.get("acc_trde_qty").or_else(|| r.get("trde_qty"))).unwrap_or(0.0);
+                let tm = first_str(r, &["dt", "tm"]).unwrap_or("");
+                if px > 0.0 {
+                    out.push(json!({
+                        "price": px,
+                        "volume": vol,
+                        "side": if diff < 0.0 { "SELL" } else { "BUY" },
+                        "timestamp": tm,
+                    }));
+                }
+            }
+            return Ok(out);
         }
         let (v, _, _) = self
             .tr_post("/api/dostk/stkinfo", "ka10003", &json!({ "stk_cd": sym }), "N", "")
@@ -1383,28 +1633,51 @@ impl KiwoomClient {
             }));
         }
 
-        // Optional US holdings merge (ignore cleanly if US account not activated/mock unsupported)
+        // Official Kiwoom US holdings (`ust21070`, graceful skip if US account not activated)
         let mut usd_mv: Option<f64> = None;
         let mut usd_pl: Option<f64> = None;
         if let Ok((usv, _, _)) = self
-            .tr_post("/api/us/acnt", "ust10002", &json!({}), "N", "")
+            .tr_post(
+                "/api/us/acnt",
+                "ust21070",
+                &json!({ "stex_tp": "", "stk_cd": "" }),
+                "N",
+                "",
+            )
             .await
         {
-            let us_rows = first_arr(&usv, &["acnt_evlu_remn_indv_tot", "output", "list"]);
+            let us_rows = first_arr(&usv, &["result_list", "result_lsit", "output", "list"]);
             for r in us_rows {
-                let qty = parse_kiwoom_abs(r.get("rmnd_qty").or_else(|| r.get("hldg_qty"))).unwrap_or(0.0);
+                let qty = parse_kiwoom_abs(
+                    r.get("poss_qty")
+                        .or_else(|| r.get("qty"))
+                        .or_else(|| r.get("rmnd_qty"))
+                        .or_else(|| r.get("hldg_qty")),
+                )
+                .unwrap_or(0.0);
                 if qty <= 0.0 {
                     continue;
                 }
                 let sym = first_str(r, &["stk_cd", "symb"]).unwrap_or("").to_uppercase();
-                let name = first_str(r, &["stk_nm", "name"]).unwrap_or(&sym).to_string();
-                let avg_px = parse_kiwoom_abs(r.get("pur_pric").or_else(|| r.get("pchs_avg_uv"))).unwrap_or(0.0);
-                let cur_px = parse_kiwoom_abs(r.get("cur_prc")).unwrap_or(avg_px);
+                let name = first_str(r, &["frgn_stk_nm", "stk_nm", "name"]).unwrap_or(&sym).to_string();
+                let avg_px = parse_kiwoom_abs(
+                    r.get("frgn_stk_book_uv")
+                        .or_else(|| r.get("pur_pric"))
+                        .or_else(|| r.get("pchs_avg_uv")),
+                )
+                .unwrap_or(0.0);
+                let cur_px = parse_kiwoom_abs(r.get("now_pric").or_else(|| r.get("cur_prc"))).unwrap_or(avg_px);
                 let mv = parse_kiwoom_abs(r.get("evlt_amt").or_else(|| r.get("evlu_amt")))
                     .unwrap_or(qty * cur_px);
-                let pl = parse_kiwoom_signed(r.get("evltv_prft").or_else(|| r.get("evlu_pfls_amt")))
-                    .unwrap_or(mv - qty * avg_px);
-                let rate = if qty * avg_px > 0.0 { pl / (qty * avg_px) } else { 0.0 };
+                let pl = parse_kiwoom_signed(
+                    r.get("pl_amt")
+                        .or_else(|| r.get("evltv_prft"))
+                        .or_else(|| r.get("evlu_pfls_amt")),
+                )
+                .unwrap_or(mv - qty * avg_px);
+                let rate = parse_kiwoom_signed(r.get("pl_rt").or_else(|| r.get("prft_rt")))
+                    .map(|pct| pct / 100.0)
+                    .unwrap_or_else(|| if qty * avg_px > 0.0 { pl / (qty * avg_px) } else { 0.0 });
                 usd_mv = Some(usd_mv.unwrap_or(0.0) + mv);
                 usd_pl = Some(usd_pl.unwrap_or(0.0) + pl);
                 items.push(json!({
@@ -1424,6 +1697,12 @@ impl KiwoomClient {
                     },
                     "dailyProfitLoss": { "amount": 0.0, "rate": 0.0 },
                 }));
+            }
+            if usd_mv.is_none() {
+                usd_mv = parse_kiwoom_abs(usv.get("tot_evlt_amt"));
+            }
+            if usd_pl.is_none() {
+                usd_pl = parse_kiwoom_signed(usv.get("tot_pl_amt"));
             }
         }
 
@@ -1454,13 +1733,21 @@ impl KiwoomClient {
 
     async fn fetch_buying_power(&self, currency: &str) -> ApiResult<Value> {
         if currency.eq_ignore_ascii_case("USD") {
-            let cash = match self.tr_post("/api/us/acnt", "ust10001", &json!({}), "N", "").await {
-                Ok((v, _, _)) => parse_kiwoom_abs(
-                    v.get("ord_psbl_frcr_amt")
-                        .or_else(|| v.get("ord_psbl_cash"))
-                        .or_else(|| v.get("frcr_ord_psbl_amt")),
-                )
-                .unwrap_or(0.0),
+            let cash = match self.tr_post("/api/us/acnt", "ust21110", &json!({}), "N", "").await {
+                Ok((v, _, _)) => {
+                    let rows = first_arr(&v, &["result_list", "result_lsit", "output"]);
+                    let usd_row = rows.iter().find(|r| {
+                        first_str(r, &["crnc_code"]).is_some_and(|c| c.eq_ignore_ascii_case("USD"))
+                    });
+                    usd_row
+                        .and_then(|r| {
+                            parse_kiwoom_abs(r.get("fc_ord_alowa"))
+                                .or_else(|| parse_kiwoom_abs(r.get("fc_pymn_alowa")))
+                                .or_else(|| parse_kiwoom_abs(r.get("fc_entra")))
+                        })
+                        .or_else(|| parse_kiwoom_abs(v.get("fc_ord_alowa")))
+                        .unwrap_or(0.0)
+                }
                 Err(_) => 0.0,
             };
             return Ok(json!({ "cashBuyingPower": cash }));
@@ -1478,6 +1765,31 @@ impl KiwoomClient {
     }
 
     async fn fetch_sellable_quantity(&self, sym: &str) -> ApiResult<Value> {
+        if !is_kr_symbol(sym) {
+            if let Ok((usv, _, _)) = self
+                .tr_post(
+                    "/api/us/acnt",
+                    "ust21070",
+                    &json!({ "stex_tp": "", "stk_cd": sym }),
+                    "N",
+                    "",
+                )
+                .await
+            {
+                let rows = first_arr(&usv, &["result_list", "result_lsit", "output"]);
+                if let Some(r) = rows.iter().find(|r| {
+                    first_str(r, &["stk_cd", "symb"]).is_some_and(|s| s.eq_ignore_ascii_case(sym))
+                }) {
+                    let q = parse_kiwoom_abs(
+                        r.get("sell_alowq")
+                            .or_else(|| r.get("poss_qty"))
+                            .or_else(|| r.get("qty")),
+                    )
+                    .unwrap_or(0.0);
+                    return Ok(json!({ "sellableQuantity": q }));
+                }
+            }
+        }
         let holdings = self.fetch_holdings().await?;
         let qty = holdings
             .get("items")
@@ -1515,6 +1827,7 @@ impl KiwoomClient {
             let (resp, _, _) = self.tr_post("/api/dostk/ordr", api_id, &body, "N", "").await?;
             (resp, "KRW")
         } else {
+            let exch = self.resolve_us_exch(sym).await;
             let api_id = if side == "SELL" { "ust20001" } else { "ust20000" };
             let trde_tp = match (otype, tif) {
                 ("MARKET", _) => "03",
@@ -1522,13 +1835,24 @@ impl KiwoomClient {
                 _ => "00",
             };
             let ord_uv = if otype == "MARKET" { "" } else { price };
-            let body = json!({
-                "stex_tp": guess_us_exch(sym),
-                "stk_cd": sym,
-                "ord_qty": qty,
-                "ord_uv": ord_uv,
-                "trde_tp": trde_tp,
-            });
+            let body = if side == "SELL" {
+                json!({
+                    "stex_tp": exch,
+                    "stk_cd": sym,
+                    "ord_qty": qty,
+                    "ord_uv": ord_uv,
+                    "stop_pric": "",
+                    "trde_tp": trde_tp,
+                })
+            } else {
+                json!({
+                    "stex_tp": exch,
+                    "stk_cd": sym,
+                    "ord_qty": qty,
+                    "ord_uv": ord_uv,
+                    "trde_tp": trde_tp,
+                })
+            };
             let (resp, _, _) = self.tr_post("/api/us/ordr", api_id, &body, "N", "").await?;
             (resp, "USD")
         };
@@ -1553,91 +1877,161 @@ impl KiwoomClient {
 
     async fn list_orders(&self, status: &str, sym_filter: Option<&str>) -> ApiResult<Value> {
         let mut orders = Vec::new();
-        if status == "OPEN" {
-            let (v, _, _) = self
-                .tr_post(
-                    "/api/dostk/acnt",
-                    "ka10075",
-                    &json!({ "all_stk_tp": "0", "trde_tp": "0", "stex_tp": "0" }),
-                    "N",
-                    "",
-                )
-                .await?;
-            for r in first_arr(&v, &["oso", "output", "list"]) {
-                let sym = first_str(r, &["stk_cd"]).map(strip_kr_prefix).unwrap_or_default();
-                if let Some(f) = sym_filter {
-                    if sym != f {
-                        continue;
+        let want_kr = sym_filter.map(is_kr_symbol).unwrap_or(true);
+        let want_us = sym_filter.map(|s| !is_kr_symbol(s)).unwrap_or(true);
+
+        if want_kr {
+            if status == "OPEN" {
+                if let Ok((v, _, _)) = self
+                    .tr_post(
+                        "/api/dostk/acnt",
+                        "ka10075",
+                        &json!({ "all_stk_tp": "0", "trde_tp": "0", "stk_cd": "", "stex_tp": "0" }),
+                        "N",
+                        "",
+                    )
+                    .await
+                {
+                    for r in first_arr(&v, &["oso", "output", "list"]) {
+                        let sym = first_str(r, &["stk_cd"]).map(strip_kr_prefix).unwrap_or_default();
+                        if let Some(f) = sym_filter {
+                            if sym != f {
+                                continue;
+                            }
+                        }
+                        let ord_no = first_str(r, &["ord_no"]).unwrap_or("").to_string();
+                        let qty = parse_kiwoom_abs(r.get("ord_qty")).unwrap_or(0.0);
+                        let rem = parse_kiwoom_abs(r.get("oso_qty").or_else(|| r.get("un_cntr_qty"))).unwrap_or(qty);
+                        let filled = (qty - rem).max(0.0);
+                        let px = parse_kiwoom_abs(r.get("ord_pric").or_else(|| r.get("ord_uv")));
+                        let io_tp = first_str(r, &["io_tp_nm", "sll_buy_tp_nm", "trde_tp"]).unwrap_or("");
+                        let side = if io_tp.contains("매도") || io_tp.eq_ignore_ascii_case("SELL") {
+                            "SELL"
+                        } else {
+                            "BUY"
+                        };
+                        orders.push(json!({
+                            "orderId": ord_no,
+                            "symbol": sym,
+                            "name": first_str(r, &["stk_nm"]).unwrap_or(&sym),
+                            "side": side,
+                            "orderType": "LIMIT",
+                            "quantity": qty,
+                            "filledQuantity": filled,
+                            "price": px,
+                            "status": if filled > 0.0 { "PARTIAL" } else { "PENDING" },
+                            "currency": "KRW",
+                            "createdAt": first_str(r, &["tm"]).unwrap_or(""),
+                        }));
                     }
                 }
-                let ord_no = first_str(r, &["ord_no"]).unwrap_or("").to_string();
-                let qty = parse_kiwoom_abs(r.get("ord_qty")).unwrap_or(0.0);
-                let rem = parse_kiwoom_abs(r.get("oso_qty").or_else(|| r.get("un_cntr_qty"))).unwrap_or(qty);
-                let filled = (qty - rem).max(0.0);
-                let px = parse_kiwoom_abs(r.get("ord_pric").or_else(|| r.get("ord_uv")));
-                let io_tp = first_str(r, &["io_tp_nm", "sll_buy_tp_nm", "trde_tp"]).unwrap_or("");
-                let side = if io_tp.contains("매도") || io_tp.eq_ignore_ascii_case("SELL") {
-                    "SELL"
-                } else {
-                    "BUY"
-                };
-                orders.push(json!({
-                    "orderId": ord_no,
-                    "symbol": sym,
-                    "name": first_str(r, &["stk_nm"]).unwrap_or(&sym),
-                    "side": side,
-                    "orderType": "LIMIT",
-                    "quantity": qty,
-                    "filledQuantity": filled,
-                    "price": px,
-                    "status": if filled > 0.0 { "PARTIAL" } else { "PENDING" },
-                    "currency": "KRW",
-                    "createdAt": first_str(r, &["tm"]).unwrap_or(""),
-                }));
-            }
-        } else {
-            let (v, _, _) = self
+            } else if let Ok((v, _, _)) = self
                 .tr_post(
                     "/api/dostk/acnt",
                     "ka10076",
-                    &json!({ "qry_tp": "0", "sell_tp": "0", "stex_tp": "0" }),
+                    &json!({ "stk_cd": "", "qry_tp": "0", "sell_tp": "0", "ord_no": "", "stex_tp": "0" }),
                     "N",
                     "",
                 )
-                .await?;
-            for r in first_arr(&v, &["cntr", "output", "list"]) {
-                let sym = first_str(r, &["stk_cd"]).map(strip_kr_prefix).unwrap_or_default();
-                if let Some(f) = sym_filter {
-                    if sym != f {
-                        continue;
+                .await
+            {
+                for r in first_arr(&v, &["cntr", "output", "list"]) {
+                    let sym = first_str(r, &["stk_cd"]).map(strip_kr_prefix).unwrap_or_default();
+                    if let Some(f) = sym_filter {
+                        if sym != f {
+                            continue;
+                        }
                     }
+                    let ord_no = first_str(r, &["ord_no"]).unwrap_or("").to_string();
+                    let qty = parse_kiwoom_abs(r.get("ord_qty")).unwrap_or(0.0);
+                    let filled = parse_kiwoom_abs(r.get("cntr_qty")).unwrap_or(qty);
+                    let fill_px = parse_kiwoom_abs(r.get("cntr_pric").or_else(|| r.get("ord_pric")));
+                    let io_tp = first_str(r, &["io_tp_nm", "sll_buy_tp_nm"]).unwrap_or("");
+                    let side = if io_tp.contains("매도") || io_tp.eq_ignore_ascii_case("SELL") {
+                        "SELL"
+                    } else {
+                        "BUY"
+                    };
+                    orders.push(json!({
+                        "orderId": ord_no,
+                        "symbol": sym,
+                        "name": first_str(r, &["stk_nm"]).unwrap_or(&sym),
+                        "side": side,
+                        "orderType": "LIMIT",
+                        "quantity": qty,
+                        "filledQuantity": filled,
+                        "price": fill_px,
+                        "averageFilledPrice": fill_px,
+                        "status": "FILLED",
+                        "currency": "KRW",
+                        "createdAt": first_str(r, &["ord_tm", "tm"]).unwrap_or(""),
+                    }));
                 }
-                let ord_no = first_str(r, &["ord_no"]).unwrap_or("").to_string();
-                let qty = parse_kiwoom_abs(r.get("ord_qty")).unwrap_or(0.0);
-                let filled = parse_kiwoom_abs(r.get("cntr_qty")).unwrap_or(qty);
-                let fill_px = parse_kiwoom_abs(r.get("cntr_pric").or_else(|| r.get("ord_pric")));
-                let io_tp = first_str(r, &["io_tp_nm", "sll_buy_tp_nm"]).unwrap_or("");
-                let side = if io_tp.contains("매도") || io_tp.eq_ignore_ascii_case("SELL") {
-                    "SELL"
-                } else {
-                    "BUY"
-                };
-                orders.push(json!({
-                    "orderId": ord_no,
-                    "symbol": sym,
-                    "name": first_str(r, &["stk_nm"]).unwrap_or(&sym),
-                    "side": side,
-                    "orderType": "LIMIT",
-                    "quantity": qty,
-                    "filledQuantity": filled,
-                    "price": fill_px,
-                    "averageFilledPrice": fill_px,
-                    "status": "FILLED",
-                    "currency": "KRW",
-                    "createdAt": first_str(r, &["ord_tm", "tm"]).unwrap_or(""),
-                }));
             }
         }
+
+        // Official Kiwoom US today's orders (`ust21510` — note Kiwoom's response key typo `result_lsit`)
+        if want_us {
+            if let Ok((usv, _, _)) = self
+                .tr_post(
+                    "/api/us/acnt",
+                    "ust21510",
+                    &json!({ "slby_tp": "0", "stex_tp": "", "stk_cd": sym_filter.unwrap_or("") }),
+                    "N",
+                    "",
+                )
+                .await
+            {
+                for r in first_arr(&usv, &["result_lsit", "result_list", "output"]) {
+                    let sym = first_str(r, &["stk_cd"]).unwrap_or("").to_uppercase();
+                    if sym.is_empty() {
+                        continue;
+                    }
+                    if let Some(f) = sym_filter {
+                        if !sym.eq_ignore_ascii_case(f) {
+                            continue;
+                        }
+                    }
+                    let ord_no = first_str(r, &["ord_no"]).unwrap_or("").to_string();
+                    let qty = parse_kiwoom_abs(r.get("ord_qty")).unwrap_or(0.0);
+                    let filled = parse_kiwoom_abs(r.get("cntr_qty")).unwrap_or(0.0);
+                    let rem = parse_kiwoom_abs(r.get("ord_remnq")).unwrap_or((qty - filled).max(0.0));
+                    let stat = first_str(r, &["ord_stat", "ord_stat_nm"]).unwrap_or("");
+                    let is_open = rem > 0.0 && !stat.contains("취소") && !stat.contains("체결완료");
+                    if (status == "OPEN" && !is_open) || (status != "OPEN" && is_open) {
+                        continue;
+                    }
+                    let px = parse_kiwoom_abs(r.get("ord_uv"));
+                    let fill_px = parse_kiwoom_abs(r.get("cntr_uv")).filter(|x| *x > 0.0).or(px);
+                    let slby = first_str(r, &["slby_tp_nm", "slby_tp"]).unwrap_or("");
+                    let side = if slby.contains("매도") || slby == "1" { "SELL" } else { "BUY" };
+                    let o_stat = if stat.contains("취소") {
+                        "CANCELED"
+                    } else if !is_open && filled > 0.0 {
+                        "FILLED"
+                    } else if filled > 0.0 {
+                        "PARTIAL"
+                    } else {
+                        "PENDING"
+                    };
+                    orders.push(json!({
+                        "orderId": ord_no,
+                        "symbol": sym,
+                        "name": first_str(r, &["frgn_stk_nm", "stk_nm"]).unwrap_or(&sym),
+                        "side": side,
+                        "orderType": if first_str(r, &["frgn_trde_tp"]) == Some("03") { "MARKET" } else { "LIMIT" },
+                        "quantity": qty,
+                        "filledQuantity": filled,
+                        "price": px,
+                        "averageFilledPrice": fill_px,
+                        "status": o_stat,
+                        "currency": "USD",
+                        "createdAt": first_str(r, &["ord_time", "cntr_time"]).unwrap_or(""),
+                    }));
+                }
+            }
+        }
+
         Ok(json!({ "orders": orders, "hasNext": false }))
     }
 
@@ -1689,15 +2083,15 @@ impl KiwoomClient {
                 "status": "CANCELED",
             }))
         } else {
+            let exch = self.resolve_us_exch(sym).await;
             let (v, _, _) = self
                 .tr_post(
                     "/api/us/ordr",
                     "ust20003",
                     &json!({
-                        "stex_tp": guess_us_exch(sym),
                         "orig_ord_no": order_id,
+                        "stex_tp": exch,
                         "stk_cd": sym,
-                        "cncl_qty": "0",
                     }),
                     "N",
                     "",
@@ -1742,16 +2136,17 @@ impl KiwoomClient {
                 "status": "PENDING",
             }))
         } else {
+            let exch = self.resolve_us_exch(sym).await;
             let (v, _, _) = self
                 .tr_post(
                     "/api/us/ordr",
                     "ust20002",
                     &json!({
-                        "stex_tp": guess_us_exch(sym),
                         "orig_ord_no": order_id,
+                        "stex_tp": exch,
                         "stk_cd": sym,
-                        "mdfy_qty": qty,
                         "mdfy_uv": uv,
+                        "stop_pric": "",
                     }),
                     "N",
                     "",

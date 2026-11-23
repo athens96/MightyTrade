@@ -2,6 +2,14 @@
 
 이 프로젝트의 주요 변경 사항은 [Semantic Versioning](https://semver.org/lang/ko/) 규칙에 따라 기록됩니다.
 
+## [0.3.1] - 2026-11-23
+
+### Fixed
+- **키움 REST API 미국주식 조회·차트·시세·주문·실시간 WebSocket 오류 전면 수정 (`MT-23`)**:
+  - **공식 미국주식 TR ID·경로·요청/응답 스키마 정렬**: 키움 공식 REST API 명세(`Kiwoom-REST-API`) 기준으로 미국주식 차트(`usa06012` 일봉 · `usa06011` 분봉, `exrt_appl_tp: "0"` 달러 원시 가격 · `result_list` · `acc_trde_qty` · 미국 동부시간(ET) 분봉 타임스탬프 보정), 현재가(`usa20100`, 장외 `base_close_pric`/`pre_open_pric` 폴백 및 `prevClose` 직전 종가 포함으로 불필요한 중복 차트 호출 제거), 10호가(`usa20101`), 일별 체결(`usa20151`), 종목 목록(`usa10099`), 거래소 자동 판별(`usa10098` + `us_exch_cache` + `ND`/`NY`/`NA` 폴백), 미국 보유잔고·매도가능수량(`ust21070`), USD 예수금(`ust21110`), 미국 당일 주문/체결(`ust21510`, 키움 백엔드 응답 오타 키 `result_lsit` 및 `result_list` 동시 지원), 매수·매도·정정·취소(`ust20000`~`ust20003`, `stop_pric` 필드 포함)를 전면 정합.
+  - **키움 미국주식 실시간 WebSocket(`FE`/`FT`) 분리 중계**: `/api/us/websocket` 전용 스트림(`{uid}:us`)을 추가해 미국 체결(`FE`)·10호가(`FT`) 실시간 구독(`item: [{"jmcode": ..., "stex_tp": ...}]`, `refresh: "0"`) 및 SSE 릴레이 지원.
+  - **오류 투명성 및 안정화**: 단일 종목 현재가 조회 시 실제 키움 오류 메시지를 삼키지 않고 그대로 전달하고, 미국주식 상·하한가 조회 가드 추가.
+
 ## [0.3.0] - 2026-11-23
 
 ### Added

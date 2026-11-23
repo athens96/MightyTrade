@@ -139,16 +139,20 @@ struct StreamInner {
 }
 
 pub struct UserStream {
+    stream_key: String,
     uid: String,
+    kiwoom_us: bool,
     inner: Mutex<StreamInner>,
     decl_notify: Notify,
     stopped: AtomicBool,
 }
 
 impl UserStream {
-    fn new(uid: String) -> Self {
+    fn new(stream_key: String, uid: String, kiwoom_us: bool) -> Self {
         Self {
+            stream_key,
             uid,
+            kiwoom_us,
             inner: Mutex::new(StreamInner {
                 subs: HashMap::new(),
                 empty_since: None,
@@ -259,7 +263,7 @@ impl UserStream {
             .unwrap_or(false)
     }
 
-    fn kiwoom_kr_symbols(&self) -> Vec<String> {
+    fn kiwoom_symbols(&self, market_code: &str) -> Vec<String> {
         let mut syms: Vec<String> = {
             let g = self.inner.lock();
             g.subs
@@ -268,7 +272,7 @@ impl UserStream {
                 .filter_map(|t| {
                     let parts: Vec<&str> = t.splitn(3, ':').collect();
                     if parts.len() == 3
-                        && parts[1] == "kr"
+                        && parts[1] == market_code
                         && matches!(parts[0], "trade" | "orderbook")
                     {
                         Some(parts[2].to_string())
@@ -301,14 +305,19 @@ impl UserStream {
             let conn_info = async {
                 let client = state.get_kiwoom_client(&self.uid)?;
                 let token = client.access_token(rejected.as_deref()).await?;
-                Ok::<(String, String), crate::errors::ApiError>((client.ws_url().to_string(), token))
+                let url = if self.kiwoom_us {
+                    client.us_ws_url().to_string()
+                } else {
+                    client.ws_url().to_string()
+                };
+                Ok::<(Arc<crate::integrations::kiwoom::KiwoomClient>, String, String), crate::errors::ApiError>((client, url, token))
             }
             .await;
 
-            let (ws_url, token) = match conn_info {
-                Ok(pair) => {
+            let (client, ws_url, token) = match conn_info {
+                Ok(triple) => {
                     rejected = None;
-                    pair
+                    triple
                 }
                 Err(e) => {
                     self.set_status("reconnecting", &e.message);
@@ -338,11 +347,20 @@ impl UserStream {
                             break;
                         }
                         if logged_in {
-                            let syms = self.kiwoom_kr_symbols();
+                            let syms = self.kiwoom_symbols(if self.kiwoom_us { "us" } else { "kr" });
                             if sent_syms.as_ref() != Some(&syms)
                                 && last_reg.elapsed() >= Duration::from_millis(250)
                             {
-                                let reg = build_kiwoom_reg_frame(&syms);
+                                let reg = if self.kiwoom_us {
+                                    let mut pairs = Vec::with_capacity(syms.len());
+                                    for s in &syms {
+                                        let exch = client.resolve_us_exch(s).await;
+                                        pairs.push((s.clone(), exch));
+                                    }
+                                    build_kiwoom_us_reg_frame(&pairs)
+                                } else {
+                                    build_kiwoom_reg_frame(&syms)
+                                };
                                 if write.send(Message::Text(reg.to_string().into())).await.is_err() {
                                     break;
                                 }
@@ -411,7 +429,7 @@ impl UserStream {
             }
         }
 
-        hub.cleanup(&self.uid, &self);
+        hub.cleanup(&self.stream_key, &self);
     }
 
     async fn run_toss(self: Arc<Self>, hub: Arc<Hub>, state: AppState) {
@@ -545,7 +563,7 @@ impl UserStream {
             }
         }
 
-        hub.cleanup(&self.uid, &self);
+        hub.cleanup(&self.stream_key, &self);
     }
 }
 
@@ -572,14 +590,25 @@ impl Hub {
         uid: &str,
         topics: HashSet<String>,
     ) -> Arc<Subscriber> {
+        let is_kiwoom = credentials::active_broker(state, uid) == BrokerKind::Kiwoom;
+        let is_us_topic = topics.iter().any(|t| t.contains(":us:"));
+        let (stream_key, kiwoom_us) = if is_kiwoom {
+            if is_us_topic {
+                (format!("{uid}:us"), true)
+            } else {
+                (format!("{uid}:kr"), false)
+            }
+        } else {
+            (uid.to_string(), false)
+        };
         let sub = Arc::new(Subscriber::new(topics));
-        if let Some(stream) = self.streams.get(uid) {
+        if let Some(stream) = self.streams.get(&stream_key) {
             stream.add(sub.clone());
             return sub;
         }
-        let stream = Arc::new(UserStream::new(uid.to_string()));
+        let stream = Arc::new(UserStream::new(stream_key.clone(), uid.to_string(), kiwoom_us));
         stream.add(sub.clone());
-        self.streams.insert(uid.to_string(), stream.clone());
+        self.streams.insert(stream_key, stream.clone());
         let hub_clone = Arc::clone(self);
         let state_clone = state.clone();
         tokio::spawn(async move {
@@ -589,16 +618,18 @@ impl Hub {
     }
 
     pub fn unsubscribe(&self, uid: &str, sub_id: u64) {
-        if let Some(stream) = self.streams.get(uid) {
-            stream.remove(sub_id);
+        for key in [uid.to_string(), format!("{uid}:kr"), format!("{uid}:us")] {
+            if let Some(stream) = self.streams.get(&key) {
+                stream.remove(sub_id);
+            }
         }
     }
 
-    fn cleanup(&self, uid: &str, stopped: &Arc<UserStream>) {
-        if let Some(entry) = self.streams.get(uid) {
+    fn cleanup(&self, key: &str, stopped: &Arc<UserStream>) {
+        if let Some(entry) = self.streams.get(key) {
             if Arc::ptr_eq(entry.value(), stopped) {
                 drop(entry);
-                self.streams.remove(uid);
+                self.streams.remove(key);
             }
         }
     }
@@ -608,8 +639,10 @@ impl Hub {
     }
 
     pub fn disconnect_user(&self, uid: &str) {
-        if let Some((_, stream)) = self.streams.remove(uid) {
-            stream.force_stop();
+        for key in [uid.to_string(), format!("{uid}:kr"), format!("{uid}:us")] {
+            if let Some((_, stream)) = self.streams.remove(&key) {
+                stream.force_stop();
+            }
         }
     }
 }
@@ -625,8 +658,28 @@ pub fn build_kiwoom_reg_frame(syms: &[String]) -> Value {
     json!({
         "trnm": "REG",
         "grp_no": "1",
-        "refresh": "1",
+        "refresh": "0",
         "data": [{ "item": syms, "type": ["0B", "0D"] }],
+    })
+}
+
+pub fn build_kiwoom_us_reg_frame(items: &[(String, String)]) -> Value {
+    if items.is_empty() {
+        return json!({
+            "trnm": "REMOVE",
+            "grp_no": "1",
+            "data": [{ "item": [], "type": ["FE", "FT"] }],
+        });
+    }
+    let mapped: Vec<Value> = items
+        .iter()
+        .map(|(sym, exch)| json!({ "jmcode": sym, "stex_tp": exch }))
+        .collect();
+    json!({
+        "trnm": "REG",
+        "grp_no": "1",
+        "refresh": "0",
+        "data": [{ "item": mapped, "type": ["FE", "FT"] }],
     })
 }
 
@@ -657,13 +710,14 @@ fn parse_kiwoom_real_entry(entry: &Value) -> Option<(String, Value)> {
     let vals = entry.get("values")?.as_object()?;
 
     match rtype {
-        "0B" => {
+        "0B" | "FE" => {
+            let mkt = if rtype == "FE" { "us" } else { "kr" };
             let price = parse_kiwoom_abs(vals.get("10"))?;
             let raw_vol = parse_kiwoom_signed(vals.get("15")).unwrap_or(0.0);
             let side = if raw_vol < 0.0 { "SELL" } else { "BUY" };
             let ts = vals.get("20").and_then(|v| v.as_str()).unwrap_or("");
             Some((
-                format!("trade:kr:{sym}"),
+                format!("trade:{mkt}:{sym}"),
                 json!({
                     "price": price,
                     "volume": raw_vol.abs(),
@@ -672,7 +726,8 @@ fn parse_kiwoom_real_entry(entry: &Value) -> Option<(String, Value)> {
                 }),
             ))
         }
-        "0D" => {
+        "0D" | "FT" => {
+            let mkt = if rtype == "FT" { "us" } else { "kr" };
             let mut asks = Vec::new();
             let mut bids = Vec::new();
             for i in 0..10 {
@@ -700,7 +755,7 @@ fn parse_kiwoom_real_entry(entry: &Value) -> Option<(String, Value)> {
                 bids.iter().filter_map(|x| x["volume"].as_f64()).sum()
             });
             Some((
-                format!("orderbook:kr:{sym}"),
+                format!("orderbook:{mkt}:{sym}"),
                 json!({
                     "asks": asks,
                     "bids": bids,
@@ -753,6 +808,35 @@ mod kiwoom_ws_tests {
         assert_eq!(books[0].1["bids"].as_array().unwrap().len(), 2);
         assert_eq!(books[0].1["totalAskVolume"], json!(2000.0));
         assert_eq!(books[0].1["totalBidVolume"], json!(2400.0));
+
+        // US stock FE (trade) and FT (10-level orderbook)
+        let us_trade = json!({
+            "trnm": "REAL",
+            "data": [{
+                "type": "FE",
+                "item": "NVDA",
+                "values": { "10": "+198.5000", "15": "+15", "20": "215300" }
+            }]
+        });
+        let ut = parse_kiwoom_real_frame(&us_trade);
+        assert_eq!(ut.len(), 1);
+        assert_eq!(ut[0].0, "trade:us:NVDA");
+        assert_eq!(ut[0].1["price"], json!(198.5));
+        assert_eq!(ut[0].1["side"], json!("BUY"));
+
+        let us_book = json!({
+            "trnm": "REAL",
+            "data": [{
+                "type": "FT",
+                "item": "NVDA",
+                "values": { "41": "+198.5400", "61": "20", "51": "+198.4800", "71": "35", "121": "590", "125": "437" }
+            }]
+        });
+        let ub = parse_kiwoom_real_frame(&us_book);
+        assert_eq!(ub.len(), 1);
+        assert_eq!(ub[0].0, "orderbook:us:NVDA");
+        assert_eq!(ub[0].1["asks"][0]["price"], json!(198.54));
+        assert_eq!(ub[0].1["bids"][0]["price"], json!(198.48));
     }
 
     #[test]
@@ -762,5 +846,8 @@ mod kiwoom_ws_tests {
         assert_eq!(reg["data"][0]["item"], json!(["005930", "000660"]));
         let rem = build_kiwoom_reg_frame(&[]);
         assert_eq!(rem["trnm"], json!("REMOVE"));
+        let us_reg = build_kiwoom_us_reg_frame(&[("NVDA".to_string(), "ND".to_string())]);
+        assert_eq!(us_reg["data"][0]["type"], json!(["FE", "FT"]));
+        assert_eq!(us_reg["data"][0]["item"][0]["jmcode"], json!("NVDA"));
     }
 }

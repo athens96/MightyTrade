@@ -60,10 +60,46 @@ impl KiwoomHttpOverride for FakeKiwoom {
                 "upl_pric": "+93600",
                 "lst_pric": "-50400",
             })),
-            "usa20101" => Ok(json!({
-                "stk_cd": "AAPL",
-                "cur_prc": "230.50",
+            "usa10098" => Ok(json!({
+                "list": [{ "stex_tp": "ND", "stk_cd": body["stk_cd"], "stk_nm": "애플", "stk_enm": "APPLE INC", "mkgb": "NASDAQ" }]
             })),
+            "usa10099" => Ok(json!({
+                "list": [
+                    { "stex_tp": "ND", "stk_cd": "AAPL", "stk_nm": "애플", "stk_enm": "APPLE INC", "mkgb": "NASDAQ" },
+                    { "stex_tp": "ND", "stk_cd": "NVDA", "stk_nm": "엔비디아", "stk_enm": "NVIDIA CORP", "mkgb": "NASDAQ" }
+                ]
+            })),
+            "usa20100" => Ok(json!({
+                "stex_tp": "ND",
+                "stk_cd": body["stk_cd"],
+                "cur_prc": "+230.5000",
+                "base_close_pric": "228.0000"
+            })),
+            "usa20101" => Ok(json!({
+                "sel_1bid": "+230.5500", "sel_1bid_req": "40",
+                "buy_1bid": "+230.4800", "buy_1bid_req": "55"
+            })),
+            "usa20151" => Ok(json!({
+                "result_list": [{ "dt": "20261123", "cur_prc": "+230.5000", "pred_pre": "+2.5000", "acc_trde_qty": "45000000" }]
+            })),
+            "usa06011" => {
+                assert_eq!(body["exrt_appl_tp"], json!("0"));
+                Ok(json!({
+                    "result_list": [
+                        { "cntr_tm": "20261120093500", "bus_dt": "20261120", "open_pric": "230.1000", "high_pric": "230.6000", "low_pric": "230.0000", "cur_prc": "230.5000", "trde_qty": "12500" },
+                        { "cntr_tm": "20261120093400", "bus_dt": "20261120", "open_pric": "229.8000", "high_pric": "230.2000", "low_pric": "229.7000", "cur_prc": "230.1000", "trde_qty": "9800" },
+                    ]
+                }))
+            }
+            "usa06012" => {
+                assert_eq!(body["exrt_appl_tp"], json!("0"));
+                Ok(json!({
+                    "result_list": [
+                        { "dt": "20261123", "open_pric": "228.5000", "high_pric": "231.2000", "low_pric": "227.9000", "cur_prc": "230.5000", "acc_trde_qty": "45000000" },
+                        { "dt": "20261120", "open_pric": "226.0000", "high_pric": "229.0000", "low_pric": "225.5000", "cur_prc": "228.0000", "acc_trde_qty": "39000000" }
+                    ]
+                }))
+            }
             "ka10081" => Ok(json!({
                 "stk_dt_pole_chart_qry": [
                     { "dt": "20261123", "open_pric": "71500", "high_pric": "72500", "low_pric": "71200", "cur_prc": "+72000", "trde_qty": "1200000" },
@@ -107,10 +143,44 @@ impl KiwoomHttpOverride for FakeKiwoom {
                 }]
             })),
             "kt00001" => Ok(json!({ "ord_alow_amt": "15000000" })),
-            "ust10001" => Ok(json!({ "ord_psbl_frcr_amt": "8500.25" })),
-            "ust10002" => Ok(json!({ "output": [] })),
+            "ust21110" => Ok(json!({
+                "result_list": [
+                    { "crnc_code": "USD", "fc_ord_alowa": "8500.25", "fc_entra": "8500.25" }
+                ]
+            })),
+            "ust21070" => Ok(json!({
+                "tot_evlt_amt": "2305.00",
+                "tot_pl_amt": "105.00",
+                "result_list": [{
+                    "stk_cd": "AAPL",
+                    "frgn_stk_nm": "애플",
+                    "poss_qty": "000000000010",
+                    "sell_alowq": "000000000010",
+                    "frgn_stk_book_uv": "220.0000",
+                    "now_pric": "230.5000",
+                    "evlt_amt": "2305.0000",
+                    "pl_amt": "105.0000",
+                    "pl_rt": "4.77"
+                }]
+            })),
+            "ust21510" => Ok(json!({
+                "result_lsit": [{
+                    "ord_no": "KW-US-001",
+                    "stk_cd": "AAPL",
+                    "frgn_stk_nm": "애플",
+                    "slby_tp": "2",
+                    "slby_tp_nm": "매수",
+                    "ord_qty": "000000000002",
+                    "cntr_qty": "000000000000",
+                    "ord_remnq": "000000000002",
+                    "ord_uv": "230.5000",
+                    "ord_stat": "접수",
+                    "ord_time": "22:35:00"
+                }]
+            })),
             "kt10000" => Ok(json!({ "ord_no": "KW-KR-001" })),
             "ust20000" => Ok(json!({ "ord_no": "KW-US-001" })),
+            "ust20003" => Ok(json!({ "ord_no": "KW-US-001" })),
             "kt10003" => Ok(json!({ "ord_no": "KW-KR-001" })),
             "ka10075" => Ok(json!({
                 "oso": [{
@@ -260,14 +330,43 @@ async fn kiwoom_rest_account_market_trading_and_conditions_e2e() {
     assert_eq!(st, StatusCode::OK);
     assert_eq!(srch["items"][0]["symbol"], json!("005930"));
 
-    // 4. Account summary (KR + USD buying power + holdings) & OCO graceful notice
+    // 3b. Official Kiwoom US stock candles (usa06012 daily + usa06011 minute), quote (usa20100), orderbook (usa20101), search (usa10099)
+    let (st, us_candles) = c.req("GET", "/api/market/candles?market=US&symbol=AAPL&interval=1d&limit=10", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(us_candles["provider"], json!("kiwoom"));
+    assert_eq!(us_candles["candles"].as_array().unwrap().len(), 2);
+    assert_eq!(us_candles["candles"][1]["volume"], json!(45000000.0));
+
+    let (st, us_min) = c.req("GET", "/api/market/candles?market=US&symbol=AAPL&interval=1m&limit=10", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(us_min["candles"].as_array().unwrap().len(), 2);
+    assert_eq!(us_min["candles"][1]["close"], json!(230.5));
+
+    let (st, us_quote) = c.req("GET", "/api/market/quote?market=US&symbol=AAPL", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(us_quote["quote"]["price"], json!(230.5));
+    assert_eq!(us_quote["quote"]["change"], json!(2.5));
+    assert_eq!(us_quote["quote"]["currency"], json!("USD"));
+
+    let (st, us_book) = c.req("GET", "/api/market/orderbook?market=US&symbol=AAPL", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(us_book["orderbook"]["asks"][0]["price"], json!(230.55));
+    assert_eq!(us_book["orderbook"]["bids"][0]["price"], json!(230.48));
+
+    let (st, us_srch) = c.req("GET", "/api/market/search?market=US&q=NVDA", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(us_srch["items"][0]["symbol"], json!("NVDA"));
+
+    // 4. Account summary (KR + US holdings + USD buying power) & OCO graceful notice
     let (st, acc) = c.req("GET", "/api/account/summary", None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(acc["broker"], json!("kiwoom"));
     assert_eq!(acc["kiwoom_mock"], json!(true));
     assert_eq!(acc["buying_power"]["KRW"], json!(15000000.0));
     assert_eq!(acc["buying_power"]["USD"], json!(8500.25));
+    assert_eq!(acc["holdings"]["items"].as_array().unwrap().len(), 2);
     assert_eq!(acc["holdings"]["items"][0]["symbol"], json!("005930"));
+    assert_eq!(acc["holdings"]["items"][1]["symbol"], json!("AAPL"));
 
     let (st, cond) = c.req("GET", "/api/account/conditional-orders?status=OPEN", None).await;
     assert_eq!(st, StatusCode::OK);
@@ -311,11 +410,17 @@ async fn kiwoom_rest_account_market_trading_and_conditions_e2e() {
 
     let (st, open) = c.req("GET", "/api/trading/orders?status=OPEN", None).await;
     assert_eq!(st, StatusCode::OK);
+    assert_eq!(open["items"].as_array().unwrap().len(), 2);
     assert_eq!(open["items"][0]["orderId"], json!("KW-KR-001"));
+    assert_eq!(open["items"][1]["orderId"], json!("KW-US-001"));
 
     let (st, canceled) = c.req("POST", "/api/trading/orders/KW-KR-001/cancel", None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(canceled["result"]["status"], json!("CANCELED"));
+
+    let (st, canceled_us) = c.req("POST", "/api/trading/orders/KW-US-001/cancel", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(canceled_us["result"]["status"], json!("CANCELED"));
 
     // 6. Phase 3: Kiwoom HTS Condition Search (CNSRLST / CNSRREQ)
     let (st, clist) = c.req("GET", "/api/kiwoom/conditions", None).await;
@@ -329,10 +434,13 @@ async fn kiwoom_rest_account_market_trading_and_conditions_e2e() {
     assert_eq!(cmatches["items"][0]["symbol"], json!("005930"));
     assert_eq!(cmatches["items"][0]["price"], json!(72000.0));
 
-    // Verify all TR calls used mock mode as configured
+    // Verify all TR calls used mock mode as configured and hit official KR + US TR IDs
     let calls = fake_kw.calls.lock();
     assert!(calls.iter().all(|(is_mock, _, _, _)| *is_mock));
-    assert!(calls.iter().any(|(_, _, id, _)| id == "kt10000"));
-    assert!(calls.iter().any(|(_, _, id, _)| id == "ust20000"));
-    assert!(calls.iter().any(|(_, _, id, _)| id == "kt10003"));
+    for tr in [
+        "kt10000", "kt10003", "usa10098", "usa10099", "usa20100", "usa20101", "usa20151",
+        "usa06011", "usa06012", "ust21070", "ust21110", "ust21510", "ust20000", "ust20003",
+    ] {
+        assert!(calls.iter().any(|(_, _, id, _)| id == tr), "missing expected TR {tr}");
+    }
 }
