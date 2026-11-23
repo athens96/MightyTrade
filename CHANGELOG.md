@@ -2,6 +2,20 @@
 
 이 프로젝트의 주요 변경 사항은 [Semantic Versioning](https://semver.org/lang/ko/) 규칙에 따라 기록됩니다.
 
+## [0.3.0] - 2026-11-23
+
+### Added
+- **키움증권 공식 REST API 1~3단계 풀스택 통합 (`MT-20`, `MT-21`, `MT-22`)**:
+  - **1단계 · 멀티 브로커 & 키움 REST 핵심 연동 (`MT-20`)**:
+    - 사용자별 멀티 브로커 자격증명(`toss` / `kiwoom`) 및 활성 증권사 전환 API(`GET /api/users/me/brokers`, `PUT /api/users/me/broker/active`, `GET/PUT/DELETE /api/users/me/broker/kiwoom`) 추가 (브라우저 RSA-3072 + AES-256-GCM 이중 암호화 전송 및 OTP 6자리 검증 적용, 기존 토스 API 100% 하위 호환).
+    - 키움 REST API 클라이언트(`server-rs/src/integrations/kiwoom.rs`) 및 통합 브로커 파사드(`BrokerClient`) 구현: OAuth2(`au10001`) 암호화 토큰 캐시·자동 갱신, 실전(`api.kiwoom.com`)·공식 모의투자(`mockapi.kiwoom.com`) 전환, 유량 제어(Rate Limiter), 국내(`ka10001`/`ka10004`/`ka10003`/`ka10059`/`ka10080`/`ka10081`/`ka10099`/`ka20001`/`kt00001`/`kt00018`/`ka10075`/`ka10076`/`kt10000~kt10003`) 및 미국(`/api/us/*`) 시세·계좌·주문·6종 자동매매 봇 라우팅 지원.
+    - 설정 화면 멀티 브로커 전환 카드 + 키움 실전/공식 모의 등록 폼 + 5단계 화면별 시각적 도움말 모달(`KiwoomGuideModal`)·허용 IP 원클릭 복사 추가 및 계좌 화면 브로커 배지 표시.
+  - **2단계 · 실시간 호가·체결 WebSocket SSE 중계 (`MT-21`)**:
+    - `realtime/hub.rs` 멀티 브로커 확장: 키움 공식 WebSocket(`wss://api.kiwoom.com:10000/api/dostk/websocket` · 모의 `mockapi`) `LOGIN`·`PING` 에코·`REG`/`REMOVE` 동적 구독·`REAL`(`0B` 체결, `0D` 10호가) 파서를 구현하여 기존 대시보드 호가/체결 SSE 스트림과 seamless 연동.
+  - **3단계 · 영웅문 사용자 조건검색식 연동 (`MT-22`)**:
+    - `GET /api/kiwoom/conditions` (`CNSRLST`) 및 `GET /api/kiwoom/conditions/{seq}/matches` (`CNSRREQ`) 엔드포인트 추가.
+    - 퀀트 랩 `[종목 발굴]` 탭에 `KiwoomConditionsPanel`을 추가해 영웅문4 HTS 서버 저장 조건검색식 충족 종목을 즉시 조회하고 백테스트·상위 5종 포트폴리오·자동매매 봇으로 바로 연결.
+
 ## [0.2.2] - 2026-11-23
 
 ### Added

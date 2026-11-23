@@ -3,25 +3,28 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::errors::{ApiError, ApiResult};
-use crate::integrations::toss::TossClient;
+use crate::integrations::broker::BrokerClient;
 use crate::market::extras::normalize;
 use crate::market::models::Market;
 use crate::state::AppState;
 use crate::trading::ticks::{fmt_price, round_price};
-use crate::users::credentials;
+use crate::users::credentials::{self, BrokerKind};
 
 pub const HIGH_VALUE_KRW: f64 = 100_000_000.0;
 static COND_ID_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[A-Za-z0-9\-_]{1,64}$").unwrap());
 
-pub fn account_client(state: &AppState, user_id: &str) -> ApiResult<(Arc<TossClient>, i64)> {
+pub fn account_client(state: &AppState, user_id: &str) -> ApiResult<(BrokerClient, i64)> {
+    if credentials::active_broker(state, user_id) == BrokerKind::Kiwoom {
+        let client = state.get_kiwoom_client(user_id)?;
+        return Ok((BrokerClient::Kiwoom(client), 0));
+    }
     let creds = credentials::get_toss(state, user_id).ok_or_else(|| {
         ApiError::conflict(
             "toss_credentials_required",
-            "토스증권 API 키를 먼저 등록하세요 (설정)",
+            "증권사 API 키(토스증권 또는 키움증권)를 먼저 등록하세요 (설정)",
         )
     })?;
     let seq = creds.account_seq.ok_or_else(|| {
@@ -31,7 +34,7 @@ pub fn account_client(state: &AppState, user_id: &str) -> ApiResult<(Arc<TossCli
         )
     })?;
     let client = state.get_toss_client(user_id)?;
-    Ok((client, seq))
+    Ok((BrokerClient::Toss(client), seq))
 }
 
 pub async fn summary(state: &AppState, user_id: &str) -> ApiResult<Value> {
@@ -59,7 +62,16 @@ pub async fn summary(state: &AppState, user_id: &str) -> ApiResult<Value> {
             r.get("cashBuyingPower").cloned().unwrap_or(Value::Null),
         );
     }
-    Ok(json!({ "holdings": holdings, "buying_power": Value::Object(bp) }))
+    let is_mock = match &client {
+        BrokerClient::Kiwoom(k) => Some(k.is_mock),
+        BrokerClient::Toss(_) => None,
+    };
+    Ok(json!({
+        "broker": client.kind().as_str(),
+        "kiwoom_mock": is_mock,
+        "holdings": holdings,
+        "buying_power": Value::Object(bp),
+    }))
 }
 
 pub async fn conditional_orders(

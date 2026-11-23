@@ -149,10 +149,10 @@ fn require_toss(state: &AppState, market: Market) -> ApiResult<()> {
         .get(market.as_str())
         .map(|s| s.as_str())
         .unwrap_or("mock");
-    if prov != "toss" {
+    if !matches!(prov, "toss" | "kiwoom" | "broker") {
         return Err(ApiError::not_implemented(
             "requires_toss",
-            "토스증권 시세 연동에서만 제공됩니다",
+            "증권사 실시간 시세 연동에서만 제공됩니다",
         ));
     }
     Ok(())
@@ -240,12 +240,13 @@ pub fn session_status(market: &str, cal: &Value, now: DateTime<Utc>) -> Value {
 }
 
 pub async fn calendar(state: &AppState, user_id: &str, market: &str) -> ApiResult<Value> {
+    let broker = crate::users::credentials::active_broker(state, user_id).as_str();
     let today = Utc::now().date_naive().to_string();
-    let key = format!("{user_id}:calendar:{market}:{today}");
+    let key = format!("{user_id}:{broker}:calendar:{market}:{today}");
     if let Some(hit) = state.market_extras.get(&key) {
         return Ok(hit);
     }
-    let client = state.get_toss_client(user_id)?;
+    let client = state.get_broker_client(user_id)?;
     let cal = client
         .request("GET", &format!("/api/v1/market-calendar/{market}"), None, None, None)
         .await?
@@ -290,11 +291,12 @@ pub async fn regular_session(
 
 pub async fn overview(state: &AppState, user_id: &str) -> ApiResult<Value> {
     require_toss(state, Market::KR)?;
-    let idx_key = format!("{user_id}:indices");
+    let broker = crate::users::credentials::active_broker(state, user_id).as_str();
+    let idx_key = format!("{user_id}:{broker}:indices");
     let indices = if let Some(hit) = state.market_extras.get(&idx_key) {
         hit
     } else {
-        let client = state.get_toss_client(user_id)?;
+        let client = state.get_broker_client(user_id)?;
         let mut params = HashMap::new();
         params.insert("symbols".to_string(), INDICES.join(","));
         let rows = client
@@ -359,11 +361,12 @@ pub async fn overview(state: &AppState, user_id: &str) -> ApiResult<Value> {
 pub async fn warnings(state: &AppState, user_id: &str, market: Market, symbol: &str) -> ApiResult<Value> {
     require_toss(state, market)?;
     check_symbol(market, symbol)?;
-    let key = format!("{user_id}:warnings:{symbol}");
+    let broker = crate::users::credentials::active_broker(state, user_id).as_str();
+    let key = format!("{user_id}:{broker}:warnings:{symbol}");
     if let Some(hit) = state.market_extras.get(&key) {
         return Ok(hit);
     }
-    let client = state.get_toss_client(user_id)?;
+    let client = state.get_broker_client(user_id)?;
     let rows = client
         .request("GET", &format!("/api/v1/stocks/{symbol}/warnings"), None, None, None)
         .await?
@@ -391,11 +394,12 @@ pub async fn warnings(state: &AppState, user_id: &str, market: Market, symbol: &
 pub async fn investor_flow(state: &AppState, user_id: &str, symbol: &str, count: usize) -> ApiResult<Value> {
     require_toss(state, Market::KR)?;
     check_symbol(Market::KR, symbol)?;
-    let key = format!("{user_id}:flow:{symbol}:{count}");
+    let broker = crate::users::credentials::active_broker(state, user_id).as_str();
+    let key = format!("{user_id}:{broker}:flow:{symbol}:{count}");
     if let Some(hit) = state.market_extras.get(&key) {
         return Ok(json!({ "records": hit }));
     }
-    let client = state.get_toss_client(user_id)?;
+    let client = state.get_broker_client(user_id)?;
     let mut params = HashMap::new();
     params.insert("count".to_string(), count.to_string());
     let r = client
@@ -438,7 +442,7 @@ pub async fn investor_flow(state: &AppState, user_id: &str, symbol: &str, count:
 pub async fn orderbook(state: &AppState, user_id: &str, market: Market, symbol: &str) -> ApiResult<Value> {
     require_toss(state, market)?;
     check_symbol(market, symbol)?;
-    let client = state.get_toss_client(user_id)?;
+    let client = state.get_broker_client(user_id)?;
     let mut p1 = HashMap::new();
     p1.insert("symbol".to_string(), symbol.to_string());
     let book = normalize(

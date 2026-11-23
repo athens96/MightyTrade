@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
@@ -13,7 +13,9 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::integrations::kiwoom::{parse_kiwoom_abs, parse_kiwoom_signed, strip_kr_prefix};
 use crate::state::AppState;
+use crate::users::credentials::{self, BrokerKind};
 
 const WS_URL: &str = "wss://openapi-ws.tossinvest.com/ws/v1";
 const MAX_CODES: usize = 100;
@@ -140,6 +142,7 @@ pub struct UserStream {
     uid: String,
     inner: Mutex<StreamInner>,
     decl_notify: Notify,
+    stopped: AtomicBool,
 }
 
 impl UserStream {
@@ -152,7 +155,13 @@ impl UserStream {
                 status: json!({ "state": "connecting" }),
             }),
             decl_notify: Notify::new(),
+            stopped: AtomicBool::new(false),
         }
+    }
+
+    fn force_stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.decl_notify.notify_one();
     }
 
     fn add(&self, sub: Arc<Subscriber>) {
@@ -241,13 +250,171 @@ impl UserStream {
     }
 
     fn idle_expired(&self) -> bool {
+        if self.stopped.load(Ordering::SeqCst) {
+            return true;
+        }
         let g = self.inner.lock();
         g.empty_since
             .map(|t| t.elapsed() > IDLE_STOP)
             .unwrap_or(false)
     }
 
+    fn kiwoom_kr_symbols(&self) -> Vec<String> {
+        let mut syms: Vec<String> = {
+            let g = self.inner.lock();
+            g.subs
+                .values()
+                .flat_map(|s| s.topics.iter())
+                .filter_map(|t| {
+                    let parts: Vec<&str> = t.splitn(3, ':').collect();
+                    if parts.len() == 3
+                        && parts[1] == "kr"
+                        && matches!(parts[0], "trade" | "orderbook")
+                    {
+                        Some(parts[2].to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect()
+        };
+        syms.sort();
+        syms.truncate(MAX_CODES);
+        syms
+    }
+
     async fn run(self: Arc<Self>, hub: Arc<Hub>, state: AppState) {
+        if credentials::active_broker(&state, &self.uid) == BrokerKind::Kiwoom {
+            self.run_kiwoom(hub, state).await;
+        } else {
+            self.run_toss(hub, state).await;
+        }
+    }
+
+    async fn run_kiwoom(self: Arc<Self>, hub: Arc<Hub>, state: AppState) {
+        let mut backoff = Duration::from_secs(1);
+        let mut rejected: Option<String> = None;
+
+        while !self.idle_expired() {
+            let conn_info = async {
+                let client = state.get_kiwoom_client(&self.uid)?;
+                let token = client.access_token(rejected.as_deref()).await?;
+                Ok::<(String, String), crate::errors::ApiError>((client.ws_url().to_string(), token))
+            }
+            .await;
+
+            let (ws_url, token) = match conn_info {
+                Ok(pair) => {
+                    rejected = None;
+                    pair
+                }
+                Err(e) => {
+                    self.set_status("reconnecting", &e.message);
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(30));
+                    continue;
+                }
+            };
+
+            match tokio_tungstenite::connect_async(&ws_url).await {
+                Ok((ws_stream, _)) => {
+                    let (mut write, mut read) = ws_stream.split();
+                    let login = json!({ "trnm": "LOGIN", "token": token }).to_string();
+                    if write.send(Message::Text(login.into())).await.is_err() {
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(Duration::from_secs(30));
+                        continue;
+                    }
+                    let mut logged_in = false;
+                    let mut sent_syms: Option<Vec<String>> = None;
+                    let mut last_reg = Instant::now() - Duration::from_secs(1);
+                    let mut tick = tokio::time::interval(Duration::from_millis(250));
+
+                    loop {
+                        if self.idle_expired() {
+                            let _ = write.close().await;
+                            break;
+                        }
+                        if logged_in {
+                            let syms = self.kiwoom_kr_symbols();
+                            if sent_syms.as_ref() != Some(&syms)
+                                && last_reg.elapsed() >= Duration::from_millis(250)
+                            {
+                                let reg = build_kiwoom_reg_frame(&syms);
+                                if write.send(Message::Text(reg.to_string().into())).await.is_err() {
+                                    break;
+                                }
+                                sent_syms = Some(syms);
+                                last_reg = Instant::now();
+                            }
+                        }
+
+                        tokio::select! {
+                            _ = tick.tick() => {}
+                            _ = self.decl_notify.notified() => {}
+                            msg = read.next() => {
+                                match msg {
+                                    Some(Ok(Message::Text(txt))) => {
+                                        if let Ok(parsed) = serde_json::from_str::<Value>(&txt) {
+                                            match parsed.get("trnm").and_then(|v| v.as_str()) {
+                                                Some("PING") => {
+                                                    if write.send(Message::Text(txt)).await.is_err() {
+                                                        break;
+                                                    }
+                                                }
+                                                Some("LOGIN") => {
+                                                    let rc = parsed
+                                                        .get("return_code")
+                                                        .and_then(|v| v.as_i64())
+                                                        .unwrap_or(0);
+                                                    if rc == 0 {
+                                                        logged_in = true;
+                                                        backoff = Duration::from_secs(1);
+                                                        self.set_status("connected", "");
+                                                    } else {
+                                                        let msg = parsed
+                                                            .get("return_msg")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("키움 웹소켓 인증 실패");
+                                                        self.set_status("reconnecting", msg);
+                                                        rejected = Some(token.clone());
+                                                        break;
+                                                    }
+                                                }
+                                                Some("REAL") => {
+                                                    for (topic, payload) in parse_kiwoom_real_frame(&parsed) {
+                                                        self.dispatch(&topic, payload);
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    Some(Ok(Message::Ping(p))) => {
+                                        let _ = write.send(Message::Pong(p)).await;
+                                    }
+                                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg: String = e.to_string().chars().take(200).collect();
+                    self.set_status("reconnecting", &msg);
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(30));
+                }
+            }
+        }
+
+        hub.cleanup(&self.uid, &self);
+    }
+
+    async fn run_toss(self: Arc<Self>, hub: Arc<Hub>, state: AppState) {
         let mut backoff = Duration::from_secs(1);
         let mut rejected: Option<String> = None;
         let mut seq: u64 = 0;
@@ -438,5 +605,162 @@ impl Hub {
 
     pub fn active_users(&self) -> usize {
         self.streams.len()
+    }
+
+    pub fn disconnect_user(&self, uid: &str) {
+        if let Some((_, stream)) = self.streams.remove(uid) {
+            stream.force_stop();
+        }
+    }
+}
+
+pub fn build_kiwoom_reg_frame(syms: &[String]) -> Value {
+    if syms.is_empty() {
+        return json!({
+            "trnm": "REMOVE",
+            "grp_no": "1",
+            "data": [{ "item": [""], "type": ["0B", "0D"] }],
+        });
+    }
+    json!({
+        "trnm": "REG",
+        "grp_no": "1",
+        "refresh": "1",
+        "data": [{ "item": syms, "type": ["0B", "0D"] }],
+    })
+}
+
+pub fn parse_kiwoom_real_frame(parsed: &Value) -> Vec<(String, Value)> {
+    let mut out = Vec::new();
+    // Kiwoom REAL frames can be either a single object or carry a "data" array of entries.
+    if let Some(arr) = parsed.get("data").and_then(|v| v.as_array()) {
+        for entry in arr {
+            if let Some(ev) = parse_kiwoom_real_entry(entry) {
+                out.push(ev);
+            }
+        }
+        return out;
+    }
+    if let Some(ev) = parse_kiwoom_real_entry(parsed) {
+        out.push(ev);
+    }
+    out
+}
+
+fn parse_kiwoom_real_entry(entry: &Value) -> Option<(String, Value)> {
+    let rtype = entry.get("type").and_then(|v| v.as_str())?;
+    let raw_item = entry.get("item").and_then(|v| v.as_str())?;
+    let sym = strip_kr_prefix(raw_item);
+    if sym.is_empty() {
+        return None;
+    }
+    let vals = entry.get("values")?.as_object()?;
+
+    match rtype {
+        "0B" => {
+            let price = parse_kiwoom_abs(vals.get("10"))?;
+            let raw_vol = parse_kiwoom_signed(vals.get("15")).unwrap_or(0.0);
+            let side = if raw_vol < 0.0 { "SELL" } else { "BUY" };
+            let ts = vals.get("20").and_then(|v| v.as_str()).unwrap_or("");
+            Some((
+                format!("trade:kr:{sym}"),
+                json!({
+                    "price": price,
+                    "volume": raw_vol.abs(),
+                    "side": side,
+                    "timestamp": ts,
+                }),
+            ))
+        }
+        "0D" => {
+            let mut asks = Vec::new();
+            let mut bids = Vec::new();
+            for i in 0..10 {
+                let ap_k = (41 + i).to_string();
+                let aq_k = (61 + i).to_string();
+                if let Some(px) = parse_kiwoom_abs(vals.get(&ap_k)) {
+                    if px > 0.0 {
+                        let q = parse_kiwoom_abs(vals.get(&aq_k)).unwrap_or(0.0);
+                        asks.push(json!({ "price": px, "volume": q }));
+                    }
+                }
+                let bp_k = (51 + i).to_string();
+                let bq_k = (71 + i).to_string();
+                if let Some(px) = parse_kiwoom_abs(vals.get(&bp_k)) {
+                    if px > 0.0 {
+                        let q = parse_kiwoom_abs(vals.get(&bq_k)).unwrap_or(0.0);
+                        bids.push(json!({ "price": px, "volume": q }));
+                    }
+                }
+            }
+            let tot_ask = parse_kiwoom_abs(vals.get("121")).unwrap_or_else(|| {
+                asks.iter().filter_map(|x| x["volume"].as_f64()).sum()
+            });
+            let tot_bid = parse_kiwoom_abs(vals.get("125")).unwrap_or_else(|| {
+                bids.iter().filter_map(|x| x["volume"].as_f64()).sum()
+            });
+            Some((
+                format!("orderbook:kr:{sym}"),
+                json!({
+                    "asks": asks,
+                    "bids": bids,
+                    "totalAskVolume": tot_ask,
+                    "totalBidVolume": tot_bid,
+                }),
+            ))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod kiwoom_ws_tests {
+    use super::*;
+
+    #[test]
+    fn parses_kiwoom_0b_trade_and_0d_orderbook_frames() {
+        let trade_frame = json!({
+            "trnm": "REAL",
+            "type": "0B",
+            "item": "A005930",
+            "values": { "10": "+71200", "15": "-42", "20": "101530" }
+        });
+        let evs = parse_kiwoom_real_frame(&trade_frame);
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].0, "trade:kr:005930");
+        assert_eq!(evs[0].1["price"], json!(71200.0));
+        assert_eq!(evs[0].1["volume"], json!(42.0));
+        assert_eq!(evs[0].1["side"], json!("SELL"));
+
+        let book_frame = json!({
+            "trnm": "REAL",
+            "data": [{
+                "type": "0D",
+                "item": "005930",
+                "values": {
+                    "41": "71300", "61": "1200",
+                    "42": "71400", "62": "800",
+                    "51": "71200", "71": "1500",
+                    "52": "71100", "72": "900",
+                    "121": "2000", "125": "2400"
+                }
+            }]
+        });
+        let books = parse_kiwoom_real_frame(&book_frame);
+        assert_eq!(books.len(), 1);
+        assert_eq!(books[0].0, "orderbook:kr:005930");
+        assert_eq!(books[0].1["asks"].as_array().unwrap().len(), 2);
+        assert_eq!(books[0].1["bids"].as_array().unwrap().len(), 2);
+        assert_eq!(books[0].1["totalAskVolume"], json!(2000.0));
+        assert_eq!(books[0].1["totalBidVolume"], json!(2400.0));
+    }
+
+    #[test]
+    fn builds_kiwoom_reg_and_remove_frames() {
+        let reg = build_kiwoom_reg_frame(&["005930".to_string(), "000660".to_string()]);
+        assert_eq!(reg["trnm"], json!("REG"));
+        assert_eq!(reg["data"][0]["item"], json!(["005930", "000660"]));
+        let rem = build_kiwoom_reg_frame(&[]);
+        assert_eq!(rem["trnm"], json!("REMOVE"));
     }
 }

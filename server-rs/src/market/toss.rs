@@ -9,7 +9,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use super::aggregate::{resample_intraday, resample_weekly};
 use super::models::{Candle, Instrument, Interval, Market, Quote};
 use crate::errors::{ApiError, ApiResult};
-use crate::integrations::toss::TossClient;
+use crate::integrations::broker::BrokerClient;
 use crate::state::AppState;
 
 const PAGE_SIZE: usize = 200;
@@ -100,8 +100,10 @@ impl TossMarketProvider {
         base: &str,
         needed: usize,
     ) -> ApiResult<Vec<Candle>> {
+        let client = state.get_broker_client(user_id)?;
+        let scoped_uid = format!("{user_id}:{}", client.kind().as_str());
         let key = (
-            user_id.to_string(),
+            scoped_uid,
             symbol.to_string(),
             base.to_string(),
             needed,
@@ -113,7 +115,6 @@ impl TossMarketProvider {
             }
         }
 
-        let client = state.get_toss_client(user_id)?;
         let mut by_time: BTreeMap<i64, Candle> = BTreeMap::new();
         let mut before: Option<String> = None;
 
@@ -213,9 +214,10 @@ impl TossMarketProvider {
                 "백테스트는 현재 일봉만 지원합니다",
             ));
         }
+        let client = state.get_broker_client(user_id)?;
         let day_key = (start_ts.max(0) / 86400) as usize;
         let key = (
-            user_id.to_string(),
+            format!("{user_id}:{}", client.kind().as_str()),
             symbol.to_string(),
             "1d-history".to_string(),
             day_key,
@@ -227,7 +229,6 @@ impl TossMarketProvider {
             }
         }
 
-        let client = state.get_toss_client(user_id)?;
         let mut by_time: BTreeMap<i64, Candle> = BTreeMap::new();
         let mut before: Option<String> = None;
 
@@ -325,7 +326,7 @@ impl TossMarketProvider {
         symbol: &str,
     ) -> ApiResult<Quote> {
         Self::check(market, symbol)?;
-        let client = state.get_toss_client(user_id)?;
+        let client = state.get_broker_client(user_id)?;
         let mut params = HashMap::new();
         params.insert("symbols".to_string(), symbol.to_string());
         let rows = client
@@ -360,7 +361,7 @@ impl TossMarketProvider {
         if valid.is_empty() {
             return Ok(out);
         }
-        let client = state.get_toss_client(user_id)?;
+        let client = state.get_broker_client(user_id)?;
         let mut params = HashMap::new();
         params.insert("symbols".to_string(), valid.join(","));
         let rows = client
@@ -390,9 +391,9 @@ impl TossMarketProvider {
         Ok(out)
     }
 
-    async fn enrich_chunk(client: &TossClient, syms: &[String]) -> HashMap<String, String> {
+    async fn enrich_chunk(client: &BrokerClient, syms: &[String]) -> HashMap<String, String> {
         let mut out = HashMap::new();
-        if syms.is_empty() {
+        if syms.is_empty() || client.is_kiwoom() {
             return out;
         }
         let mut params = HashMap::new();
@@ -422,7 +423,8 @@ impl TossMarketProvider {
         user_id: &str,
         market: Market,
     ) -> ApiResult<Vec<Instrument>> {
-        let key = (user_id.to_string(), market);
+        let client = state.get_broker_client(user_id)?;
+        let key = (format!("{user_id}:{}", client.kind().as_str()), market);
         let now = now_secs();
         if let Some(hit) = self.stocks.get(&key) {
             if hit.0 > now {
@@ -444,14 +446,13 @@ impl TossMarketProvider {
             }
         }
 
-        let client = state.get_toss_client(user_id)?;
         let markets: &[&str] = match market {
             Market::KR => &["KOSPI", "KOSDAQ", "KR_ETC"],
             Market::US => &["NASDAQ", "NYSE", "AMEX", "US_ETC"],
         };
         let mut items: Vec<Instrument> = Vec::new();
         for (i, m) in markets.iter().enumerate() {
-            if i > 0 {
+            if i > 0 && !client.is_kiwoom() {
                 tokio::time::sleep(Duration::from_millis(1050)).await;
             }
             let mut params = HashMap::new();

@@ -16,11 +16,46 @@ pub const DEFAULT_NOTIFY_EVENT_KEYS: [(&str, bool); 5] = [
     ("briefing", true),
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrokerKind {
+    Toss,
+    Kiwoom,
+}
+
+impl BrokerKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Toss => "toss",
+            Self::Kiwoom => "kiwoom",
+        }
+    }
+
+    pub fn parse(raw: &str) -> ApiResult<Self> {
+        match raw.trim().to_lowercase().as_str() {
+            "toss" => Ok(Self::Toss),
+            "kiwoom" => Ok(Self::Kiwoom),
+            _ => Err(ApiError::bad_request(
+                "invalid_broker",
+                "지원하는 증권사는 toss 또는 kiwoom 입니다",
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TossCreds {
     pub client_id: String,
     pub client_secret: String,
     pub account_seq: Option<i64>,
+    pub version: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct KiwoomCreds {
+    pub appkey: String,
+    pub secretkey: String,
+    pub account_no: String,
+    pub is_mock: bool,
     pub version: String,
 }
 
@@ -129,6 +164,171 @@ pub fn public_view(state: &AppState, user_id: &str) -> Value {
         "client_id_masked": toss.get("client_id_masked").cloned().unwrap_or(Value::Null),
         "account_seq": toss.get("account_seq").cloned().unwrap_or(Value::Null),
         "verified_at": toss.get("verified_at").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn mask_account_no(raw: &str) -> String {
+    let digits: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() <= 4 {
+        return digits;
+    }
+    let head = &digits[..4];
+    let tail = &digits[digits.len() - 2..];
+    format!("{head}****{tail}")
+}
+
+pub fn save_kiwoom(
+    state: &AppState,
+    user_id: &str,
+    appkey: &str,
+    secretkey: &str,
+    account_no: &str,
+    is_mock: bool,
+    activate: bool,
+) -> Value {
+    let mut rec = state
+        .store
+        .get(CREDENTIALS, user_id)
+        .unwrap_or_else(|| json!({}));
+    let now = now_iso();
+    let clean_acct: String = account_no.chars().filter(|c| c.is_ascii_digit()).collect();
+    let kiwoom_val = json!({
+        "appkey_enc": state.crypto.encrypt(appkey),
+        "secretkey_enc": state.crypto.encrypt(secretkey),
+        "appkey_masked": mask(appkey),
+        "account_no_enc": if clean_acct.is_empty() { Value::Null } else { json!(state.crypto.encrypt(&clean_acct)) },
+        "account_no_masked": if clean_acct.is_empty() { Value::Null } else { json!(mask_account_no(&clean_acct)) },
+        "is_mock": is_mock,
+        "verified_at": now,
+        "updated_at": now,
+    });
+    if let Some(obj) = rec.as_object_mut() {
+        let has_toss = obj.get("toss").and_then(|v| v.as_object()).is_some();
+        obj.insert("kiwoom".to_string(), kiwoom_val);
+        if activate || !has_toss {
+            obj.insert("active_broker".to_string(), json!("kiwoom"));
+        }
+    }
+    state.store.put(CREDENTIALS, user_id, rec);
+    public_kiwoom_view(state, user_id)
+}
+
+pub fn get_kiwoom(state: &AppState, user_id: &str) -> Option<KiwoomCreds> {
+    let rec = state.store.get(CREDENTIALS, user_id)?;
+    let kw = rec.get("kiwoom")?.as_object()?;
+    let ak_enc = kw.get("appkey_enc")?.as_str()?;
+    let sk_enc = kw.get("secretkey_enc")?.as_str()?;
+    let appkey = state.crypto.decrypt(ak_enc).ok()?;
+    let secretkey = state.crypto.decrypt(sk_enc).ok()?;
+    let account_no = kw
+        .get("account_no_enc")
+        .and_then(|v| v.as_str())
+        .and_then(|s| state.crypto.decrypt(s).ok())
+        .unwrap_or_default();
+    let is_mock = kw.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false);
+    let version = kw
+        .get("updated_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some(KiwoomCreds {
+        appkey,
+        secretkey,
+        account_no,
+        is_mock,
+        version,
+    })
+}
+
+pub fn delete_kiwoom(state: &AppState, user_id: &str) -> bool {
+    let Some(mut rec) = state.store.get(CREDENTIALS, user_id) else {
+        return false;
+    };
+    let removed = rec.as_object_mut().and_then(|m| m.remove("kiwoom")).is_some();
+    if removed {
+        if let Some(obj) = rec.as_object_mut() {
+            if obj.get("active_broker").and_then(|v| v.as_str()) == Some("kiwoom") {
+                if obj.get("toss").and_then(|v| v.as_object()).is_some() {
+                    obj.insert("active_broker".to_string(), json!("toss"));
+                } else {
+                    obj.remove("active_broker");
+                }
+            }
+        }
+        state.store.put(CREDENTIALS, user_id, rec);
+    }
+    removed
+}
+
+pub fn public_kiwoom_view(state: &AppState, user_id: &str) -> Value {
+    let Some(rec) = state.store.get(CREDENTIALS, user_id) else {
+        return json!({ "configured": false });
+    };
+    let Some(kw) = rec.get("kiwoom").and_then(|v| v.as_object()) else {
+        return json!({ "configured": false });
+    };
+    json!({
+        "configured": true,
+        "appkey_masked": kw.get("appkey_masked").cloned().unwrap_or(Value::Null),
+        "account_no_masked": kw.get("account_no_masked").cloned().unwrap_or(Value::Null),
+        "is_mock": kw.get("is_mock").and_then(|v| v.as_bool()).unwrap_or(false),
+        "verified_at": kw.get("verified_at").cloned().unwrap_or(Value::Null),
+    })
+}
+
+pub fn active_broker(state: &AppState, user_id: &str) -> BrokerKind {
+    let Some(rec) = state.store.get(CREDENTIALS, user_id) else {
+        return BrokerKind::Toss;
+    };
+    let has_toss = rec.get("toss").and_then(|v| v.as_object()).is_some();
+    let has_kiwoom = rec.get("kiwoom").and_then(|v| v.as_object()).is_some();
+    match rec.get("active_broker").and_then(|v| v.as_str()) {
+        Some("kiwoom") if has_kiwoom => BrokerKind::Kiwoom,
+        Some("toss") if has_toss => BrokerKind::Toss,
+        _ if has_toss => BrokerKind::Toss,
+        _ if has_kiwoom => BrokerKind::Kiwoom,
+        _ => BrokerKind::Toss,
+    }
+}
+
+pub fn has_active_broker(state: &AppState, user_id: &str) -> bool {
+    match active_broker(state, user_id) {
+        BrokerKind::Toss => get_toss(state, user_id).is_some(),
+        BrokerKind::Kiwoom => get_kiwoom(state, user_id).is_some(),
+    }
+}
+
+pub fn set_active_broker(state: &AppState, user_id: &str, kind: BrokerKind) -> ApiResult<Value> {
+    let configured = match kind {
+        BrokerKind::Toss => get_toss(state, user_id).is_some(),
+        BrokerKind::Kiwoom => get_kiwoom(state, user_id).is_some(),
+    };
+    if !configured {
+        let label = match kind {
+            BrokerKind::Toss => "토스증권",
+            BrokerKind::Kiwoom => "키움증권",
+        };
+        return Err(ApiError::bad_request(
+            "broker_not_configured",
+            format!("먼저 {label} API 키를 등록하세요"),
+        ));
+    }
+    let mut rec = state
+        .store
+        .get(CREDENTIALS, user_id)
+        .unwrap_or_else(|| json!({}));
+    if let Some(obj) = rec.as_object_mut() {
+        obj.insert("active_broker".to_string(), json!(kind.as_str()));
+    }
+    state.store.put(CREDENTIALS, user_id, rec);
+    Ok(brokers_overview(state, user_id))
+}
+
+pub fn brokers_overview(state: &AppState, user_id: &str) -> Value {
+    json!({
+        "active_broker": active_broker(state, user_id).as_str(),
+        "toss": public_view(state, user_id),
+        "kiwoom": public_kiwoom_view(state, user_id),
     })
 }
 

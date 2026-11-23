@@ -10,6 +10,8 @@ use crate::autotrade::scheduler::SchedulerHandle;
 use crate::config::Config;
 use crate::crypto::Crypto;
 use crate::errors::ApiResult;
+use crate::integrations::broker::BrokerClient;
+use crate::integrations::kiwoom::{KiwoomClient, KiwoomHttpOverride};
 use crate::integrations::toss::{TossClient, TossHttpOverride};
 use crate::market::extras::ExtrasCache;
 use crate::market::toss::TossMarketProvider;
@@ -69,6 +71,8 @@ pub struct AppState {
     pub notifier_hook: Arc<dyn NotifierHook>,
     pub toss_clients: Arc<DashMap<String, (String, Arc<TossClient>)>>,
     pub toss_override: Option<Arc<dyn TossHttpOverride>>,
+    pub kiwoom_clients: Arc<DashMap<String, (String, Arc<KiwoomClient>)>>,
+    pub kiwoom_override: Option<Arc<dyn KiwoomHttpOverride>>,
     pub market_toss: Arc<TossMarketProvider>,
     pub market_extras: Arc<ExtrasCache>,
     pub realtime_hub: Arc<Hub>,
@@ -97,6 +101,8 @@ impl AppState {
             notifier_hook,
             toss_clients: Arc::new(DashMap::new()),
             toss_override: None,
+            kiwoom_clients: Arc::new(DashMap::new()),
+            kiwoom_override: None,
             market_toss: Arc::new(TossMarketProvider::new()),
             market_extras: Arc::new(ExtrasCache::new()),
             realtime_hub: Arc::new(Hub::new()),
@@ -136,5 +142,53 @@ impl AppState {
         self.toss_clients
             .insert(user_id.to_string(), (creds.version, client.clone()));
         Ok(client)
+    }
+
+    pub fn forget_kiwoom_client(&self, user_id: &str, appkey: Option<&str>, is_mock: bool) {
+        self.kiwoom_clients.remove(user_id);
+        if let Some(ak) = appkey {
+            self.store.delete(
+                crate::integrations::kiwoom::KIWOOM_TOKENS,
+                &crate::integrations::kiwoom::kiwoom_token_id(ak, is_mock),
+            );
+        }
+    }
+
+    pub fn get_kiwoom_client(&self, user_id: &str) -> ApiResult<Arc<KiwoomClient>> {
+        let creds = crate::users::credentials::get_kiwoom(self, user_id).ok_or_else(|| {
+            crate::errors::ApiError::conflict(
+                "kiwoom_credentials_required",
+                "키움증권 REST API 키를 먼저 등록하세요 (설정)",
+            )
+        })?;
+        if let Some(hit) = self.kiwoom_clients.get(user_id) {
+            if hit.0 == creds.version {
+                return Ok(hit.1.clone());
+            }
+        }
+        let client = Arc::new(KiwoomClient::new(
+            creds.appkey,
+            creds.secretkey,
+            creds.account_no,
+            creds.is_mock,
+            self.store.clone(),
+            self.crypto.clone(),
+            self.http.clone(),
+            self.kiwoom_override.clone(),
+        )?);
+        self.kiwoom_clients
+            .insert(user_id.to_string(), (creds.version, client.clone()));
+        Ok(client)
+    }
+
+    pub fn get_broker_client(&self, user_id: &str) -> ApiResult<BrokerClient> {
+        match crate::users::credentials::active_broker(self, user_id) {
+            crate::users::credentials::BrokerKind::Toss => {
+                Ok(BrokerClient::Toss(self.get_toss_client(user_id)?))
+            }
+            crate::users::credentials::BrokerKind::Kiwoom => {
+                Ok(BrokerClient::Kiwoom(self.get_kiwoom_client(user_id)?))
+            }
+        }
     }
 }

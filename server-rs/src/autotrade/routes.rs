@@ -42,10 +42,10 @@ fn fresh_user(state: &AppState, fallback: &Value) -> Value {
 }
 
 fn need_toss(state: &AppState, uid: &str) -> ApiResult<()> {
-    if credentials::get_toss(state, uid).is_none() {
+    if !credentials::has_active_broker(state, uid) {
         return Err(ApiError::conflict(
             "toss_credentials_required",
-            "토스증권 API 키를 먼저 등록하세요 (설정)",
+            "증권사 API 키(토스증권 또는 키움증권)를 먼저 등록하세요 (설정)",
         ));
     }
     Ok(())

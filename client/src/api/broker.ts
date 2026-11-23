@@ -1,12 +1,52 @@
 import { api } from './client'
 import { sealWithKey, type TransportKey } from '../lib/secureEnvelope'
 
+export type BrokerKind = 'toss' | 'kiwoom'
+
 export interface TossCredentialStatus {
   configured: boolean
   client_id_masked?: string
   account_seq?: number | null
   verified_at?: string
   server_ip?: string | null
+}
+
+export interface KiwoomCredentialStatus {
+  configured: boolean
+  appkey_masked?: string | null
+  account_no_masked?: string | null
+  is_mock?: boolean
+  verified_at?: string | null
+  server_ip?: string | null
+}
+
+export interface BrokersOverview {
+  active_broker: BrokerKind
+  server_ip?: string | null
+  toss: TossCredentialStatus
+  kiwoom: KiwoomCredentialStatus
+}
+
+export interface KiwoomConditionItem {
+  seq: string
+  name: string
+}
+
+export interface KiwoomConditionMatch {
+  symbol: string
+  name: string
+  price: number
+  change: number
+  change_pct: number
+  volume: number
+}
+
+export interface KiwoomConditionMatchesResponse {
+  seq: string
+  market: 'KR'
+  is_mock: boolean
+  count: number
+  items: KiwoomConditionMatch[]
 }
 
 export interface NotificationEvents {
@@ -43,6 +83,10 @@ export interface NotificationSaveInput {
 }
 
 export const brokerApi = {
+  brokersOverview: () => api<BrokersOverview>('/users/me/brokers'),
+  setActiveBroker: (broker: BrokerKind) =>
+    api<BrokersOverview>('/users/me/broker/active', { method: 'PUT', json: { broker } }),
+
   tossStatus: () => api<TossCredentialStatus>('/users/me/broker/toss'),
 
   /** Secrets are encrypted in the browser; the request body never contains them in plaintext. */
@@ -53,6 +97,32 @@ export const brokerApi = {
   },
 
   deleteToss: () => api<TossCredentialStatus>('/users/me/broker/toss', { method: 'DELETE' }),
+
+  kiwoomStatus: () => api<KiwoomCredentialStatus>('/users/me/broker/kiwoom'),
+
+  saveKiwoom: async (
+    userId: string,
+    input: {
+      appkey: string
+      secretkey: string
+      account_no?: string
+      is_mock: boolean
+      otp_code: string
+      activate?: boolean
+    },
+  ) => {
+    const key = await api<TransportKey>('/users/transport-key')
+    const envelope = await sealWithKey(key, input, userId)
+    return api<KiwoomCredentialStatus>('/users/me/broker/kiwoom', { method: 'PUT', json: { envelope } })
+  },
+
+  deleteKiwoom: () => api<KiwoomCredentialStatus>('/users/me/broker/kiwoom', { method: 'DELETE' }),
+
+  kiwoomConditions: () =>
+    api<{ is_mock: boolean; count: number; items: KiwoomConditionItem[] }>('/kiwoom/conditions'),
+
+  kiwoomConditionMatches: (seq: string) =>
+    api<KiwoomConditionMatchesResponse>(`/kiwoom/conditions/${encodeURIComponent(seq)}/matches`),
 
   notificationsStatus: () => api<NotificationSettingsView>('/users/me/notifications'),
   saveNotifications: (input: NotificationSaveInput) =>

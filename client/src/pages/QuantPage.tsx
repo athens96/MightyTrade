@@ -29,6 +29,7 @@ import { FeatureGuideBox, StrategyGuideBox } from '../components/GuideBox'
 import MonteCarloView from '../components/quant/MonteCarloView'
 import OptimizeView from '../components/quant/OptimizeView'
 import PortfolioView from '../components/quant/PortfolioView'
+import KiwoomConditionsPanel from '../components/quant/KiwoomConditionsPanel'
 import ScreenerView from '../components/quant/ScreenerView'
 import WalkForwardView from '../components/quant/WalkForwardView'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
@@ -963,6 +964,12 @@ export default function QuantPage() {
         {form.mode === 'montecarlo' && results.montecarlo && <MonteCarloView result={results.montecarlo} title={titleOf(results.montecarlo)} />}
         {form.mode === 'portfolio' && results.portfolio && (
           <PortfolioView result={results.portfolio} model={portfolioModels.find((m) => m.id === results.portfolio?.model)} />
+        )}
+        {form.mode === 'screener' && form.market === 'KR' && (
+          <KiwoomConditionsPanel
+            onBacktest={backtestFromScreener}
+            onPortfolio={portfolioFromScreener}
+          />
         )}
         {form.mode === 'screener' && results.screener && (
           <ScreenerView

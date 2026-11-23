@@ -9,9 +9,10 @@ use std::time::Duration;
 use crate::auth::extractors::AuthUser;
 use crate::auth::otp;
 use crate::errors::{ApiError, ApiResult};
+use crate::integrations::kiwoom as kiwoom_api;
 use crate::integrations::toss::verify_credentials;
 use crate::state::AppState;
-use crate::users::{credentials, repository::now_iso, requests_repo};
+use crate::users::{credentials::{self, BrokerKind}, repository::now_iso, requests_repo};
 
 const WATCHLISTS: &str = "watchlists";
 const SETTINGS: &str = "settings";
@@ -30,11 +31,19 @@ pub fn router() -> Router<AppState> {
         .route("/me/watchlist", get(get_watchlist).put(put_watchlist))
         .route("/me/settings", get(get_settings).put(put_settings))
         .route("/transport-key", get(transport_key))
+        .route("/me/brokers", get(get_brokers_overview))
+        .route("/me/broker/active", axum::routing::put(put_active_broker))
         .route(
             "/me/broker/toss",
             get(get_toss_credentials)
                 .put(put_toss_credentials)
                 .delete(delete_toss_credentials),
+        )
+        .route(
+            "/me/broker/kiwoom",
+            get(get_kiwoom_credentials)
+                .put(put_kiwoom_credentials)
+                .delete(delete_kiwoom_credentials),
         )
         .route(
             "/me/notifications",
@@ -284,6 +293,141 @@ async fn delete_toss_credentials(
     credentials::delete_toss(&state, uid);
     state.forget_toss_client(uid, previous.as_ref().map(|p| p.client_id.as_str()));
     Json(toss_status_view(&state, uid, &headers).await)
+}
+
+async fn brokers_overview_with_ip(state: &AppState, uid: &str, headers: &HeaderMap) -> Value {
+    let mut ov = credentials::brokers_overview(state, uid);
+    let ip = resolve_server_public_ip(state, headers).await;
+    if let Some(obj) = ov.as_object_mut() {
+        obj.insert(
+            "server_ip".to_string(),
+            ip.map(Value::String).unwrap_or(Value::Null),
+        );
+    }
+    ov
+}
+
+async fn get_brokers_overview(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    headers: HeaderMap,
+) -> Json<Value> {
+    let uid = user["id"].as_str().unwrap_or("");
+    Json(brokers_overview_with_ip(&state, uid, &headers).await)
+}
+
+async fn put_active_broker(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    headers: HeaderMap,
+    body: Option<Json<Value>>,
+) -> ApiResult<Json<Value>> {
+    let uid = user["id"].as_str().unwrap_or("");
+    let body = body.map(|Json(v)| v).unwrap_or(Value::Null);
+    let raw = body.get("broker").and_then(|v| v.as_str()).unwrap_or("");
+    let kind = BrokerKind::parse(raw)?;
+    credentials::set_active_broker(&state, uid, kind)?;
+    state.realtime_hub.disconnect_user(uid);
+    Ok(Json(brokers_overview_with_ip(&state, uid, &headers).await))
+}
+
+async fn kiwoom_status_view(state: &AppState, uid: &str, headers: &HeaderMap) -> Value {
+    let mut view = credentials::public_kiwoom_view(state, uid);
+    let ip = resolve_server_public_ip(state, headers).await;
+    if let Some(obj) = view.as_object_mut() {
+        obj.insert(
+            "server_ip".to_string(),
+            ip.map(Value::String).unwrap_or(Value::Null),
+        );
+    }
+    view
+}
+
+async fn get_kiwoom_credentials(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    headers: HeaderMap,
+) -> Json<Value> {
+    let uid = user["id"].as_str().unwrap_or("");
+    Json(kiwoom_status_view(&state, uid, &headers).await)
+}
+
+async fn put_kiwoom_credentials(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    headers: HeaderMap,
+    body: Option<Json<Value>>,
+) -> ApiResult<Json<Value>> {
+    let uid = user["id"].as_str().unwrap_or("");
+    let body = body.map(|Json(v)| v).unwrap_or(Value::Null);
+    let payload = state.transport.open_envelope(
+        state.store.as_ref(),
+        &state.crypto,
+        body.get("envelope"),
+        uid,
+    )?;
+
+    let otp_code = payload.get("otp_code").and_then(|v| v.as_str()).unwrap_or("");
+    otp::verify(&state, &user, otp_code)?;
+
+    let appkey = payload
+        .get("appkey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let secretkey = payload
+        .get("secretkey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let account_no = payload
+        .get("account_no")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let is_mock = payload
+        .get("is_mock")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let activate = payload
+        .get("activate")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    if appkey.is_empty() || appkey.len() > 200 || secretkey.is_empty() || secretkey.len() > 500 {
+        return Err(ApiError::bad_request(
+            "invalid_credentials",
+            "App Key와 Secret Key를 모두 입력하세요",
+        ));
+    }
+
+    let previous = credentials::get_kiwoom(&state, uid);
+    kiwoom_api::verify_credentials(&state, appkey, secretkey, account_no, is_mock).await?;
+    credentials::save_kiwoom(&state, uid, appkey, secretkey, account_no, is_mock, activate);
+    if let Some(prev) = previous {
+        if prev.appkey != appkey || prev.is_mock != is_mock {
+            state.forget_kiwoom_client(uid, Some(&prev.appkey), prev.is_mock);
+        } else {
+            state.kiwoom_clients.remove(uid);
+        }
+    }
+    state.realtime_hub.disconnect_user(uid);
+    Ok(Json(kiwoom_status_view(&state, uid, &headers).await))
+}
+
+async fn delete_kiwoom_credentials(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    headers: HeaderMap,
+) -> Json<Value> {
+    let uid = user["id"].as_str().unwrap_or("");
+    let previous = credentials::get_kiwoom(&state, uid);
+    credentials::delete_kiwoom(&state, uid);
+    if let Some(prev) = previous {
+        state.forget_kiwoom_client(uid, Some(&prev.appkey), prev.is_mock);
+    }
+    state.realtime_hub.disconnect_user(uid);
+    Json(kiwoom_status_view(&state, uid, &headers).await)
 }
 
 async fn get_notifications(State(state): State<AppState>, AuthUser(user): AuthUser) -> Json<Value> {

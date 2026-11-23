@@ -498,10 +498,10 @@ pub async fn receive_webhook(
     }
 
     // 2) SEMI & LIVE MODES
-    if credentials::get_toss(state, &uid).is_none() {
+    if !credentials::has_active_broker(state, &uid) {
         return Err(ApiError::conflict(
             "toss_credentials_required",
-            "토스증권 API 키가 등록되어 있지 않습니다",
+            "증권사 API 키(토스증권 또는 키움증권)가 등록되어 있지 않습니다",
         ));
     }
     let _ = executor::reconcile_live(state, &mut bot, &today).await;

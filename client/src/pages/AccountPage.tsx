@@ -69,10 +69,11 @@ export default function AccountPage() {
     }
   }
 
-  if (error?.code === 'toss_credentials_required')
-    return <div className="placeholder">토스증권 API 키가 필요합니다. <Link to="/settings">설정에서 등록하기 →</Link></div>
+  if (error?.code === 'toss_credentials_required' || error?.code === 'kiwoom_credentials_required')
+    return <div className="placeholder">증권사 API 키(토스증권 또는 키움증권)가 필요합니다. <Link to="/settings">설정에서 등록하기 →</Link></div>
 
   const h = summary?.holdings
+  const isKiwoom = summary?.broker === 'kiwoom'
   const mv = afterCost ? h?.marketValue.amountAfterCost : h?.marketValue.amount
   const pl = afterCost ? h?.profitLoss.amountAfterCost : h?.profitLoss.amount
   const plPct = afterCost ? h?.profitLoss.rateAfterCostPct : h?.profitLoss.ratePct
@@ -82,6 +83,11 @@ export default function AccountPage() {
     <div className="account">
       <div className="account-head">
         <h2>계좌</h2>
+        {summary?.broker && (
+          <span className={`status-badge ${isKiwoom && summary.kiwoom_mock ? 'in_review' : 'approved'}`}>
+            {isKiwoom ? (summary.kiwoom_mock ? '🧪 키움 모의' : '🟣 키움 실전') : '🏦 토스증권'}
+          </span>
+        )}
         <label className="check small" title="켜면 지금 주식을 팔 때 빠져나갈 증권사 수수료와 세금까지 미리 뺀 실제 순수익으로 계산해 보여줍니다">
           <input type="checkbox" checked={afterCost} onChange={(e) => setAfterCost(e.target.checked)} /> 매도 비용(수수료·세금) 차감 후
         </label>
@@ -185,7 +191,11 @@ export default function AccountPage() {
             </button>
           ))}
         </div>
-        <span className="muted small">토스증권 앱에서 만든 조건 주문도 함께 보입니다.</span>
+        <span className="muted small">
+          {isKiwoom
+            ? '키움 REST API는 증권사 서버 OCO를 직접 지원하지 않습니다. 자동매매 봇의 손절·익절·트레일링 보호막을 이용해 주세요.'
+            : '토스증권 앱에서 만든 조건 주문도 함께 보입니다.'}
+        </span>
       </div>
       <div className="trades-wrap">
         <table className="trades left-first cards">

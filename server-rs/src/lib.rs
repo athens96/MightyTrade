@@ -37,6 +37,7 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api/trading", trading::routes::router())
         .nest("/api/realtime", realtime::routes::router())
         .nest("/api/autotrade", autotrade::routes::router())
+        .nest("/api/kiwoom", integrations::kiwoom_routes::router())
         .with_state(state)
 }
 

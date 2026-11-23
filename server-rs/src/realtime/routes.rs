@@ -119,17 +119,17 @@ async fn stream(
         .get(market.as_str())
         .map(|s| s.as_str())
         .unwrap_or("mock");
-    if prov != "toss" {
+    if !matches!(prov, "toss" | "kiwoom" | "broker") {
         return Err(ApiError::not_implemented(
             "requires_toss",
-            "실시간 시세는 토스증권 연동에서만 제공됩니다",
+            "실시간 시세는 증권사 연동에서만 제공됩니다",
         ));
     }
     let uid = user["id"].as_str().unwrap_or("").to_string();
-    if credentials::get_toss(&state, &uid).is_none() {
+    if !credentials::has_active_broker(&state, &uid) {
         return Err(ApiError::conflict(
             "toss_credentials_required",
-            "토스증권 API 키를 먼저 등록하세요 (설정)",
+            "증권사 API 키(토스증권 또는 키움증권)를 먼저 등록하세요 (설정)",
         ));
     }
     let m = market.as_str().to_lowercase();
@@ -144,27 +144,40 @@ async fn order_stream(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> ApiResult<Response> {
-    let has_toss = state
+    let has_live = state
         .config
         .market_providers
         .values()
-        .any(|v| v == "toss");
-    if !has_toss {
+        .any(|v| matches!(v.as_str(), "toss" | "kiwoom" | "broker"));
+    if !has_live {
         return Err(ApiError::not_implemented(
             "requires_toss",
-            "토스증권 연동에서만 제공됩니다",
+            "증권사 연동에서만 제공됩니다",
         ));
     }
     let uid = user["id"].as_str().unwrap_or("").to_string();
-    let creds = credentials::get_toss(&state, &uid);
-    let Some(account_seq) = creds.and_then(|c| c.account_seq) else {
-        return Err(ApiError::conflict(
-            "toss_credentials_required",
-            "토스증권 API 키를 먼저 등록하세요 (설정)",
-        ));
-    };
     let mut topics = HashSet::new();
-    topics.insert(format!("personal:order:{account_seq}"));
+    match credentials::active_broker(&state, &uid) {
+        credentials::BrokerKind::Kiwoom => {
+            if credentials::get_kiwoom(&state, &uid).is_none() {
+                return Err(ApiError::conflict(
+                    "kiwoom_credentials_required",
+                    "키움증권 REST API 키를 먼저 등록하세요 (설정)",
+                ));
+            }
+            topics.insert("personal:order:kiwoom".to_string());
+        }
+        credentials::BrokerKind::Toss => {
+            let creds = credentials::get_toss(&state, &uid);
+            let Some(account_seq) = creds.and_then(|c| c.account_seq) else {
+                return Err(ApiError::conflict(
+                    "toss_credentials_required",
+                    "토스증권 API 키를 먼저 등록하세요 (설정)",
+                ));
+            };
+            topics.insert(format!("personal:order:{account_seq}"));
+        }
+    }
     let sub = state.realtime_hub.subscribe(&state, &uid, topics);
     Ok(build_sse_response(state.realtime_hub.clone(), uid, sub, 5000))
 }

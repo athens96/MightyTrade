@@ -388,6 +388,7 @@ b.plain { color: #e6edf3; }
 .ng-mock.sl { background: #191c21; border-color: #32363e; }
 .ng-mock.mt { background: #0d1117; border-color: #2a3340; }
 .ng-mock.toss { background: #121923; border-color: #243652; }
+.ng-mock.kiwoom { background: #1d1320; border-color: #53264d; }
 .ng-mock-bar { display: flex; align-items: center; gap: 6px; padding: 7px 11px; background: rgba(0,0,0,.28); border-bottom: 1px solid rgba(255,255,255,.07); font-size: 12px; }
 .ng-app-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .ng-app-dot.tg { background: #2aabee; }
@@ -395,6 +396,7 @@ b.plain { color: #e6edf3; }
 .ng-app-dot.sl { background: #e01e5a; }
 .ng-app-dot.mt { background: #2f81f7; }
 .ng-app-dot.toss { background: #3182f6; }
+.ng-app-dot.kiwoom { background: #e91e63; }
 .ng-bar-sub { color: #8b949e; margin-left: auto; font-size: 11px; }
 .ng-mock-foot { padding: 7px 11px; border-top: 1px solid rgba(255,255,255,.06); background: rgba(0,0,0,.18); overflow-wrap: anywhere; }
 
@@ -426,6 +428,7 @@ b.plain { color: #e6edf3; }
 .ng-btn-pill.dc { background: #5865f2; border-color: #5865f2; color: #fff; }
 .ng-btn-pill.sl { background: #007a5a; border-color: #007a5a; color: #fff; }
 .ng-btn-pill.toss { background: #3182f6; border-color: #3182f6; color: #fff; }
+.ng-btn-pill.kiwoom { background: #c2185b; border-color: #c2185b; color: #fff; }
 .ng-btn-pill.highlight { border-color: #f0b429; box-shadow: 0 0 0 2px rgba(240,180,41,.3); }
 
 .ng-mini-form { display: flex; flex-direction: column; gap: 8px; padding: 10px 11px; }
@@ -484,6 +487,10 @@ b.plain { color: #e6edf3; }
 .ng-preview-bubble { padding: 8px 10px; border-radius: 8px; background: #17212b; border: 1px solid #283a4d; font-size: 12px; line-height: 1.5; color: #dbe6f2; display: flex; flex-direction: column; gap: 2px; word-break: keep-all; }
 .ng-preview-title { font-weight: 700; color: #fff; margin-bottom: 2px; }
 .ng-toss-ip-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 11px; margin-bottom: 12px; border-radius: 8px; background: rgba(49,130,246,.1); border: 1px solid rgba(49,130,246,.35); color: #dbeafe; }
+.ng-toss-ip-bar.kiwoom { background: rgba(233,30,99,.1); border-color: rgba(233,30,99,.38); color: #fce4ec; }
+.ng-broker-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.ng-broker-card { border: 1px solid #262c36; border-radius: 9px; padding: 11px 12px; background: #10141a; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.ng-broker-card.active { border-color: rgba(63,185,80,.55); background: rgba(18,54,31,.2); }
 .ng-toss-ip-bar code { padding: 1px 6px; border-radius: 4px; background: #0d1117; border: 1px solid #30363d; color: #79c0ff; font-size: 12.5px; }
 .ng-toss-ip-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ng-toss-login-card { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; background: rgba(49,130,246,.1); border: 1px solid rgba(49,130,246,.4); }
@@ -672,6 +679,7 @@ main { min-width: 0; }
   .unlock-bar { width: 100%; }
   .admin-users td.actions { justify-content: flex-end; }
   .ng-channel-strip { grid-template-columns: 1fr; }
+  .ng-broker-grid { grid-template-columns: 1fr; }
   .ng-modal { width: 100%; }
   .ng-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
   .ng-tabs button { flex: 0 0 auto; white-space: nowrap; }

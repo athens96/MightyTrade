@@ -150,7 +150,7 @@ pub async fn tick(state: &AppState, now_opt: Option<DateTime<Utc>>) {
         };
         if users::status_of(&user) != "approved"
             || user.get("autotrade_halted").and_then(|v| v.as_bool()).unwrap_or(false)
-            || credentials::get_toss(state, &uid).is_none()
+            || !credentials::has_active_broker(state, &uid)
         {
             continue;
         }

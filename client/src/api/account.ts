@@ -19,6 +19,8 @@ export interface Holding {
 }
 
 export interface AccountSummary {
+  broker?: 'toss' | 'kiwoom'
+  kiwoom_mock?: boolean | null
   holdings: {
     totalPurchaseAmount: KrwUsd
     marketValue: { amount: KrwUsd; amountAfterCost: KrwUsd }

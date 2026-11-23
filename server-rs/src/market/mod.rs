@@ -20,6 +20,10 @@ pub fn provider_name(state: &AppState, market: Market) -> String {
         .unwrap_or_else(|| "mock".to_string())
 }
 
+fn is_live_provider(name: &str) -> bool {
+    matches!(name, "toss" | "kiwoom" | "broker")
+}
+
 pub async fn get_candles(
     state: &AppState,
     user_id: &str,
@@ -29,12 +33,13 @@ pub async fn get_candles(
     limit: usize,
 ) -> ApiResult<(String, Vec<Candle>)> {
     let name = provider_name(state, market);
-    if name == "toss" {
+    if is_live_provider(&name) {
+        let broker = crate::users::credentials::active_broker(state, user_id);
         let data = state
             .market_toss
             .get_candles(state, user_id, market, symbol, interval, limit)
             .await?;
-        Ok((name, data))
+        Ok((broker.as_str().to_string(), data))
     } else {
         Ok(("mock".to_string(), mock::get_candles(market, symbol, interval, limit)))
     }
@@ -48,7 +53,7 @@ pub async fn get_history(
     interval: Interval,
     start_ts: i64,
 ) -> ApiResult<Vec<Candle>> {
-    if provider_name(state, market) == "toss" {
+    if is_live_provider(&provider_name(state, market)) {
         state
             .market_toss
             .get_history(state, user_id, market, symbol, interval, start_ts)
@@ -64,7 +69,7 @@ pub async fn get_quote(
     market: Market,
     symbol: &str,
 ) -> ApiResult<Quote> {
-    if provider_name(state, market) == "toss" {
+    if is_live_provider(&provider_name(state, market)) {
         state
             .market_toss
             .get_quote(state, user_id, market, symbol)
@@ -80,7 +85,7 @@ pub async fn get_quotes(
     market: Market,
     symbols: &[String],
 ) -> ApiResult<HashMap<String, Result<Quote, ApiError>>> {
-    if provider_name(state, market) == "toss" {
+    if is_live_provider(&provider_name(state, market)) {
         state
             .market_toss
             .get_quotes(state, user_id, market, symbols)
@@ -100,7 +105,7 @@ pub async fn search(
     market: Market,
     query: &str,
 ) -> ApiResult<Vec<Instrument>> {
-    if provider_name(state, market) == "toss" {
+    if is_live_provider(&provider_name(state, market)) {
         state
             .market_toss
             .search(state, user_id, market, query)

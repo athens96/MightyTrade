@@ -265,6 +265,9 @@ async fn delete_user(
     if let Some(c) = creds {
         state.forget_toss_client(&uid, Some(&c.client_id));
     }
+    if let Some(kw) = credentials::get_kiwoom(&state, &uid) {
+        state.forget_kiwoom_client(&uid, Some(&kw.appkey), kw.is_mock);
+    }
 
     let mut removed = Map::new();
     for coll in BY_USER_ID {
