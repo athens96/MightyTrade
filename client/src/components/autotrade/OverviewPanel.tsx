@@ -5,6 +5,7 @@ import { MOBILE, useMediaQuery } from '../../hooks/useMediaQuery'
 const CAT_LABEL: Record<BotCategory, string> = {
   swing: '스윙',
   daytrade: '단타',
+  scalp: '스캘핑',
   rebalance: '리밸런싱',
   rotation: '순환매',
   dca: '적립식',

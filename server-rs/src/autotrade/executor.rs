@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::time::Duration as StdDuration;
 
 use crate::account::toss_account::{account_client, HIGH_VALUE_KRW};
-use crate::autotrade::{bots, dca, protections, rebalance, rotation, webhook};
+use crate::autotrade::{bots, dca, protections, rebalance, rotation, scalp, webhook};
 use crate::errors::{ApiError, ApiResult};
 use crate::market::{self, extras::normalize, models::{Candle, Interval, Market}};
 use crate::quant::data::cost_defaults;
@@ -43,7 +43,18 @@ pub fn is_webhook(bot: &Value) -> bool {
     bots::bot_kind(bot) == "webhook"
 }
 
+pub fn is_scalp(bot: &Value) -> bool {
+    bots::bot_kind(bot) == "scalp"
+}
+
+pub fn is_closing_bet(bot: &Value) -> bool {
+    bots::bot_kind(bot) == "single" && bot.get("strategy").and_then(|v| v.as_str()) == Some("closing_bet")
+}
+
 pub fn is_intraday(bot: &Value) -> bool {
+    if is_scalp(bot) {
+        return true;
+    }
     if is_rebalance(bot) || is_rotation(bot) || is_dca(bot) || is_webhook(bot) {
         return false;
     }
@@ -320,6 +331,45 @@ pub async fn preview(state: &AppState, bot: &Value, today: &str) -> ApiResult<Va
     }
     if is_webhook(bot) {
         return webhook::preview(state, bot, today).await;
+    }
+    if is_scalp(bot) {
+        return scalp::preview(state, bot, today).await;
+    }
+    if is_closing_bet(bot) {
+        let (_, past_bars, tb, mut strat) = load(state, bot, today).await?;
+        let mut eval_candles = past_bars.to_candles();
+        if let Some(ref cur_bar) = tb {
+            eval_candles.push(cur_bar.clone());
+        }
+        let eval_bars = Bars::from_candles(&eval_candles);
+        let d = decide_with_loaded(state, bot, today, &eval_bars, tb, strat.as_mut(), false).await;
+        let to = d.today_bar.as_ref().map(|b| b.open);
+        let orders_json: Vec<Value> = d
+            .orders
+            .iter()
+            .map(|o| {
+                json!({
+                    "side": o.side,
+                    "kind": o.kind,
+                    "stop": o.stop,
+                    "stop_from_open": o.stop_from_open,
+                    "limit": o.limit,
+                    "qty": o.qty,
+                    "reason": o.reason,
+                    "text": describe(o, to),
+                })
+            })
+            .collect();
+        return Ok(json!({
+            "date": today,
+            "bar_date": d.bar_date,
+            "position": d.position,
+            "cash": d.cash,
+            "today_open": to,
+            "last": d.last,
+            "market_regime": d.market_regime,
+            "orders": orders_json,
+        }));
     }
     let d = if is_intraday(bot) {
         let (_, bars, latest, mut strat) = load_intraday(state, bot).await?;
@@ -848,6 +898,9 @@ pub async fn reconcile_live(state: &AppState, bot: &mut Value, today: &str) -> A
     }
     if is_rotation(bot) {
         return rotation::reconcile_live(state, bot, today).await;
+    }
+    if is_scalp(bot) {
+        return scalp::reconcile_live(state, bot, today).await;
     }
     let pending = bot["state"]["live"]["pending"]
         .as_array()
@@ -1733,6 +1786,225 @@ pub async fn run(state: &AppState, bot: &mut Value, today: &str) -> ApiResult<Va
     } else {
         run_live(state, bot, today).await
     }
+}
+
+pub async fn run_closing_bet(
+    state: &AppState,
+    bot: &mut Value,
+    today: &str,
+    now: DateTime<Utc>,
+    session_start: DateTime<Utc>,
+    session_end: DateTime<Utc>,
+    manual: bool,
+) -> ApiResult<Value> {
+    let mode = bot["mode"].as_str().unwrap_or("paper").to_string();
+    let sk = bots::state_key(&mode).to_string();
+    let uid = bot["user_id"].as_str().unwrap_or("").to_string();
+    let bot_id = bot["id"].as_str().unwrap_or("").to_string();
+    let m = bot["market"].as_str().unwrap_or("KR").to_string();
+    let sym = bot["symbol"].as_str().unwrap_or("").to_string();
+    let market = Market::parse(&m)?;
+    let c = costs_for(state, &uid, market).await;
+
+    if mode == "live" {
+        let _ = reconcile_live(state, bot, today).await;
+    }
+
+    let holding_qty = bot["state"][&sk]["position"]["qty"].as_f64().unwrap_or(0.0);
+    let entry_date = bot["state"][&sk]["position"]
+        .get("entry_date")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Window 1: Morning open exit for yesterday's overnight closing-bet holding
+    if holding_qty > 0.0 && entry_date != today && (manual || now >= session_start + Duration::minutes(1)) {
+        let (_, _, tb_opt, _) = load(state, bot, today).await?;
+        let exit_px = tb_opt
+            .as_ref()
+            .map(|b| b.open)
+            .filter(|x| *x > 0.0)
+            .or_else(|| bot["state"][&sk].get("last_price").and_then(|v| v.as_f64()))
+            .unwrap_or_else(|| bot["state"][&sk]["position"]["entry_price"].as_f64().unwrap_or(0.0));
+        if mode == "paper" {
+            paper_sell(&mut bot["state"]["paper"], exit_px, c, today, "익일 시초가 종가베팅 청산");
+            bot["state"]["paper"]["last_price"] = json!(exit_px);
+            bot["state"]["paper"]["last_run_date"] = json!(today);
+            let eq = bot["state"]["paper"]["cash"].as_f64().unwrap_or(0.0);
+            record_day_equity(&mut bot["state"]["paper"], today, eq);
+            bots::log(
+                state,
+                bot,
+                "fill",
+                &format!("[모의/종가베팅] 익일 시초가 청산 @ {exit_px:.2}"),
+                "info",
+                None,
+            )
+            .await;
+        } else {
+            let (client, seq) = account_client(state, &uid)?;
+            let mut sq = HashMap::new();
+            sq.insert("symbol".to_string(), sym.clone());
+            let sellable = client
+                .request("GET", "/api/v1/sellable-quantity", Some(&sq), None, Some(seq))
+                .await?
+                .and_then(|v| v.get("sellableQuantity").cloned())
+                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0.0);
+            let qty = holding_qty.min(sellable) as i64;
+            if qty > 0 {
+                let cid = client_order_id(&bot_id, today, 1, "cb_exit");
+                let r = send_market(state, bot, "SELL", qty, exit_px, &cid).await?;
+                bot["state"]["live"]["pending"].as_array_mut().unwrap().push(json!({
+                    "kind": "order",
+                    "id": r["orderId"],
+                    "side": "SELL",
+                    "qty": qty,
+                    "date": today,
+                    "synced": 0.0,
+                    "signal_price": exit_px,
+                }));
+                bots::log(
+                    state,
+                    bot,
+                    "order",
+                    &format!("[종가베팅] 익일 시초가 시장가 매도 {qty}주"),
+                    "info",
+                    None,
+                )
+                .await;
+            }
+            bot["state"]["live"]["last_run_date"] = json!(today);
+        }
+        protections::evaluate_after_step(state, bot, today).await;
+        bots::save(state, bot);
+        return Ok(json!({ "closing_bet_exit": today }));
+    }
+
+    // Window 2: Pre-close leader evaluation (25m to 2m before close, or immediate if manual paper test)
+    let in_close_window = manual
+        || (now >= session_end - Duration::minutes(25) && now < session_end - Duration::minutes(2));
+    if !in_close_window {
+        return Ok(json!({ "skipped": "waiting_close_window" }));
+    }
+    if !manual
+        && bot["state"][&sk]
+            .get("closing_checked_date")
+            .and_then(|v| v.as_str())
+            == Some(today)
+    {
+        return Ok(json!({ "skipped": "already_checked_close" }));
+    }
+    if bot["state"][&sk]["position"]["qty"].as_f64().unwrap_or(0.0) > 0.0 {
+        return Ok(json!({ "skipped": "already_holding" }));
+    }
+
+    let (_, past_bars, tb_opt, mut strat) = load(state, bot, today).await?;
+    let today_bar = tb_opt.ok_or_else(|| {
+        ApiError::conflict("market_not_open", "당일 시세 데이터가 아직 없습니다")
+    })?;
+    let mut eval_candles = past_bars.to_candles();
+    eval_candles.push(today_bar.clone());
+    let eval_bars = Bars::from_candles(&eval_candles);
+    let d = decide_with_loaded(state, bot, today, &eval_bars, Some(today_bar.clone()), strat.as_mut(), false).await;
+
+    let mut bought = false;
+    if let Some(buy_o) = d.orders.iter().find(|o| o.side == "buy") {
+        let cur = today_bar.close;
+        let cap = bot["capital"].as_f64().unwrap_or(0.0);
+        let est_eq = if mode == "paper" {
+            bot["state"]["paper"]["cash"].as_f64().unwrap_or(0.0)
+        } else {
+            cap + bot["state"]["live"].get("realized").and_then(|v| v.as_f64()).unwrap_or(0.0)
+        };
+        if let Some(blk) = protections::check_buy_allowed(bot, &bot["state"][&sk], today, Some(est_eq)) {
+            bots::log(state, bot, "skip", &format!("[종가베팅] 신규 진입 보류: {blk}"), "warn", None).await;
+        } else if mode == "paper" {
+            let qty = paper_qty(&bot["state"]["paper"], buy_o.qty, cur, c, d.mt_scale);
+            if qty > 0 {
+                paper_buy(&mut bot["state"]["paper"], qty, cur, c, today, &buy_o.reason, d.entry_atr, Some(today_bar.high));
+                bought = true;
+                bots::log(
+                    state,
+                    bot,
+                    "fill",
+                    &format!("[모의/종가베팅] 마감 전 매수 {qty}주 @ {cur:.2} — {}", buy_o.reason),
+                    "info",
+                    None,
+                )
+                .await;
+            }
+        } else {
+            let (client, seq) = account_client(state, &uid)?;
+            let currency = if m == "KR" { "KRW" } else { "USD" };
+            let mut bp_p = HashMap::new();
+            bp_p.insert("currency".to_string(), currency.to_string());
+            let bp = normalize(
+                client
+                    .request("GET", "/api/v1/buying-power", Some(&bp_p), None, Some(seq))
+                    .await?
+                    .unwrap_or_else(|| json!({})),
+                "",
+            );
+            let avail = bp.get("cashBuyingPower").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let headroom = ((c.slippage_pct + c.commission_pct) / 100.0).max(LIVE_BUY_HEADROOM);
+            let budget = cap.min(avail) * d.mt_scale;
+            let qty = if cur > 0.0 {
+                (budget / (cur * (1.0 + headroom))).floor() as i64
+            } else {
+                0
+            };
+            if qty > 0 {
+                let cid = client_order_id(&bot_id, today, 2, "cb_buy");
+                let r = send_market(state, bot, "BUY", qty, cur, &cid).await?;
+                bot["state"]["live"]["pending"].as_array_mut().unwrap().push(json!({
+                    "kind": "order",
+                    "id": r["orderId"],
+                    "side": "BUY",
+                    "qty": qty,
+                    "date": today,
+                    "synced": 0.0,
+                    "signal_price": cur,
+                }));
+                bought = true;
+                bots::log(
+                    state,
+                    bot,
+                    "order",
+                    &format!("[종가베팅] 마감 전 시장가 매수 {qty}주 — {}", buy_o.reason),
+                    "info",
+                    None,
+                )
+                .await;
+            }
+        }
+    } else {
+        bots::log(
+            state,
+            bot,
+            "decision",
+            &format!("[종가베팅] {today} 마감 조건 미충족 — 현금 관망"),
+            "info",
+            None,
+        )
+        .await;
+    }
+
+    bot["state"][&sk]["closing_checked_date"] = json!(today);
+    bot["state"][&sk]["last_run_date"] = json!(today);
+    bot["state"][&sk]["last_price"] = json!(today_bar.close);
+    let eq = if mode == "paper" {
+        bot["state"]["paper"]["cash"].as_f64().unwrap_or(0.0)
+            + bot["state"]["paper"]["position"]["qty"].as_f64().unwrap_or(0.0) * today_bar.close
+    } else {
+        let cap = bot["capital"].as_f64().unwrap_or(0.0);
+        let realized = bot["state"]["live"].get("realized").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        cap + realized
+    };
+    record_day_equity(&mut bot["state"][&sk], today, eq);
+    protections::evaluate_after_step(state, bot, today).await;
+    bots::save(state, bot);
+    Ok(json!({ "closing_bet_checked": today, "bought": bought }))
 }
 
 // ------------------------------------------------------------------ intraday daytrade

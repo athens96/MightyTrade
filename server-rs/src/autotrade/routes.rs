@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::auth::extractors::AuthUser;
 use crate::auth::otp;
-use crate::autotrade::{analytics, bots, executor, protections, scheduler, semi, webhook};
+use crate::autotrade::{analytics, bots, executor, protections, scalp, scheduler, semi, webhook};
 use crate::errors::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::trading::orders as trading;
@@ -167,6 +167,7 @@ async fn update_bot(
     let locked_keys: &[&str] = match kind {
         "rebalance" => &["market", "model", "assets"],
         "rotation" => &["market", "preset", "universe"],
+        "scalp" => &["market", "source", "condition_seq"],
         "dca" | "webhook" => &["market", "symbol"],
         _ => &["market", "symbol", "strategy"],
     };
@@ -368,7 +369,11 @@ async fn run_bot_now(
         .ok_or_else(|| {
             ApiError::conflict("market_closed", "정규장 시간에만 실행할 수 있습니다")
         })?;
-    let res = if executor::is_intraday(&bot) {
+    let res = if executor::is_scalp(&bot) {
+        scalp::run_intraday(&state, &mut bot, &sess.0, now, sess.1, sess.2).await?
+    } else if executor::is_closing_bet(&bot) {
+        executor::run_closing_bet(&state, &mut bot, &sess.0, now, sess.1, sess.2, true).await?
+    } else if executor::is_intraday(&bot) {
         executor::run_intraday(&state, &mut bot, &sess.0, now, sess.2).await?
     } else {
         executor::run(&state, &mut bot, &sess.0).await?
@@ -430,7 +435,9 @@ async fn reset_bot(
     }
     let cap = bot["capital"].as_f64().unwrap_or(0.0);
     let kind = bots::bot_kind(&bot);
-    bot["state"]["paper"] = if kind == "rebalance" || kind == "rotation" {
+    bot["state"]["paper"] = if kind == "scalp" {
+        scalp::empty_state(cap)
+    } else if kind == "rebalance" || kind == "rotation" {
         bots::empty_rebalance_state(cap)
     } else {
         bots::empty_state(cap)

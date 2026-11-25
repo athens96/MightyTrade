@@ -6,7 +6,7 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
-use crate::autotrade::{dca, notifier, protections, rotation, semi, webhook};
+use crate::autotrade::{dca, notifier, protections, rotation, scalp, semi, webhook};
 use crate::errors::{ApiError, ApiResult};
 use crate::market::models::Market;
 use crate::quant::engine::RiskRules;
@@ -32,7 +32,7 @@ pub fn bot_kind(bot: &Value) -> &str {
 
 pub fn bot_category(bot: &Value) -> &str {
     let k = bot_kind(bot);
-    if matches!(k, "rebalance" | "rotation" | "dca" | "webhook") {
+    if matches!(k, "rebalance" | "rotation" | "dca" | "webhook" | "scalp") {
         return k;
     }
     bot.get("strategy")
@@ -44,6 +44,9 @@ pub fn bot_category(bot: &Value) -> &str {
 
 pub fn bot_timeframe(bot: &Value) -> &str {
     let k = bot_kind(bot);
+    if k == "scalp" {
+        return "1m";
+    }
     if matches!(k, "rebalance" | "rotation" | "dca" | "webhook") {
         return "1d";
     }
@@ -90,7 +93,7 @@ pub fn has_open_position(bot: &Value, mode: Option<&str>) -> bool {
         None => vec!["paper", "live"],
     };
     let kind = bot_kind(bot);
-    if kind == "rebalance" || kind == "rotation" {
+    if matches!(kind, "rebalance" | "rotation" | "scalp") {
         return modes.iter().any(|m| {
             bot["state"][*m]
                 .get("positions")
@@ -135,7 +138,7 @@ pub fn validate(state: &AppState, body: &Value, existing: Option<&Value>) -> Api
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .unwrap_or("single");
-    if !matches!(kind, "single" | "rebalance" | "rotation" | "dca" | "webhook") {
+    if !matches!(kind, "single" | "rebalance" | "rotation" | "dca" | "webhook" | "scalp") {
         return Err(ApiError::code_only(400, "invalid_kind"));
     }
     let market = Market::parse(src.get("market").and_then(|v| v.as_str()).unwrap_or(""))?;
@@ -432,6 +435,156 @@ pub fn validate(state: &AppState, body: &Value, existing: Option<&Value>) -> Api
         }));
     }
 
+    if kind == "scalp" {
+        let source = src
+            .get("source")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(if m == "KR" { "kiwoom_condition" } else { "watchlist" });
+        if !matches!(source, "kiwoom_condition" | "watchlist") {
+            return Err(ApiError::bad_request(
+                "invalid_scalp_source",
+                "스캘핑 후보 소스는 영웅문 조건검색식(kiwoom_condition) 또는 직접 지정 목록(watchlist)이어야 합니다",
+            ));
+        }
+        if source == "kiwoom_condition" && m != "KR" {
+            return Err(ApiError::bad_request(
+                "kr_only_condition",
+                "영웅문 조건검색식 연동은 국내(KR) 시장 전용입니다 (미국 주식은 직접 지정 목록을 사용하세요)",
+            ));
+        }
+        let condition_seq = src
+            .get("condition_seq")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let condition_name = take_chars(
+            src.get("condition_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim(),
+            40,
+        );
+        let custom_syms: Vec<String> = match src.get("custom_symbols") {
+            Some(Value::String(s)) => SPLIT_RE
+                .split(s)
+                .map(|x| x.trim().to_uppercase())
+                .filter(|x| !x.is_empty())
+                .collect(),
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|x| x.trim().to_uppercase())
+                .filter(|x| !x.is_empty())
+                .collect(),
+            _ => vec![],
+        };
+        if source == "kiwoom_condition" && condition_seq.is_empty() {
+            return Err(ApiError::bad_request(
+                "condition_required",
+                "연동할 영웅문 조건검색식을 선택하세요",
+            ));
+        }
+        if source == "watchlist" {
+            if custom_syms.is_empty() || custom_syms.len() > 15 {
+                return Err(ApiError::bad_request(
+                    "invalid_symbols",
+                    "직접 지정 종목은 1 ~ 15개 범위로 입력하세요",
+                ));
+            }
+            for sym in &custom_syms {
+                if !market.validate_symbol(sym) {
+                    return Err(ApiError::bad_request(
+                        "invalid_symbol",
+                        format!("{sym}: 선택한 시장({m})의 올바른 종목 코드가 아닙니다"),
+                    ));
+                }
+            }
+        }
+        let min_strength = as_f64(src.get("min_strength")).unwrap_or(120.0);
+        let min_gain_pct = as_f64(src.get("min_gain_pct")).unwrap_or(1.0);
+        let max_gain_pct = as_f64(src.get("max_gain_pct")).unwrap_or(22.0);
+        let take_profit_pct = as_f64(src.get("take_profit_pct")).unwrap_or(2.0);
+        let stop_loss_pct = as_f64(src.get("stop_loss_pct")).unwrap_or(1.0);
+        let trailing_stop_pct = as_f64(src.get("trailing_stop_pct")).unwrap_or(0.8);
+        let max_positions = as_f64(src.get("max_positions")).unwrap_or(1.0) as i64;
+        let max_trades_per_day = as_f64(src.get("max_trades_per_day")).unwrap_or(5.0) as i64;
+        let entry_window_mins = as_f64(src.get("entry_window_mins")).unwrap_or(90.0) as i64;
+
+        if !(80.0..=500.0).contains(&min_strength) {
+            return Err(ApiError::bad_request("out_of_range", "최소 체결강도는 80 ~ 500% 범위여야 합니다"));
+        }
+        if !(-10.0..=25.0).contains(&min_gain_pct)
+            || !(1.0..=29.5).contains(&max_gain_pct)
+            || min_gain_pct >= max_gain_pct
+        {
+            return Err(ApiError::bad_request("out_of_range", "당일 등락률 범위가 올바르지 않습니다"));
+        }
+        if !(0.3..=20.0).contains(&take_profit_pct) || !(0.2..=10.0).contains(&stop_loss_pct) {
+            return Err(ApiError::bad_request("out_of_range", "익절(0.3~20%) 및 칼손절(0.2~10%) 범위를 확인하세요"));
+        }
+        if !(0.0..=10.0).contains(&trailing_stop_pct) {
+            return Err(ApiError::bad_request("out_of_range", "트레일링 익절은 0 ~ 10% 범위여야 합니다"));
+        }
+        if !(1..=5).contains(&max_positions) || !(1..=30).contains(&max_trades_per_day) {
+            return Err(ApiError::bad_request("out_of_range", "동시 종목 수(1~5) 및 하루 최대 매매(1~30회) 범위를 확인하세요"));
+        }
+        if !(0..=360).contains(&entry_window_mins) {
+            return Err(ApiError::bad_request("out_of_range", "집중 매매 시간은 0(장중 전체) ~ 360분 범위여야 합니다"));
+        }
+
+        let guard = protections::validate_guard(src.get("guard"))?;
+        let mt_cfg = market_timing::validate_market_timing(src.get("market_timing"), m)?;
+        let sym_label = if source == "kiwoom_condition" {
+            format!("COND:{condition_seq}")
+        } else {
+            custom_syms.join(",")
+        };
+        let default_name = if source == "kiwoom_condition" {
+            if !condition_name.is_empty() {
+                format!("스캘핑 · {condition_name}")
+            } else {
+                format!("스캘핑 · 조건식 #{condition_seq}")
+            }
+        } else {
+            format!("스캘핑 · {} ({m})", custom_syms.first().cloned().unwrap_or_default())
+        };
+        let name = take_chars(
+            src.get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&default_name),
+            60,
+        );
+        return Ok(json!({
+            "kind": "scalp",
+            "category": "scalp",
+            "timeframe": "1m",
+            "name": name,
+            "market": m,
+            "symbol": sym_label,
+            "source": source,
+            "condition_seq": condition_seq,
+            "condition_name": condition_name,
+            "custom_symbols": custom_syms,
+            "min_strength": min_strength,
+            "min_gain_pct": min_gain_pct,
+            "max_gain_pct": max_gain_pct,
+            "above_vwap": src.get("above_vwap").and_then(|v| v.as_bool()).unwrap_or(true),
+            "take_profit_pct": take_profit_pct,
+            "stop_loss_pct": stop_loss_pct,
+            "trailing_stop_pct": trailing_stop_pct,
+            "max_positions": max_positions,
+            "max_trades_per_day": max_trades_per_day,
+            "entry_window_mins": entry_window_mins,
+            "params": {},
+            "guard": guard,
+            "market_timing": mt_cfg,
+            "capital": capital,
+        }));
+    }
+
     if kind == "webhook" {
         let symbol = src
             .get("symbol")
@@ -543,7 +696,9 @@ pub fn create(state: &AppState, uid: &str, body: &Value) -> ApiResult<Value> {
     let bot_id = Uuid::new_v4().simple().to_string()[..12].to_string();
     let cap = fields["capital"].as_f64().unwrap_or(0.0);
     let kind = fields["kind"].as_str().unwrap_or("single").to_string();
-    let init_st = if kind == "rebalance" || kind == "rotation" {
+    let init_st = if kind == "scalp" {
+        (scalp::empty_state(cap), scalp::empty_state(cap))
+    } else if kind == "rebalance" || kind == "rotation" {
         (empty_rebalance_state(cap), empty_rebalance_state(cap))
     } else {
         (empty_state(cap), empty_state(cap))
@@ -747,7 +902,7 @@ pub fn public(bot: &Value) -> Value {
     let pending_app = semi::active_proposal(st, None);
     let is_paper = bot.get("mode").and_then(|v| v.as_str()) == Some("paper");
 
-    if kind == "rebalance" || kind == "rotation" {
+    if matches!(kind, "rebalance" | "rotation" | "scalp") {
         let positions = st.get("positions").cloned().unwrap_or_else(|| json!({}));
         let last_prices = st.get("last_prices").cloned().unwrap_or_else(|| json!({}));
         let mut total_qty = 0i64;
@@ -773,10 +928,12 @@ pub fn public(bot: &Value) -> Value {
             "last_rebalance_date": st.get("last_rebalance_date").cloned().unwrap_or(Value::Null),
             "target_weights": st.get("target_weights").cloned().unwrap_or_else(|| json!({})),
             "selected_picks": st.get("selected_picks").cloned().unwrap_or_else(|| json!([])),
+            "last_candidates": st.get("last_candidates").cloned().unwrap_or_else(|| json!([])),
+            "today_trades_count": st.get("today_trades_count").cloned().unwrap_or_else(|| json!(0)),
             "last_prices": last_prices,
             "last_price": pos_val,
             "rebalances": tail_slice(st.get("rebalances"), 30),
-            "trades": [],
+            "trades": if kind == "scalp" { tail_slice(st.get("trades"), 50) } else { json!([]) },
             "equity": tail_slice(st.get("equity"), 400),
             "tripped": st.get("tripped").cloned().unwrap_or(Value::Null),
             "cooldown_until": st.get("cooldown_until").cloned().unwrap_or(Value::Null),

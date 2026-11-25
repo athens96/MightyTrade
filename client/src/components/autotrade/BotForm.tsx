@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { Bot, BotCategory, BotInput, DcaCadence, RotationCadence } from '../../api/autotrade'
+import type { Bot, BotCategory, BotInput, DcaCadence, RotationCadence, ScalpSource } from '../../api/autotrade'
+import { brokerApi, type KiwoomConditionItem } from '../../api/broker'
 import { marketApi } from '../../api/market'
 import { quantApi, type MarketTimingMode, type PortfolioAsset, type PortfolioModelMeta, type PortfolioRole, type RebalanceMode, type ScreenerPresetMeta, type ScreenerUniverseMeta, type StrategyMeta } from '../../api/quant'
 import type { Market, WatchItem } from '../../api/types'
@@ -32,15 +33,17 @@ const REBAL_OPTIONS: { id: RebalanceMode; label: string }[] = [
 export default function BotForm({ strategies, portfolioModels, initial, bot, onSubmit, onClose }: Props) {
   const initialCat: BotCategory =
     bot?.category ??
-    (initial?.kind === 'webhook'
-      ? 'webhook'
-      : initial?.kind === 'dca'
-        ? 'dca'
-        : initial?.kind === 'rotation'
-          ? 'rotation'
-          : initial?.kind === 'rebalance'
-            ? 'rebalance'
-            : initial?.category ?? strategies.find((s) => s.id === initial?.strategy)?.category ?? 'swing')
+    (initial?.kind === 'scalp'
+      ? 'scalp'
+      : initial?.kind === 'webhook'
+        ? 'webhook'
+        : initial?.kind === 'dca'
+          ? 'dca'
+          : initial?.kind === 'rotation'
+            ? 'rotation'
+            : initial?.kind === 'rebalance'
+              ? 'rebalance'
+              : initial?.category ?? strategies.find((s) => s.id === initial?.strategy)?.category ?? 'swing')
 
   const [category, setCategory] = useState<BotCategory>(initialCat)
   const [market, setMarket] = useState<Market>(initial?.market ?? (initialCat === 'rebalance' ? 'US' : 'KR'))
@@ -85,6 +88,31 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
   const [rotTopN, setRotTopN] = useState(initial?.top_n ?? bot?.top_n ?? 5)
   const [rotBuffer, setRotBuffer] = useState(initial?.hold_buffer ?? bot?.hold_buffer ?? 10)
   const [rotCadence, setRotCadence] = useState<RotationCadence>((initial?.rebalance as RotationCadence) ?? (bot?.rebalance as RotationCadence) ?? 'weekly')
+  const [scalpSource, setScalpSource] = useState<ScalpSource>(
+    initial?.source ?? bot?.source ?? ((initial?.market ?? 'KR') === 'KR' ? 'kiwoom_condition' : 'watchlist'),
+  )
+  const [scalpCondSeq, setScalpCondSeq] = useState(initial?.condition_seq ?? bot?.condition_seq ?? '')
+  const [scalpCondName, setScalpCondName] = useState(initial?.condition_name ?? bot?.condition_name ?? '')
+  const [scalpCustom, setScalpCustom] = useState(
+    Array.isArray(initial?.custom_symbols)
+      ? initial.custom_symbols.join(', ')
+      : typeof initial?.custom_symbols === 'string'
+        ? initial.custom_symbols
+        : bot?.custom_symbols?.join(', ') ?? '',
+  )
+  const [scalpMinStrength, setScalpMinStrength] = useState(initial?.min_strength ?? bot?.min_strength ?? 120)
+  const [scalpMinGain, setScalpMinGain] = useState(initial?.min_gain_pct ?? bot?.min_gain_pct ?? 1.0)
+  const [scalpMaxGain, setScalpMaxGain] = useState(initial?.max_gain_pct ?? bot?.max_gain_pct ?? 22.0)
+  const [scalpAboveVwap, setScalpAboveVwap] = useState(initial?.above_vwap ?? bot?.above_vwap ?? true)
+  const [scalpTp, setScalpTp] = useState(initial?.take_profit_pct ?? bot?.take_profit_pct ?? 2.0)
+  const [scalpSl, setScalpSl] = useState(initial?.stop_loss_pct ?? bot?.stop_loss_pct ?? 1.0)
+  const [scalpTrail, setScalpTrail] = useState(initial?.trailing_stop_pct ?? bot?.trailing_stop_pct ?? 0.8)
+  const [scalpMaxPos, setScalpMaxPos] = useState(initial?.max_positions ?? bot?.max_positions ?? 1)
+  const [scalpMaxTrades, setScalpMaxTrades] = useState(initial?.max_trades_per_day ?? bot?.max_trades_per_day ?? 5)
+  const [scalpWindowMins, setScalpWindowMins] = useState(initial?.entry_window_mins ?? bot?.entry_window_mins ?? 90)
+  const [kwConditions, setKwConditions] = useState<KiwoomConditionItem[]>([])
+  const [kwCondLoading, setKwCondLoading] = useState(false)
+  const [kwCondErr, setKwCondErr] = useState('')
   const [capital, setCapital] = useState(initial?.capital ?? (market === 'KR' ? 1_000_000 : 1_000))
   const [name, setName] = useState(initial?.name ?? '')
   const [watch, setWatch] = useState<WatchItem[]>([])
@@ -92,7 +120,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
   const [busy, setBusy] = useState(false)
 
   const holding = !!bot && (
-    bot.kind === 'rebalance'
+    bot.kind === 'rebalance' || bot.kind === 'rotation' || bot.kind === 'scalp'
       ? Object.values(bot.state.positions ?? {}).some((p) => p.qty > 0)
       : bot.state.position.qty > 0
   )
@@ -109,6 +137,30 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
   const isRot = category === 'rotation'
   const isDca = category === 'dca'
   const isWebhook = category === 'webhook'
+  const isScalp = category === 'scalp'
+
+  const loadKiwoomConditions = async () => {
+    setKwCondLoading(true)
+    setKwCondErr('')
+    try {
+      const r = await brokerApi.kiwoomConditions()
+      setKwConditions(r.items)
+      if (!scalpCondSeq && r.items.length > 0) {
+        setScalpCondSeq(r.items[0].seq)
+        setScalpCondName(r.items[0].name)
+      }
+    } catch (e) {
+      setKwCondErr((e as Error).message)
+    } finally {
+      setKwCondLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (isScalp && scalpSource === 'kiwoom_condition' && market === 'KR' && kwConditions.length === 0 && !kwCondLoading) {
+      void loadKiwoomConditions()
+    }
+  }, [isScalp, scalpSource, market])
   const catStrategies = strategies.filter((s) => s.category === (category === 'daytrade' ? 'daytrade' : 'swing'))
   const meta = catStrategies.find((s) => s.id === strategy) ?? catStrategies[0]
   const pModel = portfolioModels.find((m) => m.id === modelId) ?? portfolioModels[0]
@@ -140,6 +192,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
     if (!holding) {
       setRotUniverse(nextMarket === 'KR' ? 'kr_all_150' : 'us_sp100')
       if (nextMarket !== 'KR' && rotPreset === 'smart_money') setRotPreset('momentum_quality')
+      if (nextMarket !== 'KR' && scalpSource === 'kiwoom_condition') setScalpSource('watchlist')
     }
   }
 
@@ -164,7 +217,35 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
       daily_loss_limit_pct: dailyLossPct || 0,
     }
     try {
-      if (isRot) {
+      if (isScalp) {
+        await onSubmit({
+          kind: 'scalp',
+          name: name || undefined,
+          market,
+          source: scalpSource,
+          condition_seq: scalpSource === 'kiwoom_condition' ? scalpCondSeq : undefined,
+          condition_name: scalpSource === 'kiwoom_condition' ? scalpCondName : undefined,
+          custom_symbols: scalpSource === 'watchlist' ? scalpCustom : undefined,
+          min_strength: scalpMinStrength,
+          min_gain_pct: scalpMinGain,
+          max_gain_pct: scalpMaxGain,
+          above_vwap: scalpAboveVwap,
+          take_profit_pct: scalpTp,
+          stop_loss_pct: scalpSl,
+          trailing_stop_pct: scalpTrail,
+          max_positions: scalpMaxPos,
+          max_trades_per_day: scalpMaxTrades,
+          entry_window_mins: scalpWindowMins,
+          guard,
+          market_timing: {
+            mode: mtMode,
+            benchmark: mtBench || (market === 'KR' ? '069500' : 'SPY'),
+            ma_short: 20,
+            ma_long: 60,
+          },
+          capital,
+        })
+      } else if (isRot) {
         await onSubmit({
           kind: 'rotation',
           name: name || undefined,
@@ -268,11 +349,15 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
     }
   }
 
-  const canSubmit = isRot
-    ? (rotUniverse !== 'custom' || rotCustom.split(/[\s,;]+/).filter(Boolean).length >= 2)
-    : isRebal
-      ? assets.length >= 2 && assets.every((a) => a.symbol.trim())
-      : !!symbol.trim()
+  const canSubmit = isScalp
+    ? (scalpSource === 'kiwoom_condition'
+      ? !!scalpCondSeq.trim()
+      : scalpCustom.split(/[\s,;]+/).filter(Boolean).length >= 1)
+    : isRot
+      ? (rotUniverse !== 'custom' || rotCustom.split(/[\s,;]+/).filter(Boolean).length >= 2)
+      : isRebal
+        ? assets.length >= 2 && assets.every((a) => a.symbol.trim())
+        : !!symbol.trim()
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -284,7 +369,8 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
           <div className="tabs bot-cat-tabs" style={{ marginBottom: 12 }}>
             {([
               ['swing', '스윙봇 (일봉)', '하루 한 번 일봉 종가를 보고 며칠~몇 주 추세를 타는 스윙 매매 봇입니다'],
-              ['daytrade', '단타봇 (분봉)', '장중 분봉이나 시초가 돌파를 노리고 장 마감 전 당일 모두 청산하는 단타 봇입니다'],
+              ['daytrade', '단타봇 (실전·분봉)', 'VWAP 첫 눌림목·당일고가 고가놀이·양전 돌파·주도주 종가베팅 등 실전 단타 봇입니다'],
+              ['scalp', '⚡ 스캘핑 봇 (조건·체결강도)', '키움 영웅문 조건검색식이나 주도주 목록에서 실시간 체결강도·호가 스프레드·VWAP을 확인해 초단타 매매하는 고수형 스캘핑 봇입니다'],
               ['rebalance', '리밸런싱 봇', '여러 주식·채권·금 ETF를 담아 매월·분기마다 목표 비중을 자동으로 맞춰주는 포트폴리오 봇입니다'],
               ['rotation', '순환매 봇', '매주·매월 퀀트 종목발굴 상위 N종목을 자동으로 뽑아 순위 밖 종목만 교체해 주는 랭킹 봇입니다'],
               ['dca', '적립식 봇 (모으기)', '매주·매월 꾸준히 모으되 차트 세일 구간엔 더 사고 과열 구간엔 덜 사서 평균단가를 낮추는 스마트 적립 봇입니다'],
@@ -311,7 +397,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             </select>
           </label>
 
-          {!isRebal && !isRot && (
+          {!isRebal && !isRot && !isScalp && (
             <>
               <label title="봇이 감시하고 매매할 종목 코드(예: 005930, AAPL)를 입력하거나 관심종목에서 고릅니다">
                 <span>종목 코드</span>
@@ -387,6 +473,181 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
                   )}
                 </>
               )}
+            </>
+          )}
+
+          {isScalp && (
+            <>
+              <label title="실시간 스캘핑 후보 종목을 어디서 가져올지 고릅니다 (키움 연결 시 영웅문 HTS 조건검색식 실시간 포착 가능)">
+                <span>후보 종목 소스</span>
+                <select
+                  value={scalpSource}
+                  disabled={holding}
+                  onChange={(e) => setScalpSource(e.target.value as ScalpSource)}
+                >
+                  <option value="kiwoom_condition" disabled={market !== 'KR'}>
+                    🟣 영웅문 HTS 조건검색식 (키움 국내 전용)
+                  </option>
+                  <option value="watchlist">📋 직접 지정 주도주 목록 (토스·키움 공용)</option>
+                </select>
+              </label>
+
+              {scalpSource === 'kiwoom_condition' ? (
+                <label title="PC 영웅문4 HTS에 서버 저장해 둔 조건검색식을 선택합니다">
+                  <span>
+                    영웅문 조건검색식{' '}
+                    <button
+                      type="button"
+                      className="link small"
+                      disabled={kwCondLoading}
+                      onClick={() => void loadKiwoomConditions()}
+                    >
+                      {kwCondLoading ? '불러오는 중…' : '새로고침'}
+                    </button>
+                  </span>
+                  {kwConditions.length > 0 ? (
+                    <select
+                      value={scalpCondSeq}
+                      disabled={holding}
+                      onChange={(e) => {
+                        const seq = e.target.value
+                        setScalpCondSeq(seq)
+                        const hit = kwConditions.find((c) => c.seq === seq)
+                        setScalpCondName(hit?.name ?? '')
+                      }}
+                    >
+                      {kwConditions.map((c) => (
+                        <option key={c.seq} value={c.seq}>#{c.seq} {c.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={scalpCondSeq}
+                      disabled={holding}
+                      placeholder="조건식 번호(예: 0) 또는 위 새로고침"
+                      onChange={(e) => setScalpCondSeq(e.target.value)}
+                    />
+                  )}
+                  {kwCondErr && <span className="error small">{kwCondErr}</span>}
+                </label>
+              ) : (
+                <label title="장중 체결강도와 호가를 감시할 주도주 종목 코드를 쉼표로 구분해 입력합니다 (최대 15개)">
+                  <span>감시 주도주 코드 (쉼표 구분)</span>
+                  <input
+                    value={scalpCustom}
+                    onChange={(e) => setScalpCustom(e.target.value.toUpperCase())}
+                    placeholder={market === 'KR' ? '005930, 000660, 042700' : 'NVDA, TSLA, AAPL, AMD'}
+                  />
+                </label>
+              )}
+
+              <label title="매수 체결량이 매도 체결량보다 얼마나 압도적이어야 진입할지 정합니다 (한봉호·창원개미 기준 120~150% 이상)">
+                <span>최소 체결강도 (%)</span>
+                <input
+                  type="number"
+                  min={80}
+                  max={500}
+                  step={5}
+                  value={scalpMinStrength}
+                  onChange={(e) => setScalpMinStrength(Number(e.target.value))}
+                />
+              </label>
+              <label title="당일 주도주 탄력을 확인하기 위한 최소 상승률(%)입니다 (예: +1% 이상 빨간불 종목만)">
+                <span>당일 최소 등락률 (%)</span>
+                <input
+                  type="number"
+                  min={-10}
+                  max={25}
+                  step={0.5}
+                  value={scalpMinGain}
+                  onChange={(e) => setScalpMinGain(Number(e.target.value))}
+                />
+              </label>
+              <label title="상한가 직전 과열 추격 매수를 막기 위한 최대 상승률 상한(%)입니다 (기본 22%)">
+                <span>당일 최대 등락률 (%)</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={29.5}
+                  step={0.5}
+                  value={scalpMaxGain}
+                  onChange={(e) => setScalpMaxGain(Number(e.target.value))}
+                />
+              </label>
+              <label className="check" style={{ alignSelf: 'end' }} title="켜면 현재가가 당일 거래량 가중 평균가(VWAP) 위에 있는 강한 종목에만 진입합니다">
+                <input
+                  type="checkbox"
+                  checked={scalpAboveVwap}
+                  onChange={(e) => setScalpAboveVwap(e.target.checked)}
+                />
+                <span>당일 VWAP 위 종목만 진입</span>
+              </label>
+              <label title="매수가 대비 이 수익률(%)에 도달하면 지체 없이 익절합니다 (스캘핑 권장 1.5~3%)">
+                <span>스캘핑 목표 익절 (%)</span>
+                <input
+                  type="number"
+                  min={0.3}
+                  max={20}
+                  step={0.1}
+                  value={scalpTp}
+                  onChange={(e) => setScalpTp(Number(e.target.value))}
+                />
+              </label>
+              <label title="진입 후 예상과 다르게 밀릴 때 즉시 끊어낼 칼손절 기준(%)입니다 (권장 0.8~1.5%)">
+                <span>칼손절 기준 (%)</span>
+                <input
+                  type="number"
+                  min={0.2}
+                  max={10}
+                  step={0.1}
+                  value={scalpSl}
+                  onChange={(e) => setScalpSl(Number(e.target.value))}
+                />
+              </label>
+              <label title="수익 구간 진입 후 고점 대비 이 비율(%)만큼 밀리면 수익을 잠그며 익절합니다 (0=끔)">
+                <span>고점 트레일링 익절 (%)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10}
+                  step={0.1}
+                  value={scalpTrail}
+                  onChange={(e) => setScalpTrail(Number(e.target.value))}
+                />
+              </label>
+              <label title="동시에 들고 있을 최대 대장주 수입니다 (1~2개 집중 권장, 슬롯별로 자금을 균등 분할)">
+                <span>동시 최대 종목 수</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={scalpMaxPos}
+                  onChange={(e) => setScalpMaxPos(Math.max(1, Math.min(5, Math.floor(Number(e.target.value)))))}
+                />
+              </label>
+              <label title="뇌동매매와 수수료 누적을 막기 위한 하루 최대 스캘핑 진입 횟수입니다 (권장 3~5회)">
+                <span>하루 최대 매매 횟수</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  step={1}
+                  value={scalpMaxTrades}
+                  onChange={(e) => setScalpMaxTrades(Math.max(1, Math.min(30, Math.floor(Number(e.target.value)))))}
+                />
+              </label>
+              <label title="장 시작 후 몇 분 동안만 신규 진입을 허용할지 정합니다 (90분 = 오전 9:00~10:30 황금시간대, 0 = 장중 전체)">
+                <span>개장 후 집중 매매 시간 (분, 0=전체)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={360}
+                  step={15}
+                  value={scalpWindowMins}
+                  onChange={(e) => setScalpWindowMins(Math.max(0, Math.min(360, Math.floor(Number(e.target.value)))))}
+                />
+              </label>
             </>
           )}
 
@@ -487,7 +748,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
             />
           </label>
 
-          {!isRebal && !isRot && !isDca && !isWebhook && meta?.params.map((p) => {
+          {!isRebal && !isRot && !isDca && !isWebhook && !isScalp && meta?.params.map((p) => {
             const tip = getParamHint(meta.id, p.key, p.label, p.min, p.max)
             return (
               <label key={p.key} title={tip}>
@@ -516,7 +777,7 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
           </label>
         </div>
 
-        {!isRebal && !isRot && !isDca && (
+        {!isRebal && !isRot && !isDca && !isScalp && (
           <fieldset className="costs" style={{ marginTop: 10 }}>
             <legend>🛡️ 공통 보호막 · 토스 OCO 자동 연동 (0이면 끔)</legend>
             <div className="modal-grid">
@@ -650,13 +911,20 @@ export default function BotForm({ strategies, portfolioModels, initial, bot, onS
           </div>
         )}
 
+        {isScalp && (
+          <p className="muted small" style={{ marginTop: 10 }}>
+            <b>⚡ 실전 고수형 조건검색 · 체결강도 스캘핑 봇 (한봉호·창원개미·홍인기 스타일)</b><br />
+            장중 30초마다 영웅문 조건검색식(또는 직접 지정 주도주)에서 <b>실시간 체결강도·호가 스프레드·VWAP 위</b> 조건을 모두 통과한 최강 대장주에만 진입합니다.
+            손절한 종목은 당일 재진입을 자동 차단하며, 장 마감 10분 전에는 모든 보유 물량을 강제 청산해 밤사이 갭 위험을 없앱니다.
+          </p>
+        )}
         {isWebhook && (
           <p className="muted small" style={{ marginTop: 10 }}>
             <b>🔗 외부 신호 웹훅(Webhook) 연동 안내</b><br />
             봇을 만든 뒤 상세 화면에서 전용 웹훅 주소(URL)와 <b>암호화 비밀 토큰</b>, 그리고 트레이딩뷰(TradingView) 알림창에 그대로 복사해 붙여넣을 수 있는 JSON 템플릿이 제공됩니다.
           </p>
         )}
-        {!isRebal && !isRot && !isDca && !isWebhook && meta && (
+        {!isRebal && !isRot && !isDca && !isWebhook && !isScalp && meta && (
           <>
             <p className="muted small" style={{ marginTop: 10 }}>
               <b>{meta.theory}</b><br />{meta.summary}

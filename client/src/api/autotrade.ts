@@ -2,10 +2,26 @@ import { api } from './client'
 import type { MarketTimingRules, PortfolioAsset, RebalanceMode, RiskRules } from './quant'
 import type { Interval, Market } from './types'
 
-export type BotKind = 'single' | 'rebalance' | 'rotation' | 'dca' | 'webhook'
-export type BotCategory = 'swing' | 'daytrade' | 'rebalance' | 'rotation' | 'dca' | 'webhook'
+export type BotKind = 'single' | 'rebalance' | 'rotation' | 'dca' | 'webhook' | 'scalp'
+export type BotCategory = 'swing' | 'daytrade' | 'rebalance' | 'rotation' | 'dca' | 'webhook' | 'scalp'
 export type RotationCadence = 'weekly' | 'biweekly' | 'monthly'
 export type DcaCadence = 'daily' | 'weekly' | 'biweekly' | 'monthly'
+export type ScalpSource = 'kiwoom_condition' | 'watchlist'
+
+export interface ScalpCandidate {
+  symbol: string
+  name: string
+  price: number
+  change_pct: number
+  strength: number
+  spread_pct: number | null
+  bid_ask_ratio: number | null
+  vwap: number | null
+  above_vwap: boolean
+  qualified: boolean
+  reject_reason: string | null
+  score: number
+}
 
 export interface DcaStats {
   steps: number
@@ -17,6 +33,7 @@ export interface DcaStats {
 }
 
 export interface BotTrade {
+  symbol?: string
   entry_date: string
   entry_price: number
   qty: number
@@ -90,6 +107,19 @@ export interface Bot {
   dip_mult?: number
   peak_mult?: number
   webhook_secret_hint?: string
+  source?: ScalpSource
+  condition_seq?: string
+  condition_name?: string
+  min_strength?: number
+  min_gain_pct?: number
+  max_gain_pct?: number
+  above_vwap?: boolean
+  take_profit_pct?: number
+  stop_loss_pct?: number
+  trailing_stop_pct?: number
+  max_positions?: number
+  max_trades_per_day?: number
+  entry_window_mins?: number
   params: Record<string, number>
   risk?: RiskRules
   guard?: GuardRules
@@ -101,9 +131,11 @@ export interface Bot {
   updated_at: string
   state: {
     position: { qty: number; entry_price: number; entry_date: string | null }
-    positions?: Record<string, { qty: number; entry_price: number; name?: string }>
+    positions?: Record<string, { qty: number; entry_price: number; peak_price?: number; name?: string }>
     target_weights?: Record<string, number>
     selected_picks?: { symbol: string; name: string; rank: number; score: number }[]
+    last_candidates?: ScalpCandidate[]
+    today_trades_count?: number
     last_prices?: Record<string, number>
     last_rebalance_date?: string | null
     rebalances?: BotRebalanceLog[]
@@ -141,6 +173,7 @@ export interface Evaluation {
   last: number
   current_weights?: Record<string, number>
   target_weights?: Record<string, number>
+  candidates?: ScalpCandidate[]
   orders: { side: string; kind: string; symbol?: string; text: string }[]
   planned_orders?: { side: string; kind: string; symbol?: string; text: string }[]
 }
@@ -168,6 +201,19 @@ export interface BotInput {
   dip_mult?: number
   peak_mult?: number
   webhook_secret_hint?: string
+  source?: ScalpSource
+  condition_seq?: string
+  condition_name?: string
+  min_strength?: number
+  min_gain_pct?: number
+  max_gain_pct?: number
+  above_vwap?: boolean
+  take_profit_pct?: number
+  stop_loss_pct?: number
+  trailing_stop_pct?: number
+  max_positions?: number
+  max_trades_per_day?: number
+  entry_window_mins?: number
   params?: Record<string, number>
   risk?: RiskRules
   guard?: GuardRules

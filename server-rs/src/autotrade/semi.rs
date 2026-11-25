@@ -51,14 +51,19 @@ pub async fn stage_from_scheduler(
     now: Option<DateTime<Utc>>,
 ) -> ApiResult<Value> {
     let is_intra = executor::is_intraday(bot);
+    let is_scalp = executor::is_scalp(bot);
+    let is_cb = executor::is_closing_bet(bot);
     let sk = bots::state_key(bot["mode"].as_str().unwrap_or("semi")).to_string();
-    if !is_intra && bot["state"][&sk]["last_run_date"].as_str() == Some(today) {
+    if !is_intra && !is_cb && bot["state"][&sk]["last_run_date"].as_str() == Some(today) {
         return Ok(json!({ "skipped": "already_staged" }));
+    }
+    if is_scalp && active_proposal(&bot["state"][&sk], now).is_some() {
+        return Ok(json!({ "skipped": "approval_pending" }));
     }
 
     let _ = executor::reconcile_live(state, bot, today).await;
     let pv = executor::preview(state, bot, today).await?;
-    if is_intra {
+    if is_intra && !is_scalp {
         let (_, bars, _, _) = executor::load_intraday(state, bot).await?;
         let bar_time = *bars.time.last().unwrap_or(&0);
         if bot["state"][&sk]["last_bar_time"].as_i64() == Some(bar_time) {
@@ -111,7 +116,7 @@ pub async fn stage_from_scheduler(
     );
     let avail_cash = bp.get("cashBuyingPower").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let kind = bots::bot_kind(bot).to_string();
-    let invested: f64 = if kind == "rebalance" || kind == "rotation" {
+    let invested: f64 = if matches!(kind.as_str(), "rebalance" | "rotation" | "scalp") {
         bot["state"][&sk]["positions"]
             .as_object()
             .map(|mp| {
@@ -210,7 +215,7 @@ pub async fn stage_from_scheduler(
                 .and_then(|v| v.get("sellableQuantity").cloned())
                 .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .unwrap_or(0.0) as i64;
-            let held_q = if kind == "rebalance" || kind == "rotation" {
+            let held_q = if matches!(kind.as_str(), "rebalance" | "rotation" | "scalp") {
                 bot["state"][&sk]["positions"]
                     .get(&sym)
                     .and_then(|p| p.get("qty"))

@@ -7,6 +7,7 @@ pub mod protections;
 pub mod rebalance;
 pub mod rotation;
 pub mod routes;
+pub mod scalp;
 pub mod scheduler;
 pub mod semi;
 pub mod webhook;

@@ -40,7 +40,7 @@ fn state_equity_and_invested(bot: &Value, ledger: &str) -> (f64, f64) {
     let st = &bot["state"][ledger];
     let cap = bot["capital"].as_f64().unwrap_or(0.0);
     let kind = bots::bot_kind(bot);
-    if kind == "rebalance" || kind == "rotation" {
+    if matches!(kind, "rebalance" | "rotation" | "scalp") {
         let positions = st.get("positions").and_then(|v| v.as_object());
         let last_prices = st.get("last_prices").and_then(|v| v.as_object());
         let pos_val: f64 = positions
@@ -268,6 +268,28 @@ fn bot_symbols(bot: &Value) -> Vec<String> {
         }
         return out;
     }
+    if kind == "scalp" {
+        let st = bots::state(bot);
+        let mut out = Vec::new();
+        if let Some(pos) = st.get("positions").and_then(|v| v.as_object()) {
+            for (s, p) in pos {
+                if p.get("qty").and_then(|v| v.as_f64()).unwrap_or(0.0) > 0.0 && !out.contains(s) {
+                    out.push(s.clone());
+                }
+            }
+        }
+        if let Some(cs) = bot.get("custom_symbols").and_then(|v| v.as_array()) {
+            for x in cs {
+                if let Some(s) = x.as_str() {
+                    let up = s.to_uppercase();
+                    if !out.contains(&up) {
+                        out.push(up);
+                    }
+                }
+            }
+        }
+        return out;
+    }
     let sym = bot
         .get("symbol")
         .and_then(|v| v.as_str())
@@ -283,6 +305,14 @@ fn bot_symbols(bot: &Value) -> Vec<String> {
 
 fn next_schedule_label(bot: &Value) -> String {
     let kind = bots::bot_kind(bot);
+    if kind == "scalp" {
+        let win = bot.get("entry_window_mins").and_then(|v| v.as_i64()).unwrap_or(90);
+        return if win > 0 {
+            format!("장중 30초마다 체결강도 스캘핑 (진입 개장 {win}분 · 마감 10분 전 청산)")
+        } else {
+            "장중 30초마다 조건검색·체결강도 감시 · 마감 10분 전 청산".to_string()
+        };
+    }
     if kind == "webhook" {
         return "외부 웹훅 신호 수신 시 즉시 실행".to_string();
     }
@@ -303,6 +333,9 @@ fn next_schedule_label(bot: &Value) -> String {
     if kind == "rebalance" {
         let cad = rebal_label(bot.get("rebalance").and_then(|v| v.as_str()).unwrap_or("monthly"));
         return format!("{cad} 비중 리밸런싱 점검");
+    }
+    if bot.get("strategy").and_then(|v| v.as_str()) == Some("closing_bet") {
+        return "장 마감 25분 전 종가베팅 진입 · 다음 날 시초가 청산".to_string();
     }
     let tf = bots::bot_timeframe(bot);
     if tf != "1d" {

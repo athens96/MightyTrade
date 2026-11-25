@@ -179,11 +179,11 @@ async fn quant_lab_all_endpoints_work_end_to_end() {
     )
     .await;
 
-    // 1. Strategies metadata (11 strategies)
+    // 1. Strategies metadata (15 strategies: 7 swing + 8 daytrade including 4 pro setups)
     let (st, strats) = c.req("GET", "/api/quant/strategies", None).await;
     assert_eq!(st, StatusCode::OK);
     let strat_items = strats["items"].as_array().unwrap();
-    assert_eq!(strat_items.len(), 11);
+    assert_eq!(strat_items.len(), 15);
     assert_eq!(strats["objectives"].as_object().unwrap().len(), 6);
 
     // 2. Cost defaults
@@ -203,6 +203,10 @@ async fn quant_lab_all_endpoints_work_end_to_end() {
         "rsi2",
         "ibs_reversion",
         "ts_momentum",
+        "vwap_pullback",
+        "hod_breakout",
+        "red_to_green",
+        "closing_bet",
         "vol_breakout",
         "gap_reversion",
         "orb_breakout",

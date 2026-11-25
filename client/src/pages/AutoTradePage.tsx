@@ -12,7 +12,7 @@ import UnlockBar from '../components/trading/UnlockBar'
 import { investingUrl } from '../lib/externalLinks'
 import { FEATURE_GUIDES } from '../lib/featureGuides'
 
-const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', rebalance: '리밸런싱', rotation: '순환매', dca: '적립식', webhook: '웹훅' }
+const CAT_LABEL: Record<BotCategory, string> = { swing: '스윙', daytrade: '단타', scalp: '스캘핑', rebalance: '리밸런싱', rotation: '순환매', dca: '적립식', webhook: '웹훅' }
 const MODE_LABEL: Record<BotMode, string> = { paper: '모의', semi: '승인 후 주문', live: '실거래' }
 const REBAL_LABEL: Record<string, string> = { daily: '매일', weekly: '매주', biweekly: '격주(2주)', monthly: '매월 초', quarterly: '분기 초', yearly: '매년 초', drift: '비중 편차 이탈' }
 
@@ -72,9 +72,10 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
   const [error, setError] = useState('')
   const isRebal = bot.kind === 'rebalance' || bot.kind === 'rotation'
   const isRot = bot.kind === 'rotation'
+  const isScalp = bot.kind === 'scalp'
   const isDca = bot.kind === 'dca'
   const isWebhook = bot.kind === 'webhook'
-  const meta = !isRebal && !isDca && !isWebhook ? strategies.find((s) => s.id === bot.strategy) : undefined
+  const meta = !isRebal && !isDca && !isWebhook && !isScalp ? strategies.find((s) => s.id === bot.strategy) : undefined
   const pModel = bot.kind === 'rebalance' ? portfolioModels.find((m) => m.id === bot.model) : undefined
 
   const loadEvents = useCallback(() => {
@@ -106,17 +107,21 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
 
   const s = bot.state
   const pos = s.position
-  const unreal = !isRebal && pos.qty && s.last_price ? (s.last_price / pos.entry_price - 1) * 100 : null
+  const unreal = !isRebal && !isScalp && pos.qty && s.last_price ? (s.last_price / pos.entry_price - 1) * 100 : null
   const positions = s.positions ?? {}
   const heldSymbols = Object.values(positions).filter((p) => p.qty > 0).length
-  const totalRebalVal = isRebal
+  const totalRebalVal = isRebal || isScalp
     ? (bot.mode === 'paper' ? (s.equity_now ?? bot.capital) : Math.max(bot.capital, s.last_price ?? 0))
     : 0
-  const scheduleNote = isRebal
-    ? `리밸런싱: ${REBAL_LABEL[bot.rebalance ?? 'monthly'] ?? bot.rebalance}${bot.rebalance === 'drift' ? ` (±${bot.drift_pct}%)` : ''} · 정규장 시작 1분 뒤`
-    : bot.timeframe !== '1d'
-      ? `장중 ${bot.timeframe} 봉 마감마다 실행 · 장 마감 10분 전 당일 강제 청산`
-      : '매일 정규장 시작 1분 뒤 전날 종가 기준으로 판단·실행'
+  const scheduleNote = isScalp
+    ? `장중 30초마다 조건·체결강도 감시${bot.entry_window_mins ? ` (개장 ${bot.entry_window_mins}분 집중 진입)` : ''} · 마감 10분 전 당일 청산`
+    : bot.strategy === 'closing_bet'
+      ? '장 마감 25분 전 종가베팅 진입 · 다음 날 시초가 청산'
+      : isRebal
+        ? `리밸런싱: ${REBAL_LABEL[bot.rebalance ?? 'monthly'] ?? bot.rebalance}${bot.rebalance === 'drift' ? ` (±${bot.drift_pct}%)` : ''} · 정규장 시작 1분 뒤`
+        : bot.timeframe !== '1d'
+          ? `장중 ${bot.timeframe} 봉 마감마다 실행 · 장 마감 10분 전 당일 강제 청산`
+          : '매일 정규장 시작 1분 뒤 전날 종가 기준으로 판단·실행'
 
   return (
     <section className="bot-detail">
@@ -128,7 +133,7 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         {s.pending_approval && <span className="match-badge" title="1클릭 승인을 기다리는 주문이 있습니다">✋ 승인 대기 ({s.pending_approval.orders.length}건)</span>}
         {s.tripped && <span className="warn-badge" title={s.tripped.reason}>🛑 보호 잠금</span>}
         {!s.tripped && s.cooldown_until && <span className="warn-badge" title={`${s.cooldown_until}까지 손절 후 휴식`}>⏳ 쿨다운 ~{s.cooldown_until}</span>}
-        {!isRebal && (
+        {!isRebal && !isScalp && (
           <a className="ext-link" href={investingUrl(bot.market, bot.symbol)} target="_blank" rel="noopener noreferrer" title="Investing.com에서 종목 정보·뉴스 보기">Investing ↗</a>
         )}
         <div className="spacer" />
@@ -142,7 +147,14 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
         </button>
       </div>
       <p className="muted small">
-        {isRot ? (
+        {isScalp ? (
+          <>
+            <b>⚡ 스캘핑 ({bot.source === 'kiwoom_condition' ? `영웅문 조건식 #${bot.condition_seq}${bot.condition_name ? ` ${bot.condition_name}` : ''}` : `주도주 지정: ${(bot.custom_symbols ?? []).join(', ')}`})</b>
+            {' '}· 체결강도 ≥ {bot.min_strength ?? 120}% · 등락 +{bot.min_gain_pct ?? 1}%~+{bot.max_gain_pct ?? 22}%{bot.above_vwap ? ' · VWAP↑' : ''}
+            {' '}· 익절 +{bot.take_profit_pct ?? 2}% / 칼손절 -{bot.stop_loss_pct ?? 1}%{bot.trailing_stop_pct ? ` / 트레일링 -${bot.trailing_stop_pct}%` : ''}
+            {' '}· 최대 {bot.max_positions ?? 1}종목 (일 {bot.max_trades_per_day ?? 5}회) · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
+          </>
+        ) : isRot ? (
           <>
             <b>종목발굴 순환매 ({bot.preset})</b> · 후보군 {bot.universe} · 상위 {bot.top_n}종목 (유지버퍼 {bot.hold_buffer}위) · 운용 자금 {money(bot, bot.capital)} · {scheduleNote}
           </>
@@ -350,8 +362,13 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
           <span className="muted small">보유</span>
           {isRebal ? (
             <>
-              <b>{heldSymbols ? `${heldSymbols}/${bot.assets?.length ?? 0} 종목` : '미구성'}</b>
+              <b>{heldSymbols ? `${heldSymbols}/${bot.assets?.length ?? bot.top_n ?? 0} 종목` : '미구성'}</b>
               <span className="small muted">최근 리밸런싱 {s.last_rebalance_date ?? '-'}</span>
+            </>
+          ) : isScalp ? (
+            <>
+              <b>{heldSymbols ? `${heldSymbols}/${bot.max_positions ?? 1} 종목` : '관망 중'}</b>
+              <span className="small muted">오늘 매매 {s.today_trades_count ?? 0}/{bot.max_trades_per_day ?? 5}회</span>
             </>
           ) : (
             <>
@@ -447,11 +464,70 @@ function BotDetail({ bot, strategies, portfolioModels, onChanged, onDeleted }: {
           {evaluation.orders.length ? (
             <ul>{evaluation.orders.map((o, i) => <li key={i} className={o.side === 'buy' ? 'up' : 'down'}>{o.text}</li>)}</ul>
           ) : <p className="muted">신호 없음 — 다음 실행 때 주문하지 않습니다.</p>}
-          {!isRebal && (
+          {!isRebal && !isScalp && (
             <p className="muted small">현재 보유 {evaluation.position.qty}주 · 최근가 {money(bot, evaluation.last)}{evaluation.today_open ? ` · 오늘 시가 ${money(bot, evaluation.today_open)}` : ''}</p>
           )}
         </div>
       )}
+
+      {isScalp && Object.keys(positions).length > 0 && (
+        <>
+          <h4>⚡ 스캘핑 보유 포지션 ({Object.keys(positions).length}종목)</h4>
+          <div className="trades-wrap">
+            <table className="trades left-first">
+              <thead>
+                <tr><th>종목</th><th>보유</th><th>진입가</th><th>고점(트레일링)</th><th>현재가</th><th>평가손익률</th></tr>
+              </thead>
+              <tbody>
+                {Object.entries(positions).map(([sym, p]) => {
+                  const px = s.last_prices?.[sym] ?? p.entry_price
+                  const ret = p.entry_price > 0 ? (px / p.entry_price - 1) * 100 : 0
+                  return (
+                    <tr key={sym}>
+                      <td><b>{p.name && p.name !== sym ? `${p.name} (${sym})` : sym}</b></td>
+                      <td>{p.qty.toLocaleString()}주</td>
+                      <td>{money(bot, p.entry_price)}</td>
+                      <td>{money(bot, p.peak_price ?? p.entry_price)}</td>
+                      <td>{money(bot, px)}</td>
+                      <td className={cls(ret)}><b>{pct(ret)}</b></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {isScalp && (() => {
+        const cands = evaluation?.candidates ?? s.last_candidates ?? []
+        if (!cands.length) return null
+        return (
+          <>
+            <h4>🔍 스캘핑 후보 스캔 · 실시간 체결강도 ({cands.length}종목)</h4>
+            <div className="trades-wrap">
+              <table className="trades left-first">
+                <thead>
+                  <tr><th>종목</th><th>현재가</th><th>등락률</th><th>체결강도</th><th>VWAP</th><th>스프레드</th><th>판정</th></tr>
+                </thead>
+                <tbody>
+                  {cands.map((c) => (
+                    <tr key={c.symbol}>
+                      <td><b>{c.name !== c.symbol ? `${c.name} (${c.symbol})` : c.symbol}</b></td>
+                      <td>{money(bot, c.price)}</td>
+                      <td className={cls(c.change_pct)}>{pct(c.change_pct)}</td>
+                      <td className={c.strength >= (bot.min_strength ?? 120) ? 'up' : 'muted'}><b>{c.strength.toFixed(0)}%</b></td>
+                      <td className="small">{c.vwap != null ? `${money(bot, c.vwap)} (${c.above_vwap ? '위' : '아래'})` : '-'}</td>
+                      <td className="small muted">{c.spread_pct != null ? `${c.spread_pct.toFixed(2)}%` : '-'}</td>
+                      <td className="small">{c.qualified ? <span className="up"><b>✓ 진입 조건 충족</b></span> : <span className="muted">{c.reject_reason ?? '보류'}</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      })()}
 
           {isRot && Object.keys(positions).length > 0 && !bot.assets && (
             <>
@@ -752,18 +828,20 @@ export default function AutoTradePage() {
         )}
         <button
           className="primary"
-          title="새로운 스윙·단타·리밸런싱·순환매·적립식·웹훅 자동매매 봇을 만듭니다 (처음엔 안전한 모의 모드·꺼진 상태로 생성)"
+          title="새로운 스윙·단타·스캘핑·리밸런싱·순환매·적립식·웹훅 자동매매 봇을 만듭니다 (처음엔 안전한 모의 모드·꺼진 상태로 생성)"
           onClick={() => setCreating({
             category: filter === 'all' ? 'swing' : filter,
-            ...(filter === 'rebalance'
-              ? { kind: 'rebalance' }
-              : filter === 'rotation'
-                ? { kind: 'rotation' }
-                : filter === 'dca'
-                  ? { kind: 'dca' }
-                  : filter === 'webhook'
-                    ? { kind: 'webhook' }
-                    : {}),
+            ...(filter === 'scalp'
+              ? { kind: 'scalp' }
+              : filter === 'rebalance'
+                ? { kind: 'rebalance' }
+                : filter === 'rotation'
+                  ? { kind: 'rotation' }
+                  : filter === 'dca'
+                    ? { kind: 'dca' }
+                    : filter === 'webhook'
+                      ? { kind: 'webhook' }
+                      : {}),
           })}
         >
           + 봇 만들기
@@ -773,7 +851,8 @@ export default function AutoTradePage() {
       <div className="tabs bot-filter-tabs" style={{ marginBottom: 10 }}>
         <button className={filter === 'all' ? 'active' : ''} title="만들어 둔 모든 자동매매 봇을 한꺼번에 봅니다" onClick={() => setFilter('all')}>전체 {bots.length}</button>
         <button className={filter === 'swing' ? 'active' : ''} title="일봉 기준으로 며칠~몇 주 추세를 타는 스윙봇만 모아서 봅니다" onClick={() => setFilter('swing')}>스윙봇 {countOf('swing')}</button>
-        <button className={filter === 'daytrade' ? 'active' : ''} title="장중 분봉·시초가 돌파를 노리고 당일 마감 전에 청산하는 단타봇만 봅니다" onClick={() => setFilter('daytrade')}>단타봇 {countOf('daytrade')}</button>
+        <button className={filter === 'daytrade' ? 'active' : ''} title="실전 분봉 눌림목·당일고가 돌파·양전·종가베팅 등 단타봇만 봅니다" onClick={() => setFilter('daytrade')}>단타봇 {countOf('daytrade')}</button>
+        <button className={filter === 'scalp' ? 'active' : ''} title="영웅문 조건검색식과 실시간 체결강도로 초단타 매매하는 스캘핑 봇만 봅니다" onClick={() => setFilter('scalp')}>⚡ 스캘핑 봇 {countOf('scalp')}</button>
         <button className={filter === 'rebalance' ? 'active' : ''} title="여러 ETF를 묶어 정기적으로 목표 비중을 맞춰주는 자산배분 리밸런싱 봇만 봅니다" onClick={() => setFilter('rebalance')}>리밸런싱 봇 {countOf('rebalance')}</button>
         <button className={filter === 'rotation' ? 'active' : ''} title="종목 발굴 상위 N종목을 매주·매월 자동 교체해 굴리는 순환매 봇만 봅니다" onClick={() => setFilter('rotation')}>순환매 봇 {countOf('rotation')}</button>
         <button className={filter === 'dca' ? 'active' : ''} title="세일 구간에 더 사고 과열 구간에 덜 사며 꾸준히 모으는 스마트 적립식 봇만 봅니다" onClick={() => setFilter('dca')}>적립식 봇 {countOf('dca')}</button>
@@ -796,7 +875,7 @@ export default function AutoTradePage() {
         <aside className="bot-list">
           {visibleBots.map((b) => {
             const p = botPnl(b)
-            const multiKind = b.kind === 'rebalance' || b.kind === 'rotation'
+            const multiKind = b.kind === 'rebalance' || b.kind === 'rotation' || b.kind === 'scalp'
             const heldCount = multiKind
               ? Object.values(b.state.positions ?? {}).filter((x) => x.qty > 0).length
               : b.state.position.qty

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::time::{interval, Duration as TokioDuration};
 
-use crate::autotrade::{bots, executor, notifier, semi};
+use crate::autotrade::{bots, executor, notifier, scalp, semi};
 use crate::errors::ApiResult;
 use crate::market::extras;
 use crate::state::AppState;
@@ -234,6 +234,28 @@ async fn step(
             if now < start + open_delay || recent(last_err_at.as_deref(), err_backoff, now) {
                 return Ok(());
             }
+            if executor::is_closing_bet(bot) {
+                let holding = bots::has_open_position(bot, Some("live"));
+                let in_close = now >= end - Duration::minutes(25) && now < end - Duration::minutes(2);
+                let checked = bot["state"][&sk]
+                    .get("closing_checked_date")
+                    .and_then(|v| v.as_str())
+                    == Some(date);
+                if (!holding && (!in_close || checked))
+                    || (holding && bot["state"][&sk]["last_run_date"].as_str() == Some(date))
+                {
+                    return Ok(());
+                }
+                let _ = semi::stage_from_scheduler(state, bot, date, end, Some(now)).await?;
+                if in_close && !holding {
+                    bot["state"][&sk]["closing_checked_date"] = json!(date);
+                    bots::save(state, bot);
+                }
+                if let Some(m) = bot["state"][&sk].as_object_mut() {
+                    m.remove("last_error");
+                }
+                return Ok(());
+            }
             if !executor::is_intraday(bot) && bot["state"][&sk]["last_run_date"].as_str() == Some(date) {
                 return Ok(());
             }
@@ -252,6 +274,28 @@ async fn step(
                 return Ok(());
             }
             let _ = semi::stage_from_scheduler(state, bot, date, end, Some(now)).await?;
+            if let Some(m) = bot["state"][&sk].as_object_mut() {
+                m.remove("last_error");
+            }
+            return Ok(());
+        }
+
+        if executor::is_scalp(bot) {
+            if now < start + open_delay || recent(last_err_at.as_deref(), err_backoff, now) {
+                return Ok(());
+            }
+            let _ = scalp::run_intraday(state, bot, date, now, start, end).await?;
+            if let Some(m) = bot["state"][&sk].as_object_mut() {
+                m.remove("last_error");
+            }
+            return Ok(());
+        }
+
+        if executor::is_closing_bet(bot) {
+            if now < start + open_delay || recent(last_err_at.as_deref(), err_backoff, now) {
+                return Ok(());
+            }
+            let _ = executor::run_closing_bet(state, bot, date, now, start, end, false).await?;
             if let Some(m) = bot["state"][&sk].as_object_mut() {
                 m.remove("last_error");
             }

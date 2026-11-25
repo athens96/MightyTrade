@@ -73,9 +73,27 @@ export default function KiwoomConditionsPanel({ onBacktest, onPortfolio }: Props
       PREFILL_KEY,
       JSON.stringify({
         kind: 'single',
+        category: 'daytrade',
         market: 'KR',
         symbol: row.symbol,
-        strategy: 'ma_crossover',
+        strategy: 'vwap_pullback',
+      }),
+    )
+    navigate('/auto')
+  }
+
+  const sendConditionToScalpBot = () => {
+    if (!selectedSeq) return
+    const cond = conditions.find((c) => c.seq === selectedSeq)
+    sessionStorage.setItem(
+      PREFILL_KEY,
+      JSON.stringify({
+        kind: 'scalp',
+        category: 'scalp',
+        market: 'KR',
+        source: 'kiwoom_condition',
+        condition_seq: selectedSeq,
+        condition_name: cond?.name ?? '',
       }),
     )
     navigate('/auto')
@@ -129,6 +147,16 @@ export default function KiwoomConditionsPanel({ onBacktest, onPortfolio }: Props
           >
             {busyList ? '불러오는 중…' : loadedOnce ? '목록 새로고침' : '내 조건검색식 불러오기'}
           </button>
+          {selectedSeq && (
+            <button
+              type="button"
+              className="small"
+              title="선택한 영웅문 조건검색식과 실시간 체결강도를 결합한 자동 스캘핑 봇을 바로 만듭니다"
+              onClick={sendConditionToScalpBot}
+            >
+              ⚡ 이 조건식으로 스캘핑 봇 →
+            </button>
+          )}
           {matches.length >= 2 && (
             <button
               type="button"
@@ -212,9 +240,9 @@ export default function KiwoomConditionsPanel({ onBacktest, onPortfolio }: Props
                       <div className="row-btns">
                         <button
                           type="button"
-                          onClick={() => onBacktest(m.symbol, 'ma_crossover')}
+                          onClick={() => onBacktest(m.symbol, 'vwap_pullback')}
                         >
-                          백테스트
+                          단타 백테스트
                         </button>
                         <button
                           type="button"

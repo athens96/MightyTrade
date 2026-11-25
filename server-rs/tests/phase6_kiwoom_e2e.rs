@@ -434,6 +434,79 @@ async fn kiwoom_rest_account_market_trading_and_conditions_e2e() {
     assert_eq!(cmatches["items"][0]["symbol"], json!("005930"));
     assert_eq!(cmatches["items"][0]["price"], json!(72000.0));
 
+    // 7. Pro daytrade bots: Kiwoom condition + strength scalping bot & pro strategies
+    let (st, scalp_created) = c.req(
+        "POST",
+        "/api/autotrade/bots",
+        Some(json!({
+            "kind": "scalp",
+            "market": "KR",
+            "source": "kiwoom_condition",
+            "condition_seq": "0",
+            "condition_name": "단기돌파검색",
+            "min_strength": 110,
+            "min_gain_pct": 0.5,
+            "max_gain_pct": 22.0,
+            "above_vwap": false,
+            "take_profit_pct": 2.0,
+            "stop_loss_pct": 1.0,
+            "trailing_stop_pct": 0.8,
+            "max_positions": 1,
+            "max_trades_per_day": 5,
+            "entry_window_mins": 0,
+            "capital": 3000000
+        })),
+    ).await;
+    assert_eq!(st, StatusCode::OK, "scalp create failed: {scalp_created}");
+    assert_eq!(scalp_created["bot"]["kind"], json!("scalp"));
+    assert_eq!(scalp_created["bot"]["category"], json!("scalp"));
+    let scalp_id = scalp_created["bot"]["id"].as_str().unwrap().to_string();
+
+    let (st, scalp_eval) = c.req("POST", &format!("/api/autotrade/bots/{scalp_id}/evaluate"), None).await;
+    assert_eq!(st, StatusCode::OK, "scalp evaluate failed: {scalp_eval}");
+    let cands = scalp_eval["candidates"].as_array().unwrap();
+    assert!(!cands.is_empty(), "scalp candidates should include condition matches");
+    assert_eq!(cands[0]["qualified"], json!(true));
+    assert!(!scalp_eval["orders"].as_array().unwrap().is_empty());
+
+    // Execute 1 paper scalp tick directly (even outside real KST market hours)
+    let mut scalp_bot = mighty_trade_server::autotrade::bots::get(&state, &uid, &scalp_id).unwrap();
+    let now_u = Utc::now();
+    let run_res = mighty_trade_server::autotrade::scalp::run_intraday(
+        &state,
+        &mut scalp_bot,
+        &now_u.date_naive().to_string(),
+        now_u,
+        now_u - chrono::Duration::minutes(15),
+        now_u + chrono::Duration::hours(4),
+    )
+    .await
+    .unwrap();
+    assert_eq!(run_res["entries"], json!(1));
+    assert!(mighty_trade_server::autotrade::bots::has_open_position(&scalp_bot, Some("paper")));
+
+    // Pro single-stock daytrade bot creation (vwap_pullback & closing_bet)
+    for sid in ["vwap_pullback", "hod_breakout", "red_to_green", "closing_bet"] {
+        let (st, b) = c.req(
+            "POST",
+            "/api/autotrade/bots",
+            Some(json!({
+                "kind": "single",
+                "market": "KR",
+                "symbol": "005930",
+                "strategy": sid,
+                "capital": 2000000
+            })),
+        ).await;
+        assert_eq!(st, StatusCode::OK, "create bot {sid} failed: {b}");
+        assert_eq!(b["bot"]["category"], json!("daytrade"));
+    }
+
+    // Verify overview includes scalp & daytrade bots cleanly
+    let (st, ov_auto) = c.req("GET", "/api/autotrade/overview", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(ov_auto["total_bots"], json!(5));
+
     // Verify all TR calls used mock mode as configured and hit official KR + US TR IDs
     let calls = fake_kw.calls.lock();
     assert!(calls.iter().all(|(is_mock, _, _, _)| *is_mock));

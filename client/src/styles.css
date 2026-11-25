@@ -26,6 +26,7 @@ input { background: #0d1117; color: inherit; border: 1px solid #30363d; border-r
 .cat-badge { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid #30363d; background: #161b22; color: #c9d1d9; white-space: nowrap; }
 .cat-badge.swing { border-color: #2f81f766; color: #8ab4f8; }
 .cat-badge.daytrade { border-color: #f0883e66; color: #ffb74d; }
+.cat-badge.scalp { border-color: #f8514966; color: #ff7b72; }
 .cat-badge.rebalance { border-color: #3fb95066; color: #7ee787; }
 .cat-badge.rotation { border-color: #a371f766; color: #d2a8ff; }
 .cat-badge.dca { border-color: #39c5cf66; color: #76e3ea; }

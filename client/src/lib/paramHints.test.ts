@@ -13,6 +13,11 @@ describe('getParamHint', () => {
 
     const orbBars = getParamHint('orb_breakout', 'open_bars', '오프닝 봉 수', 1, 6)
     expect(orbBars).toContain('15분봉')
+
+    expect(getParamHint('vwap_pullback', 'ema_n', '단기 추세 EMA', 3, 30)).toContain('9봉')
+    expect(getParamHint('hod_breakout', 'tight_pct', '고가놀이 허용폭 (%)', 0.3, 5)).toContain('고가놀이')
+    expect(getParamHint('red_to_green', 'min_dip_pct', '초반 음봉 눌림 최소 (%)', 0.1, 5)).toContain('파란불')
+    expect(getParamHint('closing_bet', 'close_strength', '고가 근접도 (0~1)', 0.5, 0.98)).toContain('윗꼬리')
   })
 
   it('returns portfolio parameter hints across allocation models', () => {
