@@ -149,20 +149,25 @@ impl TossClient {
                 }
             }
         }
-        let _flock = self.store.lock(&self.tok_id);
-        let (shared_tok, shared_exp) = self.load_shared();
+        let (shared_tok, shared_exp) = {
+            let _flock = self.store.lock(&self.tok_id);
+            self.load_shared()
+        };
         let usable = shared_tok.is_some() && now_secs() < shared_exp - TOKEN_MARGIN_SECS;
         let same_rejected = force_refresh && shared_tok.as_deref() == rejected;
         let (tok, exp) = if !usable || same_rejected {
             let (new_tok, new_exp) = self.issue_token().await?;
-            self.store.put(
-                TOKENS,
-                &self.tok_id,
-                json!({
-                    "token_enc": self.crypto.encrypt(&new_tok),
-                    "expires_at": new_exp,
-                }),
-            );
+            {
+                let _flock = self.store.lock(&self.tok_id);
+                self.store.put(
+                    TOKENS,
+                    &self.tok_id,
+                    json!({
+                        "token_enc": self.crypto.encrypt(&new_tok),
+                        "expires_at": new_exp,
+                    }),
+                );
+            }
             (new_tok, new_exp)
         } else {
             (shared_tok.unwrap(), shared_exp)

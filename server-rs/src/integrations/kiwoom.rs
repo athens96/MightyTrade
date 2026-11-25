@@ -480,20 +480,25 @@ impl KiwoomClient {
                 }
             }
         }
-        let _flock = self.store.lock(&self.tok_id);
-        let (shared_tok, shared_exp) = self.load_shared();
+        let (shared_tok, shared_exp) = {
+            let _flock = self.store.lock(&self.tok_id);
+            self.load_shared()
+        };
         let usable = shared_tok.is_some() && now_secs() < shared_exp - TOKEN_MARGIN_SECS;
         let same_rejected = force_refresh && shared_tok.as_deref() == rejected;
         let (tok, exp) = if !usable || same_rejected {
             let (new_tok, new_exp) = self.issue_token().await?;
-            self.store.put(
-                KIWOOM_TOKENS,
-                &self.tok_id,
-                json!({
-                    "token_enc": self.crypto.encrypt(&new_tok),
-                    "expires_at": new_exp,
-                }),
-            );
+            {
+                let _flock = self.store.lock(&self.tok_id);
+                self.store.put(
+                    KIWOOM_TOKENS,
+                    &self.tok_id,
+                    json!({
+                        "token_enc": self.crypto.encrypt(&new_tok),
+                        "expires_at": new_exp,
+                    }),
+                );
+            }
             (new_tok, new_exp)
         } else {
             (shared_tok.unwrap(), shared_exp)
@@ -788,9 +793,25 @@ impl KiwoomClient {
                 return Ok(Some(Value::Array(vec![row])));
             }
             let mut rows = Vec::with_capacity(syms.len());
+            let mut fatal_err: Option<ApiError> = None;
             for sym in syms {
-                if let Ok(row) = self.fetch_price(sym).await {
-                    rows.push(row);
+                match self.fetch_price(sym).await {
+                    Ok(row) => rows.push(row),
+                    Err(e) => {
+                        let stop = e.status == 429
+                            || e.code == "kiwoom_unreachable"
+                            || e.code == "kiwoom_retry_exhausted"
+                            || e.code.starts_with("kiwoom_auth_");
+                        if stop {
+                            fatal_err = Some(e);
+                            break;
+                        }
+                    }
+                }
+            }
+            if rows.is_empty() {
+                if let Some(err) = fatal_err {
+                    return Err(err);
                 }
             }
             return Ok(Some(Value::Array(rows)));
@@ -942,12 +963,15 @@ impl KiwoomClient {
                         .filter(|x| *x > 0.0)
                 });
             let open = parse_kiwoom_abs(v.get("open_pric"))
+                .or_else(|| parse_kiwoom_abs(v.get("open_prc")))
                 .or_else(|| parse_kiwoom_abs(v.get("stck_oprc")))
                 .filter(|x| *x > 0.0);
             let high = parse_kiwoom_abs(v.get("high_pric"))
+                .or_else(|| parse_kiwoom_abs(v.get("high_prc")))
                 .or_else(|| parse_kiwoom_abs(v.get("stck_hgpr")))
                 .filter(|x| *x > 0.0);
             let low = parse_kiwoom_abs(v.get("low_pric"))
+                .or_else(|| parse_kiwoom_abs(v.get("low_prc")))
                 .or_else(|| parse_kiwoom_abs(v.get("stck_lwpr")))
                 .filter(|x| *x > 0.0);
             Ok(json!({
@@ -999,12 +1023,18 @@ impl KiwoomClient {
                                         .filter(|x| *x > 0.0)
                                 });
                             let open = parse_kiwoom_abs(v.get("open_pric"))
+                                .or_else(|| parse_kiwoom_abs(v.get("open_prc")))
+                                .or_else(|| parse_kiwoom_abs(v.get("oprc")))
                                 .or_else(|| parse_kiwoom_abs(v.get("pre_open_pric")))
                                 .filter(|x| *x > 0.0);
                             let high = parse_kiwoom_abs(v.get("high_pric"))
+                                .or_else(|| parse_kiwoom_abs(v.get("high_prc")))
+                                .or_else(|| parse_kiwoom_abs(v.get("hprc")))
                                 .or_else(|| parse_kiwoom_abs(v.get("pre_high_pric")))
                                 .filter(|x| *x > 0.0);
                             let low = parse_kiwoom_abs(v.get("low_pric"))
+                                .or_else(|| parse_kiwoom_abs(v.get("low_prc")))
+                                .or_else(|| parse_kiwoom_abs(v.get("lprc")))
                                 .or_else(|| parse_kiwoom_abs(v.get("pre_low_pric")))
                                 .filter(|x| *x > 0.0);
                             self.us_exch_cache.insert(sym.to_uppercase(), exch);

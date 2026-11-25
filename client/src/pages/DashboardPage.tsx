@@ -26,10 +26,12 @@ const INTERVAL_HINTS: Record<Interval, string> = {
   '1d': '일봉: 하루 1봉 기준으로 스윙·중기 추세를 보는 기본 차트입니다',
   '1w': '주봉: 1주일 1봉 기준으로 몇 달~몇 년의 큰 흐름을 확인합니다',
 }
-const CHART_REFRESH_MS = 15_000
-const QUOTE_REFRESH_OPTIONS = [5_000, 15_000, 30_000, 0] as const
+const DAILY_CHART_REFRESH_MS = 60_000
+const INTRADAY_CHART_REFRESH_MS = 15_000
+const QUOTE_REFRESH_OPTIONS = [10_000, 20_000, 60_000, 0] as const
 type RefreshMs = (typeof QUOTE_REFRESH_OPTIONS)[number]
 const REFRESH_PREF_KEY = 'mt.dashboard.refreshMs'
+const FOCUS_COOLDOWN_MS = 3_000
 // Enough history for long indicators (MA120, Ichimoku 52+26) while showing ~150 bars.
 const CHART_LIMIT = 500
 
@@ -40,7 +42,7 @@ function loadRefreshPref(): RefreshMs {
   } catch {
     // ignore storage errors
   }
-  return 5_000
+  return 10_000
 }
 
 function fmtClock(ts: number | null): string {
@@ -66,10 +68,13 @@ export default function DashboardPage() {
   const [refreshMs, setRefreshMs] = useState<RefreshMs>(loadRefreshPref)
   const [lastQuoteAt, setLastQuoteAt] = useState<number | null>(null)
   const [refreshingQuotes, setRefreshingQuotes] = useState(false)
+  const [quotesError, setQuotesError] = useState('')
   const settingsRef = useRef<Settings | null>(null)
   const saveTimer = useRef<number | undefined>(undefined)
   const quotesBusyRef = useRef(false)
+  const lastQuoteFetchRef = useRef(0)
   const chartBusyRef = useRef(false)
+  const lastChartFetchRef = useRef(0)
   const selectedRef = useRef<WatchItem | null>(null)
   selectedRef.current = selected
 
@@ -120,8 +125,10 @@ export default function DashboardPage() {
   const fetchWatchQuotes = useCallback(
     async (force = false) => {
       if (!symbolsKey) return
-      if (quotesBusyRef.current && !force) return
+      if (quotesBusyRef.current) return
+      if (!force && Date.now() - lastQuoteFetchRef.current < FOCUS_COOLDOWN_MS) return
       quotesBusyRef.current = true
+      lastQuoteFetchRef.current = Date.now()
       setRefreshingQuotes(true)
       try {
         const { items: rows } = await marketApi.quotes(market, symbolsKey.split(','))
@@ -132,7 +139,8 @@ export default function DashboardPage() {
           return next
         })
         setLastQuoteAt(now)
-        // Also keep the selected symbol's header price synced on every fast watchlist poll.
+        setQuotesError('')
+        // Also keep the selected symbol's header price synced on every watchlist poll.
         const sel = selectedRef.current
         if (sel && sel.market === market) {
           const hit = rows.find((r) => r.symbol === sel.symbol && !r.error && r.price !== undefined)
@@ -152,8 +160,9 @@ export default function DashboardPage() {
             }))
           }
         }
-      } catch {
-        // Keep last known prices; main chart area surfaces broker credential errors.
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : '시세 불러오기 지연'
+        setQuotesError(msg)
       } finally {
         quotesBusyRef.current = false
         setRefreshingQuotes(false)
@@ -195,8 +204,10 @@ export default function DashboardPage() {
     if (!selected) return
     let cancelled = false
     const load = (force = false) => {
-      if (chartBusyRef.current && !force) return
+      if (chartBusyRef.current) return
+      if (!force && Date.now() - lastChartFetchRef.current < FOCUS_COOLDOWN_MS) return
       chartBusyRef.current = true
+      lastChartFetchRef.current = Date.now()
       Promise.all([
         marketApi.candles(selected.market, selected.symbol, interval, CHART_LIMIT),
         marketApi.quote(selected.market, selected.symbol),
@@ -227,7 +238,8 @@ export default function DashboardPage() {
       if (document.visibilityState === 'visible') load()
     }
     document.addEventListener('visibilitychange', onVisible)
-    const chartMs = refreshMs > 0 ? Math.max(CHART_REFRESH_MS, refreshMs) : 0
+    const baseChartMs = interval === '1d' || interval === '1w' ? DAILY_CHART_REFRESH_MS : INTRADAY_CHART_REFRESH_MS
+    const chartMs = refreshMs > 0 ? Math.max(baseChartMs, refreshMs) : 0
     const timer =
       chartMs > 0
         ? window.setInterval(() => {
@@ -370,7 +382,7 @@ export default function DashboardPage() {
             type="button"
             className={`wl-live-btn ${refreshMs > 0 ? 'on' : ''}`}
             onClick={cycleRefreshMs}
-            title="클릭하여 관심종목 시세 자동 갱신 주기를 변경합니다 (5초 → 15초 → 30초 → 꺼짐)"
+            title="클릭하여 관심종목 시세 자동 갱신 주기를 변경합니다 (10초 → 20초 → 60초 → 꺼짐)"
           >
             <i className={`dot ${refreshMs > 0 ? 'on' : ''}`} aria-hidden />
             {refreshLabel}
@@ -389,6 +401,11 @@ export default function DashboardPage() {
             ↻
           </button>
         </div>
+        {quotesError && (
+          <p className="small warn" style={{ marginTop: 6 }} title={quotesError}>
+            시세 갱신 지연: {quotesError}
+          </p>
+        )}
 
         <ul className="watchlist">
           {items.map((w) => {

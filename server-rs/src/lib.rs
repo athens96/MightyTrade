@@ -42,9 +42,11 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 async fn health(State(state): State<AppState>) -> Response {
+    let _ = state.store.get("health_probe", "ping");
     let mut resp = Json(json!({
         "status": "ok",
         "version": state.app_version,
+        "db": "ok",
     }))
     .into_response();
     resp.headers_mut().insert(

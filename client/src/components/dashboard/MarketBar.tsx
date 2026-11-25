@@ -29,20 +29,28 @@ export default function MarketBar() {
   const [regimes, setRegimes] = useState<{ KR: MarketRegime; US: MarketRegime } | null>(null)
   useEffect(() => {
     let alive = true
-    const load = () => {
+    let lastOv = 0
+    const loadOverview = (force = false) => {
+      if (!force && Date.now() - lastOv < 10_000) return
+      lastOv = Date.now()
       marketApi.overview().then((d) => alive && setData(d)).catch(() => undefined)
+    }
+    const loadRegimes = () => {
       marketApi.regimes().then((r) => alive && setRegimes(r)).catch(() => undefined)
     }
-    load()
+    loadOverview(true)
+    loadRegimes()
     const onVisible = () => {
-      if (document.visibilityState === 'visible') load()
+      if (document.visibilityState === 'visible') loadOverview()
     }
     document.addEventListener('visibilitychange', onVisible)
-    const t = window.setInterval(() => document.visibilityState === 'visible' && load(), 15_000)
+    const tOv = window.setInterval(() => document.visibilityState === 'visible' && loadOverview(), 30_000)
+    const tReg = window.setInterval(() => document.visibilityState === 'visible' && loadRegimes(), 300_000)
     return () => {
       alive = false
       document.removeEventListener('visibilitychange', onVisible)
-      window.clearInterval(t)
+      window.clearInterval(tOv)
+      window.clearInterval(tReg)
     }
   }, [])
   if (!data && !regimes) return null

@@ -22,6 +22,17 @@ const STOCK_DETAIL_BATCH: usize = 200;
 const STOCK_DETAIL_SYNC_LIMIT: usize = 400;
 const STOCK_DETAIL_PACE_MS: u64 = 250;
 const MAX_CANDLE_CACHE: usize = 512;
+const OHLC_CACHE_TTL: f64 = 300.0;
+const OHLC_NEG_TTL: f64 = 60.0;
+const QUOTE_CACHE_TTL: f64 = 3.0;
+
+#[derive(Clone, Copy)]
+struct DailyOhlc {
+    prev_close: Option<f64>,
+    open: Option<f64>,
+    high: Option<f64>,
+    low: Option<f64>,
+}
 
 fn now_secs() -> f64 {
     SystemTime::now()
@@ -63,6 +74,8 @@ fn to_candle(raw: &Value, base: &str) -> Option<Candle> {
 
 pub struct TossMarketProvider {
     candle_cache: DashMap<(String, String, String, usize), (f64, Vec<Candle>)>,
+    ohlc_cache: DashMap<(String, String), (f64, Option<DailyOhlc>)>,
+    quote_cache: DashMap<(String, String), (f64, Quote)>,
     stocks: DashMap<(String, Market), (f64, Vec<Instrument>)>,
     stock_locks: DashMap<(String, Market), Arc<AsyncMutex<()>>>,
 }
@@ -77,6 +90,8 @@ impl TossMarketProvider {
     pub fn new() -> Self {
         Self {
             candle_cache: DashMap::new(),
+            ohlc_cache: DashMap::new(),
+            quote_cache: DashMap::new(),
             stocks: DashMap::new(),
             stock_locks: DashMap::new(),
         }
@@ -151,7 +166,7 @@ impl TossMarketProvider {
         }
 
         let candles: Vec<Candle> = by_time.into_values().collect();
-        let ttl = if base == "1m" { 5.0 } else { 15.0 };
+        let ttl = if base == "1m" { 10.0 } else { 60.0 };
         self.candle_cache.retain(|_, v| v.0 > now);
         if self.candle_cache.len() >= MAX_CANDLE_CACHE {
             if let Some(oldest_k) = self
@@ -275,6 +290,7 @@ impl TossMarketProvider {
         &self,
         state: &AppState,
         user_id: &str,
+        broker_kind: &str,
         market: Market,
         symbol: &str,
         p: &Value,
@@ -288,44 +304,113 @@ impl TossMarketProvider {
                 .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .filter(|x| x.is_finite() && *x > 0.0)
         };
-        let prev_from_price = pos_f("prevClose");
+        let mut prev_opt = pos_f("prevClose");
         let mut open = pos_f("openPrice");
         let mut high = pos_f("highPrice");
         let mut low = pos_f("lowPrice");
 
-        let need_daily = prev_from_price.is_none() || open.is_none() || high.is_none() || low.is_none();
-        let daily = if need_daily {
-            match self.fetch_base(state, user_id, symbol, "1d", 2).await {
-                Ok(cs) => cs,
-                Err(_) if prev_from_price.is_some() => vec![],
-                Err(e) => return Err(e),
-            }
-        } else {
-            vec![]
-        };
+        let cache_key = (format!("{user_id}:{broker_kind}"), symbol.to_string());
+        let now = now_secs();
+        let all_from_price =
+            prev_opt.is_some() && open.is_some() && high.is_some() && low.is_some();
 
-        let prev = if let Some(pc) = prev_from_price {
-            pc
-        } else if daily.len() >= 2 {
-            daily[daily.len() - 2].close
-        } else {
-            price
-        };
-        if let Some(last_bar) = daily.last() {
-            if open.is_none() && last_bar.open > 0.0 {
-                open = Some(last_bar.open);
-            }
-            if high.is_none() && last_bar.high > 0.0 {
-                high = Some(last_bar.high);
-            }
-            if low.is_none() && last_bar.low > 0.0 {
-                low = Some(last_bar.low);
+        if !all_from_price {
+            let cached = self
+                .ohlc_cache
+                .get(&cache_key)
+                .and_then(|e| if e.0 > now { Some(e.1) } else { None });
+            if let Some(hit_opt) = cached {
+                if let Some(ohlc) = hit_opt {
+                    if prev_opt.is_none() {
+                        prev_opt = ohlc.prev_close;
+                    }
+                    if open.is_none() {
+                        open = ohlc.open;
+                    }
+                    if high.is_none() {
+                        high = ohlc.high;
+                    }
+                    if low.is_none() {
+                        low = ohlc.low;
+                    }
+                }
+            } else {
+                // Only hit 1d candle endpoint once per 5 minutes (60s negative cache on failure)
+                // so frequent watchlist quote polling never triggers broker 429 storms.
+                match self.fetch_base(state, user_id, symbol, "1d", 2).await {
+                    Ok(daily) => {
+                        let d_prev = if daily.len() >= 2 {
+                            Some(daily[daily.len() - 2].close).filter(|x| *x > 0.0)
+                        } else {
+                            None
+                        };
+                        let last_bar = daily.last();
+                        let d_open = last_bar.map(|b| b.open).filter(|x| *x > 0.0);
+                        let d_high = last_bar.map(|b| b.high).filter(|x| *x > 0.0);
+                        let d_low = last_bar.map(|b| b.low).filter(|x| *x > 0.0);
+                        if prev_opt.is_none() {
+                            prev_opt = d_prev;
+                        }
+                        if open.is_none() {
+                            open = d_open;
+                        }
+                        if high.is_none() {
+                            high = d_high;
+                        }
+                        if low.is_none() {
+                            low = d_low;
+                        }
+                        self.ohlc_cache.insert(
+                            cache_key.clone(),
+                            (
+                                now + OHLC_CACHE_TTL,
+                                Some(DailyOhlc {
+                                    prev_close: prev_opt,
+                                    open,
+                                    high: high.map(|h| h.max(price)),
+                                    low: low.map(|l| l.min(price)),
+                                }),
+                            ),
+                        );
+                    }
+                    Err(_) => {
+                        self.ohlc_cache
+                            .insert(cache_key.clone(), (now + OHLC_NEG_TTL, None));
+                    }
+                }
             }
         }
-        // Keep intraday high/low consistent with the latest real-time price
+
+        let prev = prev_opt.unwrap_or(price);
+        // Keep intraday high/low consistent with the latest real-time price & refresh cache in-memory
         let eff_open = open.unwrap_or(price);
         let high = high.map(|h| h.max(price).max(eff_open));
         let low = low.map(|l| l.min(price).min(eff_open));
+        if open.is_some() || high.is_some() || low.is_some() {
+            if let Some(mut entry) = self.ohlc_cache.get_mut(&cache_key) {
+                if let Some(ref mut ohlc) = entry.1 {
+                    if let Some(h) = high {
+                        ohlc.high = Some(ohlc.high.map_or(h, |old| old.max(h)));
+                    }
+                    if let Some(l) = low {
+                        ohlc.low = Some(ohlc.low.map_or(l, |old| old.min(l)));
+                    }
+                }
+            } else if all_from_price {
+                self.ohlc_cache.insert(
+                    cache_key.clone(),
+                    (
+                        now + OHLC_CACHE_TTL,
+                        Some(DailyOhlc {
+                            prev_close: Some(prev),
+                            open,
+                            high,
+                            low,
+                        }),
+                    ),
+                );
+            }
+        }
 
         let change = price - prev;
         let ts = p
@@ -341,7 +426,7 @@ impl TossMarketProvider {
             .unwrap_or(if market == Market::KR { "KRW" } else { "USD" })
             .to_string();
 
-        Ok(Quote {
+        let quote = Quote {
             market: market.as_str().to_string(),
             symbol: symbol.to_string(),
             price,
@@ -357,7 +442,10 @@ impl TossMarketProvider {
             high,
             low,
             prev_close: if prev > 0.0 { Some(prev) } else { None },
-        })
+        };
+        self.quote_cache
+            .insert(cache_key, (now + QUOTE_CACHE_TTL, quote.clone()));
+        Ok(quote)
     }
 
     pub async fn get_quote(
@@ -369,6 +457,7 @@ impl TossMarketProvider {
     ) -> ApiResult<Quote> {
         Self::check(market, symbol)?;
         let client = state.get_broker_client(user_id)?;
+        let bkind = client.kind().as_str();
         let mut params = HashMap::new();
         params.insert("symbols".to_string(), symbol.to_string());
         let rows = client
@@ -379,7 +468,7 @@ impl TossMarketProvider {
         let first = rows
             .first()
             .ok_or_else(|| ApiError::not_found("stock_not_found", symbol))?;
-        self.build_quote(state, user_id, market, symbol, first)
+        self.build_quote(state, user_id, bkind, market, symbol, first)
             .await
     }
 
@@ -391,21 +480,33 @@ impl TossMarketProvider {
         symbols: &[String],
     ) -> ApiResult<HashMap<String, Result<Quote, ApiError>>> {
         let mut out: HashMap<String, Result<Quote, ApiError>> = HashMap::new();
-        let mut valid = Vec::new();
+        let client = state.get_broker_client(user_id)?;
+        let bkind = client.kind().as_str();
+        let scoped_uid = format!("{user_id}:{bkind}");
+        let now = now_secs();
+
+        let mut to_fetch = Vec::new();
         for sym in symbols {
             match Self::check(market, sym) {
-                Ok(()) => valid.push(sym.clone()),
+                Ok(()) => {
+                    if let Some(hit) = self.quote_cache.get(&(scoped_uid.clone(), sym.clone())) {
+                        if hit.0 > now {
+                            out.insert(sym.clone(), Ok(hit.1.clone()));
+                            continue;
+                        }
+                    }
+                    to_fetch.push(sym.clone());
+                }
                 Err(e) => {
                     out.insert(sym.clone(), Err(e));
                 }
             }
         }
-        if valid.is_empty() {
+        if to_fetch.is_empty() {
             return Ok(out);
         }
-        let client = state.get_broker_client(user_id)?;
         let mut params = HashMap::new();
-        params.insert("symbols".to_string(), valid.join(","));
+        params.insert("symbols".to_string(), to_fetch.join(","));
         let rows = client
             .request("GET", "/api/v1/prices", Some(&params), None, None)
             .await?
@@ -417,12 +518,13 @@ impl TossMarketProvider {
                 by_sym.insert(s.to_string(), r);
             }
         }
-        for sym in valid {
+        for sym in to_fetch {
             match by_sym.get(&sym) {
                 Some(row) if !row.get("lastPrice").unwrap_or(&Value::Null).is_null() => {
                     out.insert(
                         sym.clone(),
-                        self.build_quote(state, user_id, market, &sym, row).await,
+                        self.build_quote(state, user_id, bkind, market, &sym, row)
+                            .await,
                     );
                 }
                 _ => {
