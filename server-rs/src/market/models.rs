@@ -109,6 +109,14 @@ pub struct Quote {
     pub change_pct: f64,
     pub currency: String,
     pub time: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_close: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

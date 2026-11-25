@@ -941,10 +941,22 @@ impl KiwoomClient {
                         .map(|d| (px - d).max(0.0))
                         .filter(|x| *x > 0.0)
                 });
+            let open = parse_kiwoom_abs(v.get("open_pric"))
+                .or_else(|| parse_kiwoom_abs(v.get("stck_oprc")))
+                .filter(|x| *x > 0.0);
+            let high = parse_kiwoom_abs(v.get("high_pric"))
+                .or_else(|| parse_kiwoom_abs(v.get("stck_hgpr")))
+                .filter(|x| *x > 0.0);
+            let low = parse_kiwoom_abs(v.get("low_pric"))
+                .or_else(|| parse_kiwoom_abs(v.get("stck_lwpr")))
+                .filter(|x| *x > 0.0);
             Ok(json!({
                 "symbol": sym,
                 "lastPrice": px,
                 "prevClose": prev,
+                "openPrice": open,
+                "highPrice": high,
+                "lowPrice": low,
                 "currency": "KRW",
                 "timestamp": Utc::now().to_rfc3339(),
             }))
@@ -986,11 +998,23 @@ impl KiwoomClient {
                                         .map(|d| (p - d).max(0.0))
                                         .filter(|x| *x > 0.0)
                                 });
+                            let open = parse_kiwoom_abs(v.get("open_pric"))
+                                .or_else(|| parse_kiwoom_abs(v.get("pre_open_pric")))
+                                .filter(|x| *x > 0.0);
+                            let high = parse_kiwoom_abs(v.get("high_pric"))
+                                .or_else(|| parse_kiwoom_abs(v.get("pre_high_pric")))
+                                .filter(|x| *x > 0.0);
+                            let low = parse_kiwoom_abs(v.get("low_pric"))
+                                .or_else(|| parse_kiwoom_abs(v.get("pre_low_pric")))
+                                .filter(|x| *x > 0.0);
                             self.us_exch_cache.insert(sym.to_uppercase(), exch);
                             return Ok(json!({
                                 "symbol": sym,
                                 "lastPrice": p,
                                 "prevClose": prev,
+                                "openPrice": open,
+                                "highPrice": high,
+                                "lowPrice": low,
                                 "currency": "USD",
                                 "timestamp": Utc::now().to_rfc3339(),
                             }));

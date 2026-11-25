@@ -1,8 +1,14 @@
 use axum::extract::{Query, State};
+use axum::http::header;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+fn no_store(v: Value) -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store")], Json(v))
+}
 
 use super::extras;
 use super::models::{Interval, Market};
@@ -56,7 +62,7 @@ async fn candles(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Query(q): Query<MarketSymbolQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<impl IntoResponse> {
     let market = Market::parse(q.market.as_deref().unwrap_or(""))?;
     let symbol = parse_symbol(q.symbol.as_deref())?;
     let interval = Interval::parse(q.interval.as_deref().unwrap_or("1d"))?;
@@ -64,7 +70,7 @@ async fn candles(
     let uid = user["id"].as_str().unwrap_or("");
     let (provider, data) =
         super::get_candles(&state, uid, market, &symbol, interval, limit).await?;
-    Ok(Json(json!({
+    Ok(no_store(json!({
         "market": market.as_str(),
         "symbol": symbol,
         "interval": interval.as_str(),
@@ -77,19 +83,19 @@ async fn quote(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Query(q): Query<MarketSymbolQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<impl IntoResponse> {
     let market = Market::parse(q.market.as_deref().unwrap_or(""))?;
     let symbol = parse_symbol(q.symbol.as_deref())?;
     let uid = user["id"].as_str().unwrap_or("");
     let res = super::get_quote(&state, uid, market, &symbol).await?;
-    Ok(Json(json!({ "quote": res })))
+    Ok(no_store(json!({ "quote": res })))
 }
 
 async fn quotes(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Query(q): Query<QuotesQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<impl IntoResponse> {
     let market = Market::parse(q.market.as_deref().unwrap_or(""))?;
     let mut symbols: Vec<String> = Vec::new();
     for part in q.symbols.unwrap_or_default().split(',') {
@@ -114,7 +120,7 @@ async fn quotes(
             Some(Ok(qt)) => items.push(serde_json::to_value(qt).unwrap_or(Value::Null)),
         }
     }
-    Ok(Json(json!({ "items": items })))
+    Ok(no_store(json!({ "items": items })))
 }
 
 async fn search(
@@ -135,9 +141,9 @@ async fn search(
 async fn overview(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<impl IntoResponse> {
     let uid = user["id"].as_str().unwrap_or("");
-    Ok(Json(extras::overview(&state, uid).await?))
+    Ok(no_store(extras::overview(&state, uid).await?))
 }
 
 async fn warnings(
@@ -166,11 +172,11 @@ async fn orderbook(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Query(q): Query<MarketSymbolQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<impl IntoResponse> {
     let market = Market::parse(q.market.as_deref().unwrap_or(""))?;
     let symbol = parse_symbol(q.symbol.as_deref())?;
     let uid = user["id"].as_str().unwrap_or("");
-    Ok(Json(extras::orderbook(&state, uid, market, &symbol).await?))
+    Ok(no_store(extras::orderbook(&state, uid, market, &symbol).await?))
 }
 
 async fn regimes(

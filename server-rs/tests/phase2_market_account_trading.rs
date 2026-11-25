@@ -181,6 +181,12 @@ async fn market_account_and_trading_safety_rails() {
         .await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(qts["items"].as_array().unwrap().len(), 2);
+    for item in qts["items"].as_array().unwrap() {
+        assert!(item["open"].as_f64().is_some_and(|v| v > 0.0), "open missing: {item}");
+        assert!(item["high"].as_f64().is_some_and(|v| v > 0.0), "high missing: {item}");
+        assert!(item["low"].as_f64().is_some_and(|v| v > 0.0), "low missing: {item}");
+        assert!(item["prev_close"].as_f64().is_some_and(|v| v > 0.0), "prev_close missing: {item}");
+    }
 
     let (st, srch) = c.req("GET", "/api/market/search?market=KR&q=삼성", None).await;
     assert_eq!(st, StatusCode::OK);

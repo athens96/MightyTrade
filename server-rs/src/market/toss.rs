@@ -151,7 +151,7 @@ impl TossMarketProvider {
         }
 
         let candles: Vec<Candle> = by_time.into_values().collect();
-        let ttl = if base == "1m" { 10.0 } else { 60.0 };
+        let ttl = if base == "1m" { 5.0 } else { 15.0 };
         self.candle_cache.retain(|_, v| v.0 > now);
         if self.candle_cache.len() >= MAX_CANDLE_CACHE {
             if let Some(oldest_k) = self
@@ -283,20 +283,50 @@ impl TossMarketProvider {
             .get("lastPrice")
             .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
             .ok_or_else(|| ApiError::not_found("stock_not_found", symbol))?;
-        let prev_from_price = p
-            .get("prevClose")
-            .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-            .filter(|x| x.is_finite() && *x > 0.0);
+        let pos_f = |k: &str| -> Option<f64> {
+            p.get(k)
+                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .filter(|x| x.is_finite() && *x > 0.0)
+        };
+        let prev_from_price = pos_f("prevClose");
+        let mut open = pos_f("openPrice");
+        let mut high = pos_f("highPrice");
+        let mut low = pos_f("lowPrice");
+
+        let need_daily = prev_from_price.is_none() || open.is_none() || high.is_none() || low.is_none();
+        let daily = if need_daily {
+            match self.fetch_base(state, user_id, symbol, "1d", 2).await {
+                Ok(cs) => cs,
+                Err(_) if prev_from_price.is_some() => vec![],
+                Err(e) => return Err(e),
+            }
+        } else {
+            vec![]
+        };
+
         let prev = if let Some(pc) = prev_from_price {
             pc
+        } else if daily.len() >= 2 {
+            daily[daily.len() - 2].close
         } else {
-            let daily = self.fetch_base(state, user_id, symbol, "1d", 2).await?;
-            if daily.len() >= 2 {
-                daily[daily.len() - 2].close
-            } else {
-                price
-            }
+            price
         };
+        if let Some(last_bar) = daily.last() {
+            if open.is_none() && last_bar.open > 0.0 {
+                open = Some(last_bar.open);
+            }
+            if high.is_none() && last_bar.high > 0.0 {
+                high = Some(last_bar.high);
+            }
+            if low.is_none() && last_bar.low > 0.0 {
+                low = Some(last_bar.low);
+            }
+        }
+        // Keep intraday high/low consistent with the latest real-time price
+        let eff_open = open.unwrap_or(price);
+        let high = high.map(|h| h.max(price).max(eff_open));
+        let low = low.map(|l| l.min(price).min(eff_open));
+
         let change = price - prev;
         let ts = p
             .get("timestamp")
@@ -323,6 +353,10 @@ impl TossMarketProvider {
             },
             currency,
             time: ts,
+            open,
+            high,
+            low,
+            prev_close: if prev > 0.0 { Some(prev) } else { None },
         })
     }
 

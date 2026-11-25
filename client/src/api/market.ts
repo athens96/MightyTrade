@@ -29,23 +29,24 @@ export interface MarketRegime {
 }
 
 export const marketApi = {
-  overview: () => api<{ indices: IndexQuote[]; status: Record<'KR' | 'US', SessionStatus> }>('/market/overview'),
-  regimes: () => api<{ KR: MarketRegime; US: MarketRegime }>('/market/regimes'),
+  overview: () => api<{ indices: IndexQuote[]; status: Record<'KR' | 'US', SessionStatus> }>('/market/overview', { cache: 'no-store' }),
+  regimes: () => api<{ KR: MarketRegime; US: MarketRegime }>('/market/regimes', { cache: 'no-store' }),
   warnings: (market: Market, symbol: string) =>
     api<{ items: StockWarning[] }>(`/market/warnings?${new URLSearchParams({ market, symbol })}`),
   investorFlow: (symbol: string, count = 20) =>
     api<{ records: FlowRecord[] }>(`/market/investor-flow?${new URLSearchParams({ symbol, count: String(count) })}`),
   orderbook: (market: Market, symbol: string) =>
-    api<{ orderbook: OrderBook; trades: Tick[] }>(`/market/orderbook?${new URLSearchParams({ market, symbol })}`),
+    api<{ orderbook: OrderBook; trades: Tick[] }>(`/market/orderbook?${new URLSearchParams({ market, symbol })}`, { cache: 'no-store' }),
   candles: (market: Market, symbol: string, interval: Interval, limit = 200) =>
     api<{ candles: Candle[]; provider: string }>(
       `/market/candles?${new URLSearchParams({ market, symbol, interval, limit: String(limit) })}`,
+      { cache: 'no-store' },
     ),
   /** Batch quotes for the watchlist; failed symbols come back with `error` instead of a price. */
   quotes: (market: Market, symbols: string[]) =>
-    api<{ items: WatchQuote[] }>(`/market/quotes?${new URLSearchParams({ market, symbols: symbols.join(',') })}`),
+    api<{ items: WatchQuote[] }>(`/market/quotes?${new URLSearchParams({ market, symbols: symbols.join(',') })}`, { cache: 'no-store' }),
   quote: (market: Market, symbol: string) =>
-    api<{ quote: Quote }>(`/market/quote?${new URLSearchParams({ market, symbol })}`),
+    api<{ quote: Quote }>(`/market/quote?${new URLSearchParams({ market, symbol })}`, { cache: 'no-store' }),
   search: (market: Market, q: string) =>
     api<{ items: Instrument[] }>(`/market/search?${new URLSearchParams({ market, q })}`),
   watchlist: () => api<{ items: WatchItem[] }>('/users/me/watchlist'),

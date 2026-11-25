@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { marketApi, type StockWarning } from '../api/market'
 import MarketBar from '../components/dashboard/MarketBar'
 import SidePanel from '../components/dashboard/SidePanel'
+import WatchCandle from '../components/dashboard/WatchCandle'
 import { useRealtime } from '../hooks/useRealtime'
 import type { Candle, Instrument, Interval, Market, Quote, WatchItem, WatchQuote } from '../api/types'
 import { priceFormatter } from '../components/chart/format'
@@ -25,9 +26,27 @@ const INTERVAL_HINTS: Record<Interval, string> = {
   '1d': '일봉: 하루 1봉 기준으로 스윙·중기 추세를 보는 기본 차트입니다',
   '1w': '주봉: 1주일 1봉 기준으로 몇 달~몇 년의 큰 흐름을 확인합니다',
 }
-const REFRESH_MS = 15_000
+const CHART_REFRESH_MS = 15_000
+const QUOTE_REFRESH_OPTIONS = [5_000, 15_000, 30_000, 0] as const
+type RefreshMs = (typeof QUOTE_REFRESH_OPTIONS)[number]
+const REFRESH_PREF_KEY = 'mt.dashboard.refreshMs'
 // Enough history for long indicators (MA120, Ichimoku 52+26) while showing ~150 bars.
 const CHART_LIMIT = 500
+
+function loadRefreshPref(): RefreshMs {
+  try {
+    const raw = Number(localStorage.getItem(REFRESH_PREF_KEY))
+    if ((QUOTE_REFRESH_OPTIONS as readonly number[]).includes(raw)) return raw as RefreshMs
+  } catch {
+    // ignore storage errors
+  }
+  return 5_000
+}
+
+function fmtClock(ts: number | null): string {
+  if (!ts) return ''
+  return new Date(ts).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+}
 
 export default function DashboardPage() {
   const [market, setMarket] = useState<Market>('KR')
@@ -44,8 +63,28 @@ export default function DashboardPage() {
   const [results, setResults] = useState<Instrument[]>([])
   const [searching, setSearching] = useState(false)
   const [indicators, setIndicators] = useState<IndicatorConfig[]>(DEFAULT_INDICATORS)
+  const [refreshMs, setRefreshMs] = useState<RefreshMs>(loadRefreshPref)
+  const [lastQuoteAt, setLastQuoteAt] = useState<number | null>(null)
+  const [refreshingQuotes, setRefreshingQuotes] = useState(false)
   const settingsRef = useRef<Settings | null>(null)
   const saveTimer = useRef<number | undefined>(undefined)
+  const quotesBusyRef = useRef(false)
+  const chartBusyRef = useRef(false)
+  const selectedRef = useRef<WatchItem | null>(null)
+  selectedRef.current = selected
+
+  const cycleRefreshMs = () => {
+    setRefreshMs((cur) => {
+      const idx = QUOTE_REFRESH_OPTIONS.indexOf(cur)
+      const next = QUOTE_REFRESH_OPTIONS[(idx + 1) % QUOTE_REFRESH_OPTIONS.length]
+      try {
+        localStorage.setItem(REFRESH_PREF_KEY, String(next))
+      } catch {
+        // ignore
+      }
+      return next
+    })
+  }
 
   // Indicator selection is stored per account in /users/me/settings under chart.indicators.
   useEffect(() => {
@@ -78,33 +117,86 @@ export default function DashboardPage() {
   const [quotes, setQuotes] = useState<Record<string, WatchQuote>>({})
   const symbolsKey = items.map((w) => w.symbol).join(',')
 
-  // Prices for every watchlist row in one request, refreshed while the tab is visible.
+  const fetchWatchQuotes = useCallback(
+    async (force = false) => {
+      if (!symbolsKey) return
+      if (quotesBusyRef.current && !force) return
+      quotesBusyRef.current = true
+      setRefreshingQuotes(true)
+      try {
+        const { items: rows } = await marketApi.quotes(market, symbolsKey.split(','))
+        const now = Date.now()
+        setQuotes((prev) => {
+          const next = { ...prev }
+          for (const q of rows) next[q.symbol] = q
+          return next
+        })
+        setLastQuoteAt(now)
+        // Also keep the selected symbol's header price synced on every fast watchlist poll.
+        const sel = selectedRef.current
+        if (sel && sel.market === market) {
+          const hit = rows.find((r) => r.symbol === sel.symbol && !r.error && r.price !== undefined)
+          if (hit && hit.price !== undefined) {
+            setQuote((prev) => ({
+              market: sel.market,
+              symbol: sel.symbol,
+              price: hit.price!,
+              change: hit.change ?? prev?.change ?? 0,
+              change_pct: hit.change_pct ?? prev?.change_pct ?? 0,
+              currency: hit.currency ?? prev?.currency ?? (sel.market === 'KR' ? 'KRW' : 'USD'),
+              time: hit.time ?? prev?.time ?? Math.floor(now / 1000),
+              open: hit.open ?? prev?.open,
+              high: hit.high ?? prev?.high,
+              low: hit.low ?? prev?.low,
+              prev_close: hit.prev_close ?? prev?.prev_close,
+            }))
+          }
+        }
+      } catch {
+        // Keep last known prices; main chart area surfaces broker credential errors.
+      } finally {
+        quotesBusyRef.current = false
+        setRefreshingQuotes(false)
+      }
+    },
+    [market, symbolsKey],
+  )
+
+  // Prices + today's OHLC candle for every watchlist row, refreshed periodically and on tab return.
   useEffect(() => {
     if (!symbolsKey) return
-    let cancelled = false
-    const load = () =>
-      marketApi
-        .quotes(market, symbolsKey.split(','))
-        .then(({ items }) => !cancelled && setQuotes((prev) => ({ ...prev, ...Object.fromEntries(items.map((q) => [q.symbol, q])) })))
-        .catch(() => undefined) // the row just keeps its last price; the chart area shows real errors
-    load()
-    const timer = window.setInterval(() => document.visibilityState === 'visible' && load(), REFRESH_MS)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
+    fetchWatchQuotes(true)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchWatchQuotes()
     }
-  }, [market, symbolsKey])
+    const onFocus = () => fetchWatchQuotes()
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onFocus)
+    const timer =
+      refreshMs > 0
+        ? window.setInterval(() => {
+            if (document.visibilityState === 'visible') fetchWatchQuotes()
+          }, refreshMs)
+        : undefined
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onFocus)
+      if (timer !== undefined) window.clearInterval(timer)
+    }
+  }, [symbolsKey, refreshMs, fetchWatchQuotes])
 
   useEffect(() => {
     if (!selected || selected.market !== market) setSelected(items[0] ?? null)
     setQuery('')
   }, [market, watchlist])
 
-  // Chart + quote, refreshed periodically while the tab is visible.
+  // Chart + quote, refreshed periodically while the tab is visible and immediately on tab return.
   useEffect(() => {
     if (!selected) return
     let cancelled = false
-    const load = () =>
+    const load = (force = false) => {
+      if (chartBusyRef.current && !force) return
+      chartBusyRef.current = true
       Promise.all([
         marketApi.candles(selected.market, selected.symbol, interval, CHART_LIMIT),
         marketApi.quote(selected.market, selected.symbol),
@@ -114,6 +206,8 @@ export default function DashboardPage() {
           setCandles(c.candles)
           setProvider(c.provider)
           setQuote(q.quote)
+          setQuotes((prev) => ({ ...prev, [selected.symbol]: q.quote }))
+          setLastQuoteAt(Date.now())
           setError('')
           setNeedsKey(false)
         })
@@ -122,15 +216,31 @@ export default function DashboardPage() {
           setNeedsKey(e instanceof ApiError && e.code === 'toss_credentials_required')
           setError(e.message)
         })
+        .finally(() => {
+          chartBusyRef.current = false
+        })
+    }
     setCandles([])
     setQuote(null)
-    load()
-    const timer = window.setInterval(() => document.visibilityState === 'visible' && load(), REFRESH_MS)
+    load(true)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    const chartMs = refreshMs > 0 ? Math.max(CHART_REFRESH_MS, refreshMs) : 0
+    const timer =
+      chartMs > 0
+        ? window.setInterval(() => {
+            if (document.visibilityState === 'visible') load()
+          }, chartMs)
+        : undefined
     return () => {
       cancelled = true
-      window.clearInterval(timer)
+      chartBusyRef.current = false
+      document.removeEventListener('visibilitychange', onVisible)
+      if (timer !== undefined) window.clearInterval(timer)
     }
-  }, [selected, interval])
+  }, [selected, interval, refreshMs])
 
   // Debounced symbol search (KR: 코드/종목명, US: 티커/한글명).
   useEffect(() => {
@@ -173,19 +283,46 @@ export default function DashboardPage() {
 
   const fmt = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 })
 
-  // Live orderbook/ticks for the selected symbol; the latest tick also drives the header price.
+  // Live orderbook/ticks for the selected symbol; the latest tick drives header, watchlist row, and last candle.
   const live = useRealtime(selected?.market, selected?.symbol)
-  const prevClose = quote ? quote.price - quote.change : null
+  const prevClose = quote ? (quote.prev_close ?? quote.price - quote.change) : null
   const lastTick = live.ticks[0]
-  const shown = quote && lastTick && prevClose
-    ? { ...quote, price: lastTick.price, change: lastTick.price - prevClose, change_pct: (lastTick.price / prevClose - 1) * 100 }
-    : quote
+  const shown = useMemo<Quote | null>(() => {
+    if (!quote) return null
+    if (!lastTick || !prevClose) return quote
+    const px = lastTick.price
+    return {
+      ...quote,
+      price: px,
+      change: px - prevClose,
+      change_pct: (px / prevClose - 1) * 100,
+      high: quote.high !== undefined ? Math.max(quote.high, px) : undefined,
+      low: quote.low !== undefined ? Math.min(quote.low, px) : undefined,
+    }
+  }, [quote, lastTick, prevClose])
+
+  // Reflect live selected price into the rightmost chart candle so the chart never feels frozen between polls.
+  const liveCandles = useMemo(() => {
+    if (!shown || candles.length === 0) return candles
+    const last = candles[candles.length - 1]
+    const px = shown.price
+    if (last.close === px && last.high >= px && last.low <= px) return candles
+    const patched: Candle = {
+      ...last,
+      close: px,
+      high: Math.max(last.high, px),
+      low: Math.min(last.low, px),
+    }
+    return [...candles.slice(0, -1), patched]
+  }, [candles, shown])
 
   useEffect(() => {
     setWarnings([])
     if (!selected) return
     marketApi.warnings(selected.market, selected.symbol).then((r) => setWarnings(r.items)).catch(() => undefined)
   }, [selected])
+
+  const refreshLabel = refreshMs > 0 ? `자동 ${refreshMs / 1000}초` : '자동 꺼짐'
 
   return (
     <div className="dashboard">
@@ -228,33 +365,65 @@ export default function DashboardPage() {
           )}
         </div>
 
+        <div className="wl-toolbar">
+          <button
+            type="button"
+            className={`wl-live-btn ${refreshMs > 0 ? 'on' : ''}`}
+            onClick={cycleRefreshMs}
+            title="클릭하여 관심종목 시세 자동 갱신 주기를 변경합니다 (5초 → 15초 → 30초 → 꺼짐)"
+          >
+            <i className={`dot ${refreshMs > 0 ? 'on' : ''}`} aria-hidden />
+            {refreshLabel}
+          </button>
+          <span className="muted small wl-updated" title="관심종목 시세가 마지막으로 갱신된 시각">
+            {lastQuoteAt ? fmtClock(lastQuoteAt) : '불러오는 중'}
+          </span>
+          <button
+            type="button"
+            className={`wl-refresh-btn ${refreshingQuotes ? 'spin' : ''}`}
+            onClick={() => fetchWatchQuotes(true)}
+            disabled={refreshingQuotes}
+            title="지금 바로 관심종목 시세와 캔들을 새로 불러옵니다"
+            aria-label="시세 즉시 새로고침"
+          >
+            ↻
+          </button>
+        </div>
+
         <ul className="watchlist">
-          {items.map((w) => (
-            <li
-              key={w.symbol}
-              className={selected?.symbol === w.symbol ? 'active' : ''}
-              title={`${w.name} (${w.symbol}) 차트와 실시간 호가 열기`}
-              onClick={() => setSelected(w)}
-            >
-              <div className="wl-left">
-                <span className="wl-name">{w.name}</span>
-                <span className="muted small">
-                  {w.symbol}
-                  <button
-                  className="remove"
-                  title="관심종목에서 삭제"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    removeItem(w)
-                  }}
-                >
-                  ×
-                </button>
-                </span>
-              </div>
-              <WatchPrice q={quotes[w.symbol]} market={market} />
-            </li>
-          ))}
+          {items.map((w) => {
+            const rowQuote: WatchQuote | undefined =
+              selected?.market === w.market && selected?.symbol === w.symbol && shown
+                ? shown
+                : quotes[w.symbol]
+            return (
+              <li
+                key={w.symbol}
+                className={selected?.symbol === w.symbol ? 'active' : ''}
+                title={`${w.name} (${w.symbol}) 차트와 실시간 호가 열기`}
+                onClick={() => setSelected(w)}
+              >
+                <div className="wl-left">
+                  <span className="wl-name">{w.name}</span>
+                  <span className="muted small">
+                    {w.symbol}
+                    <button
+                      className="remove"
+                      title="관심종목에서 삭제"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        removeItem(w)
+                      }}
+                    >
+                      ×
+                    </button>
+                  </span>
+                </div>
+                <WatchCandle q={rowQuote} market={market} />
+                <WatchPrice q={rowQuote} market={market} />
+              </li>
+            )
+          })}
         </ul>
       </aside>
 
@@ -297,14 +466,14 @@ export default function DashboardPage() {
           error && <p className="error">{error}</p>
         )}
         <ChartDiagnosis
-          candles={candles}
+          candles={liveCandles}
           market={selected?.market ?? market}
           interval={interval}
           livePrice={shown?.price ?? null}
           activeIndicators={indicators}
         />
         <TradingChart
-          candles={candles}
+          candles={liveCandles}
           market={selected?.market ?? market}
           interval={interval}
           indicators={indicators}
@@ -321,6 +490,21 @@ export default function DashboardPage() {
 }
 
 function WatchPrice({ q, market }: { q?: WatchQuote; market: Market }) {
+  const prevPriceRef = useRef<number | undefined>(undefined)
+  const [flash, setFlash] = useState<'up' | 'down' | ''>('')
+
+  useEffect(() => {
+    const px = q?.price
+    if (px === undefined || q?.error) return
+    const prev = prevPriceRef.current
+    prevPriceRef.current = px
+    if (prev !== undefined && px !== prev) {
+      setFlash(px > prev ? 'up' : 'down')
+      const t = window.setTimeout(() => setFlash(''), 650)
+      return () => window.clearTimeout(t)
+    }
+  }, [q?.price, q?.error])
+
   if (!q) return <div className="wl-right muted small">…</div>
   if (q.error || q.price === undefined) return <div className="wl-right muted small" title={q.error}>-</div>
   const fmt = priceFormatter(market)
@@ -328,7 +512,7 @@ function WatchPrice({ q, market }: { q?: WatchQuote; market: Market }) {
   const cls = ch > 0 ? 'up' : ch < 0 ? 'down' : 'muted'
   const sign = ch > 0 ? '+' : ''
   return (
-    <div className="wl-right">
+    <div className={`wl-right${flash ? ` wl-flash-${flash}` : ''}`}>
       <span className="wl-price">{fmt(q.price)}</span>
       <span className={`small ${cls}`}>
         {sign}

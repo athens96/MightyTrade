@@ -34,9 +34,14 @@ export default function MarketBar() {
       marketApi.regimes().then((r) => alive && setRegimes(r)).catch(() => undefined)
     }
     load()
-    const t = window.setInterval(() => document.visibilityState === 'visible' && load(), 30_000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    const t = window.setInterval(() => document.visibilityState === 'visible' && load(), 15_000)
     return () => {
       alive = false
+      document.removeEventListener('visibilitychange', onVisible)
       window.clearInterval(t)
     }
   }, [])

@@ -28,6 +28,10 @@ export interface Quote {
   change_pct: number
   currency: string
   time: number
+  open?: number
+  high?: number
+  low?: number
+  prev_close?: number
 }
 
 export interface WatchItem {

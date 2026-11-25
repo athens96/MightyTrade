@@ -126,6 +126,10 @@ pub fn get_quote(market: Market, symbol: &str) -> Quote {
         change_pct,
         currency: if market == Market::KR { "KRW" } else { "USD" }.to_string(),
         time: last.time,
+        open: Some(last.open),
+        high: Some(last.high),
+        low: Some(last.low),
+        prev_close: Some(prev.close),
     }
 }
 

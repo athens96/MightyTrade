@@ -2,6 +2,18 @@
 
 이 프로젝트의 주요 변경 사항은 [Semantic Versioning](https://semver.org/lang/ko/) 규칙에 따라 기록됩니다.
 
+## [0.5.1] - 2026-11-25
+
+### Added & Improved
+- **시세/차트 관심종목 오른편 실시간 당일 캔들 & 주기적 자동 갱신 강화 (`MT-26`)**:
+  - **관심종목 실시간 당일 미니 캔들 (`WatchCandle`, `server-rs/src/market/models.rs` · `kiwoom.rs` · `toss.rs`)**:
+    - `Quote` 응답에 당일 `open`·`high`·`low`·`prev_close`를 포함(키움 `ka10001`/`usa20100` 추가 호출 0건, 토스 `/api/v1/prices` + 일봉 폴백 및 실시간가 반영).
+    - 각 관심종목 오른편에 양봉(빨강)·음봉(파랑)·보합(회색) 몸통과 윗/아랫꼬리, 전일종가 점선 기준선을 그리는 미니 캔들 SVG 및 상세 OHLC·장중 위치(%) 한글 툴팁 표시.
+  - **주기적 시세·금액 자동 갱신 강화 (`DashboardPage.tsx`, `MarketBar.tsx`, `market/routes.rs`)**:
+    - 관심종목 시세 자동 갱신 주기를 기본 **5초**로 단축하고, 상단 상태 바에서 `자동 5초 → 15초 → 30초 → 꺼짐` 전환·마지막 갱신 시각(`HH:MM:SS`)·`↻` 즉시 새로고침 버튼 제공.
+    - 브라우저 탭 복귀(`visibilitychange`/`focus`) 시 즉시 갱신, 시세 변동 시 상승(빨강)/하락(파랑) 시각 플래시, 선택 종목 실시간 체결(SSE) 틱을 관심종목 행·미니 캔들·메인 차트 마지막 봉까지 동시 반영.
+    - `/api/market/quote`·`/quotes`·`/candles`·`/overview`·`/orderbook`에 `Cache-Control: no-store` 및 `fetch(..., { cache: 'no-store' })` 적용, 일봉 캐시 TTL 단축(`60s → 15s`).
+
 ## [0.5.0] - 2026-11-25
 
 ### Added
