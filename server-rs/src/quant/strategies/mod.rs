@@ -1,4 +1,5 @@
 pub mod daytrade;
+pub mod quant151;
 pub mod swing;
 
 use serde::Serialize;
@@ -140,6 +141,9 @@ pub fn all_specs() -> Vec<&'static StrategySpec> {
         &swing::RSI2_SPEC,
         &swing::IBS_SPEC,
         &swing::TSMOM_SPEC,
+        &quant151::HP_FILTER_SPEC,
+        &quant151::KNN_SPEC,
+        &quant151::ALPHA_COMBO_SPEC,
         &daytrade::VWAP_PULLBACK_SPEC,
         &daytrade::HOD_BREAKOUT_SPEC,
         &daytrade::RED_TO_GREEN_SPEC,

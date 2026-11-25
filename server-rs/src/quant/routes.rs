@@ -19,6 +19,7 @@ use crate::quant::metrics::performance;
 use crate::quant::montecarlo;
 use crate::quant::optimize::{self, Axis, ComboItem};
 use crate::quant::portfolio;
+use crate::quant::risk_audit;
 use crate::quant::screener;
 use crate::quant::screener_data;
 use crate::quant::strategies::{all_specs, get_spec, resolve_params, params_to_json, StrategySpec};
@@ -396,6 +397,18 @@ async fn backtest(
     codes.extend(warn);
     let warnings: Vec<String> = codes.iter().map(|c| warning_msg(c)).collect();
 
+    let trades_slice = result
+        .get("trades")
+        .and_then(|v| v.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
+    let audit = risk_audit::audit_backtest(
+        result.get("metrics").unwrap_or(&Value::Null),
+        result.get("benchmark").unwrap_or(&Value::Null),
+        trades_slice,
+        s.spec.timeframe,
+    );
+
     let mut out = context_fields(&s, &bars, start);
     out.insert("params".to_string(), strat.params_json());
     out.insert("risk".to_string(), s.risk.to_value());
@@ -404,6 +417,7 @@ async fn backtest(
     out.insert("candles".to_string(), json!(candles));
     out.insert("chart_indicators".to_string(), json!(strat.chart_indicators()));
     out.insert("warnings".to_string(), json!(warnings));
+    out.insert("risk_audit".to_string(), audit);
     if let Some(res_obj) = result.as_object() {
         for (k, v) in res_obj {
             out.insert(k.clone(), v.clone());
@@ -770,6 +784,19 @@ async fn portfolio_backtest(
         .filter_map(|v| v.as_str().map(|s| warning_msg(s)))
         .collect();
 
+    let pf_audit = risk_audit::audit_portfolio(
+        res.get("metrics").unwrap_or(&Value::Null),
+        res.get("benchmark").unwrap_or(&Value::Null),
+        res.get("rebalances")
+            .and_then(|v| v.as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]),
+        res.get("equity")
+            .and_then(|v| v.as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]),
+    );
+
     let mut out = serde_json::Map::new();
     out.insert("market".to_string(), json!(market.as_str()));
     out.insert("model".to_string(), json!(model.id));
@@ -785,6 +812,7 @@ async fn portfolio_backtest(
     );
     out.insert("costs".to_string(), json!(costs));
     out.insert("warnings".to_string(), json!(warn_codes));
+    out.insert("risk_audit".to_string(), pf_audit);
     if let Some(ro) = res.as_object() {
         for (k, v) in ro {
             out.insert(k.clone(), v.clone());

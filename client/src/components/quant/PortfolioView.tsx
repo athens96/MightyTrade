@@ -6,6 +6,7 @@ import { priceFormatter } from '../chart/format'
 import { day } from './BacktestView'
 import EquityChart from './EquityChart'
 import MetricsTable from './MetricsTable'
+import RiskAuditCard from './RiskAuditCard'
 
 const REBAL_LABEL: Record<string, string> = {
   monthly: '매월 초',
@@ -66,6 +67,7 @@ export default function PortfolioView({ result, model }: { result: PortfolioBack
         <MetricsTable strategy={result.metrics} benchmark={result.benchmark} market={result.market} />
         <EquityChart points={result.equity} market={result.market} />
       </div>
+      <RiskAuditCard audit={result.risk_audit} />
 
       <div className="panel">
         <h4>최신 목표 비중 (자산별)</h4>

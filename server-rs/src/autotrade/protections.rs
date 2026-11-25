@@ -1,10 +1,11 @@
 //! Bot-level circuit breakers, consecutive-loss guards, cooldowns, and daily loss limits (MT-4).
 
-use chrono::{Duration, NaiveDate};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde_json::{json, Value};
 
 use crate::autotrade::{bots, executor};
 use crate::errors::{ApiError, ApiResult};
+use crate::market::models::{Candle, Interval};
 use crate::state::AppState;
 use crate::users::repository::now_iso;
 
@@ -341,4 +342,66 @@ pub async fn evaluate_after_step(
     }
 
     None
+}
+
+/// Stale Data Guard (*151 Trading Strategies* bot skeleton safety principle, MT-25):
+/// rejects frozen/stale market feeds before any live or intraday order decision is made.
+/// Skipped when `is_mock` is true so deterministic fixture tests never fail on wall clock.
+pub fn check_candle_freshness(
+    candles: &[Candle],
+    interval: Interval,
+    now: DateTime<Utc>,
+    is_mock: bool,
+) -> Result<(), String> {
+    if is_mock {
+        return Ok(());
+    }
+    let Some(last) = candles.last() else {
+        return Err("시세 캔들이 비어 있어 주문을 보류했습니다".to_string());
+    };
+    if last.close <= 0.0 || !last.close.is_finite() {
+        return Err("비정상 시세(0 이하/NaN)가 감지되어 주문을 보류했습니다".to_string());
+    }
+    let age_sec = now.timestamp() - last.time;
+    let max_age_sec = match interval {
+        Interval::D1 => 8 * 86400, // covers long holiday streaks (Chuseok / Lunar New Year)
+        Interval::W1 => 21 * 86400,
+        _ => (3 * interval.seconds()).max(900), // 3× candle width, minimum 15m feed tolerance
+    };
+    if age_sec > max_age_sec {
+        let mins = age_sec / 60;
+        return Err(format!(
+            "시세 데이터 지연(Stale, {}분 경과 / 허용 {}분) 감지 — 주문을 안전하게 보류했습니다",
+            mins,
+            max_age_sec / 60
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_candle(ts: i64, close: f64) -> Candle {
+        Candle { time: ts, open: close, high: close, low: close, close, volume: 100.0 }
+    }
+
+    #[test]
+    fn stale_data_guard_blocks_frozen_intraday_and_daily_feeds() {
+        let now = Utc::now();
+        let fresh_5m = vec![mk_candle(now.timestamp() - 300, 70_000.0)];
+        assert!(check_candle_freshness(&fresh_5m, Interval::M5, now, false).is_ok());
+
+        let stale_5m = vec![mk_candle(now.timestamp() - 2400, 70_000.0)];
+        let err = check_candle_freshness(&stale_5m, Interval::M5, now, false).unwrap_err();
+        assert!(err.contains("Stale"), "expected stale msg, got: {err}");
+        // Mock provider bypasses wall-clock check
+        assert!(check_candle_freshness(&stale_5m, Interval::M5, now, true).is_ok());
+
+        let stale_1d = vec![mk_candle(now.timestamp() - 10 * 86400, 70_000.0)];
+        assert!(check_candle_freshness(&stale_1d, Interval::D1, now, false).is_err());
+        let fresh_1d = vec![mk_candle(now.timestamp() - 2 * 86400, 70_000.0)];
+        assert!(check_candle_freshness(&fresh_1d, Interval::D1, now, false).is_ok());
+    }
 }

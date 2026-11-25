@@ -7,6 +7,7 @@ pub mod metrics;
 pub mod montecarlo;
 pub mod optimize;
 pub mod portfolio;
+pub mod risk_audit;
 pub mod routes;
 pub mod screener;
 pub mod screener_data;

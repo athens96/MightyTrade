@@ -179,11 +179,11 @@ async fn quant_lab_all_endpoints_work_end_to_end() {
     )
     .await;
 
-    // 1. Strategies metadata (15 strategies: 7 swing + 8 daytrade including 4 pro setups)
+    // 1. Strategies metadata (18 strategies: 10 swing incl. 3 WorldQuant/151 + 8 daytrade incl. 4 pro setups)
     let (st, strats) = c.req("GET", "/api/quant/strategies", None).await;
     assert_eq!(st, StatusCode::OK);
     let strat_items = strats["items"].as_array().unwrap();
-    assert_eq!(strat_items.len(), 15);
+    assert_eq!(strat_items.len(), 18);
     assert_eq!(strats["objectives"].as_object().unwrap().len(), 6);
 
     // 2. Cost defaults
@@ -203,6 +203,9 @@ async fn quant_lab_all_endpoints_work_end_to_end() {
         "rsi2",
         "ibs_reversion",
         "ts_momentum",
+        "hp_filter",
+        "knn",
+        "alpha_combo",
         "vwap_pullback",
         "hod_breakout",
         "red_to_green",
@@ -230,6 +233,7 @@ async fn quant_lab_all_endpoints_work_end_to_end() {
         assert_eq!(st, StatusCode::OK, "backtest failed for {sid}: {bt}");
         assert!(bt["equity"].as_array().unwrap().len() > 10, "{sid} equity empty");
         assert!(bt["metrics"]["total_return_pct"].is_number(), "{sid} metrics missing: {}", bt["metrics"]);
+        assert_eq!(bt["risk_audit"]["gates"].as_array().unwrap().len(), 6, "{sid} risk_audit missing");
     }
 
     // 4. 2D Optimization (rayon parallel)
@@ -295,15 +299,16 @@ async fn quant_lab_all_endpoints_work_end_to_end() {
     assert_eq!(mc["runs"], 200);
     assert!(mc["final_return_pct"]["p50"].is_number());
 
-    // 7. Portfolio models (12 models) + backtest (HRP, VAA, BAA, All Weather + buy_only)
+    // 7. Portfolio models (13 models incl. cov_max_sharpe) + backtest
     let (st, pms) = c.req("GET", "/api/quant/portfolio/models", None).await;
     assert_eq!(st, StatusCode::OK);
-    assert_eq!(pms["items"].as_array().unwrap().len(), 12);
+    assert_eq!(pms["items"].as_array().unwrap().len(), 13);
 
     for (model_id, buy_only) in [
         ("all_weather", false),
         ("all_weather", true),
         ("hrp", false),
+        ("cov_max_sharpe", false),
         ("vaa", false),
         ("baa", false),
         ("dual_momentum", false),
@@ -325,6 +330,7 @@ async fn quant_lab_all_endpoints_work_end_to_end() {
         assert_eq!(st, StatusCode::OK, "portfolio {model_id} (buy_only={buy_only}) failed: {pb}");
         assert!(!pb["equity"].as_array().unwrap().is_empty());
         assert!(pb["metrics"]["cagr_pct"].is_number());
+        assert_eq!(pb["risk_audit"]["gates"].as_array().unwrap().len(), 6);
     }
 
     // 8. Screener presets (7 presets) + run across all presets

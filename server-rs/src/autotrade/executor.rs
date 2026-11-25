@@ -141,13 +141,16 @@ pub async fn load_intraday(
     let interval = Interval::parse(spec.timeframe)?;
     let uid = bot["user_id"].as_str().unwrap_or("");
     let sym = bot["symbol"].as_str().unwrap_or("");
-    let (_, candles) = market::get_candles(state, uid, market, sym, interval, 200).await?;
+    let (provider, candles) = market::get_candles(state, uid, market, sym, interval, 200).await?;
     if candles.len() < strat.warmup() + 2 {
         return Err(ApiError::bad_request(
             "not_enough_data",
             "분봉 전략 계산에 필요한 과거 데이터가 부족합니다",
         ));
     }
+    protections::check_candle_freshness(&candles, interval, Utc::now(), provider == "mock")
+        .map_err(|msg| ApiError::conflict("stale_market_data", msg))?;
+    // Drop the last unfinished candle so live trading sees the exact same finalized bars as backtest
     let bars = Bars::from_candles(&candles[..candles.len() - 1]);
     let latest = candles[candles.len() - 1].clone();
     Ok((candles, bars, latest, strat))
@@ -1527,7 +1530,14 @@ pub async fn run_live(state: &AppState, bot: &mut Value, today: &str) -> ApiResu
         return Ok(json!({ "skipped": "already_ran" }));
     }
     let _ = reconcile_live(state, bot, today).await;
-    let (_, bars, today_bar_opt, mut strat) = load(state, bot, today).await?;
+    let (all_candles, bars, today_bar_opt, mut strat) = load(state, bot, today).await?;
+    let m_guard = Market::parse(bot["market"].as_str().unwrap_or("KR"))?;
+    let is_mock_feed = market::provider_name(state, m_guard) == "mock";
+    if let Err(msg) = protections::check_candle_freshness(&all_candles, Interval::D1, Utc::now(), is_mock_feed) {
+        bots::log(state, bot, "skip", &msg, "warn", None).await;
+        bots::save(state, bot);
+        return Ok(json!({ "skipped": "stale_market_data", "reason": msg }));
+    }
     let today_bar = today_bar_opt.ok_or_else(|| {
         ApiError::conflict("market_not_open", "오늘 시가가 아직 없습니다")
     })?;

@@ -10,7 +10,9 @@ use crate::errors::{ApiError, ApiResult};
 use crate::market::models::Market;
 use crate::quant::engine::{Bars, Costs};
 use crate::quant::metrics::{drawdown_series, performance};
-use crate::quant::strategies::{params_to_json, resolve_params, Param, ResolvedParams};
+use crate::quant::strategies::{
+    params_to_json, quant151::solve_linear, resolve_params, Param, ResolvedParams,
+};
 
 pub const MIN_ASSETS: usize = 2;
 pub const MAX_ASSETS: usize = 16;
@@ -602,6 +604,146 @@ fn sector_rotation_weights(
     out
 }
 
+/// Long-only covariance-inverse Max-Sharpe optimizer adapted from *151 Trading Strategies*
+/// Section 3.18 (`w ∝ C⁻¹ E`) with ridge stabilization, GMV bear-market fallback (`C⁻¹ 1`),
+/// and iterative single-asset weight cap (`max_weight_pct`).
+fn cov_max_sharpe_weights(
+    closes: &HashMap<String, Vec<f64>>,
+    i: usize,
+    assets: &[AssetItem],
+    params: &ResolvedParams,
+) -> HashMap<String, f64> {
+    let n = assets.len();
+    if n == 0 {
+        return HashMap::new();
+    }
+    if n == 1 {
+        return [(assets[0].symbol.clone(), 1.0)].into_iter().collect();
+    }
+    let cov_w = (params.get("cov_window").copied().unwrap_or(120.0) as usize).max(20);
+    let mom_d = (params.get("mom_days").copied().unwrap_or(60.0) as usize).max(5);
+    let max_w = (params.get("max_weight_pct").copied().unwrap_or(45.0) / 100.0)
+        .clamp(1.0 / n as f64, 1.0);
+
+    let start = (i + 1).saturating_sub(cov_w).max(1);
+    let rets: Vec<Vec<f64>> = assets
+        .iter()
+        .map(|a| {
+            let cs = &closes[&a.symbol];
+            (start..=i)
+                .map(|k| if cs[k - 1] > 0.0 { cs[k] / cs[k - 1] - 1.0 } else { 0.0 })
+                .collect()
+        })
+        .collect();
+    let m = rets[0].len();
+    if m < 5 {
+        let eq = 1.0 / n as f64;
+        return assets.iter().map(|a| (a.symbol.clone(), eq)).collect();
+    }
+
+    let means: Vec<f64> = rets.iter().map(|r| r.iter().sum::<f64>() / m as f64).collect();
+    let mut cov = vec![vec![0.0; n]; n];
+    let mut diag_sum = 0.0;
+    for a in 0..n {
+        for b in a..n {
+            let v: f64 = (0..m)
+                .map(|t| (rets[a][t] - means[a]) * (rets[b][t] - means[b]))
+                .sum::<f64>()
+                / (m - 1) as f64;
+            cov[a][b] = v;
+            cov[b][a] = v;
+        }
+        diag_sum += cov[a][a].max(0.0);
+    }
+    let avg_var = (diag_sum / n as f64).max(1e-8);
+    let ridge = (avg_var * 0.05).max(1e-6);
+    for a in 0..n {
+        cov[a][a] += ridge;
+    }
+
+    // Expected returns E_i from recent momentum window
+    let exp_ret: Vec<f64> = assets
+        .iter()
+        .map(|a| {
+            let cs = &closes[&a.symbol];
+            if i >= mom_d && cs[i - mom_d] > 0.0 {
+                cs[i] / cs[i - mom_d] - 1.0
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    // Unconstrained Max-Sharpe: C⁻¹ E -> project to spot long-only (w >= 0)
+    let mut w: Vec<f64> = solve_linear(&cov, &exp_ret)
+        .unwrap_or_else(|| vec![0.0; n])
+        .into_iter()
+        .map(|x| x.max(0.0))
+        .collect();
+
+    let mut sum_w: f64 = w.iter().sum();
+    // Bear-market / all-negative fallback: Global Minimum Variance (C⁻¹ 1)
+    if sum_w <= 1e-9 {
+        let ones = vec![1.0; n];
+        w = solve_linear(&cov, &ones)
+            .unwrap_or_else(|| (0..n).map(|a| 1.0 / cov[a][a].max(1e-8)).collect())
+            .into_iter()
+            .map(|x| x.max(0.0))
+            .collect();
+        sum_w = w.iter().sum();
+    }
+    if sum_w <= 1e-9 {
+        w = (0..n).map(|a| 1.0 / cov[a][a].max(1e-8)).collect();
+        sum_w = w.iter().sum();
+    }
+    for x in &mut w {
+        *x /= sum_w;
+    }
+
+    // Iterative water-filling single-asset cap so low-vol assets don't dominate 95%+
+    let mut capped = vec![false; n];
+    for _ in 0..n {
+        let mut excess = 0.0;
+        let mut any_new = false;
+        for a in 0..n {
+            if !capped[a] && w[a] > max_w + 1e-12 {
+                excess += w[a] - max_w;
+                w[a] = max_w;
+                capped[a] = true;
+                any_new = true;
+            }
+        }
+        if !any_new || excess <= 1e-12 {
+            break;
+        }
+        let free_sum: f64 = (0..n).filter(|&a| !capped[a]).map(|a| w[a]).sum();
+        let free_cnt = (0..n).filter(|&a| !capped[a]).count();
+        if free_sum > 1e-12 {
+            for a in 0..n {
+                if !capped[a] {
+                    w[a] += excess * (w[a] / free_sum);
+                }
+            }
+        } else if free_cnt > 0 {
+            let share = excess / free_cnt as f64;
+            for a in 0..n {
+                if !capped[a] {
+                    w[a] += share;
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    let norm: f64 = w.iter().sum();
+    let denom = if norm > 0.0 { norm } else { 1.0 };
+    assets
+        .iter()
+        .enumerate()
+        .map(|(idx, a)| (a.symbol.clone(), w[idx] / denom))
+        .collect()
+}
+
 // ------------------------------------------------------------------ model registry
 pub struct PortfolioModelSpec {
     pub id: &'static str,
@@ -669,6 +811,11 @@ const SECTOR_PARAMS: &[Param] = &[
     Param::int("lookback", "수익률 비교 기간 (일)", 126.0, 20.0, 252.0),
     Param::int("ma_days", "상승 추세 확인선 (일)", 200.0, 20.0, 252.0),
     Param::int("top_n", "상위 선택 종목 수", 3.0, 1.0, 6.0),
+];
+const COV_SHARPE_PARAMS: &[Param] = &[
+    Param::int("cov_window", "공분산 측정 기간 (일)", 120.0, 30.0, 252.0),
+    Param::int("mom_days", "기대수익 기간 (일)", 60.0, 10.0, 252.0),
+    Param::int("max_weight_pct", "단일 종목 최대 비중 (%)", 45.0, 20.0, 100.0),
 ];
 
 const ROLES_OD: &[&str] = &["offensive", "defensive"];
@@ -1129,6 +1276,53 @@ pub static PORTFOLIO_MODELS: &[PortfolioModelSpec] = &[
             "caution": "단기 혼조 장세에서는 주도주 교체가 잦을 수 있으므로 중장기 운용을 권장합니다."
         }),
     },
+    PortfolioModelSpec {
+        id: "cov_max_sharpe",
+        name: "[151전략] 공분산 최대 샤프 최적화 (C⁻¹E)",
+        theory: "《151 Trading Strategies》 3.18절 응용 · 공분산 역행렬로 변동성과 상관관계를 자동 조절해 샤프 극대화",
+        summary: "종목 간 함께 흔들리는 정도(공분산)와 최근 상승 힘을 수학적으로 계산해 위험 대비 수익이 가장 높은 비중으로 자동 배분합니다",
+        description: "헤지펀드 통계적 차익거래의 핵심 수식(w ∝ C⁻¹E)을 국내·미국 현물 주식(공매도 없음)에 맞게 응용한 모델입니다. 변동성이 크거나 서로 똑같이 움직이는 종목 비중은 자동으로 줄이고, 모든 자산이 하락세일 때는 최소분산(GMV) 안전 비중으로 자동 전환합니다.",
+        uses_roles: false,
+        allowed_roles: ROLES_OD,
+        uses_weights: false,
+        default_rebalance: "monthly",
+        params: COV_SHARPE_PARAMS,
+        warmup_fn: |p| {
+            let cw = p.get("cov_window").copied().unwrap_or(120.0) as usize;
+            let md = p.get("mom_days").copied().unwrap_or(60.0) as usize;
+            cw.max(md) + 1
+        },
+        weight_fn: cov_max_sharpe_weights,
+        presets: || json!({
+            "US": [
+                {"symbol": "SPY", "name": "미국 S&P500", "role": "offensive", "weight": 20},
+                {"symbol": "QQQ", "name": "미국 나스닥100", "role": "offensive", "weight": 20},
+                {"symbol": "TLT", "name": "미국 장기국채", "role": "defensive", "weight": 20},
+                {"symbol": "IEF", "name": "미국 중기국채", "role": "defensive", "weight": 20},
+                {"symbol": "GLD", "name": "금", "role": "defensive", "weight": 20}
+            ],
+            "KR": [
+                {"symbol": "069500", "name": "KODEX 200", "role": "offensive", "weight": 20},
+                {"symbol": "360750", "name": "미국 S&P500", "role": "offensive", "weight": 20},
+                {"symbol": "091160", "name": "KODEX 반도체", "role": "offensive", "weight": 20},
+                {"symbol": "148070", "name": "국고채10년", "role": "defensive", "weight": 20},
+                {"symbol": "132030", "name": "골드선물", "role": "defensive", "weight": 20}
+            ]
+        }),
+        guide: || json!({
+            "background": "《151 Trading Strategies》 3.18절의 공분산 역행렬 최대 샤프 공식(w ∝ C⁻¹E)에 리지 안정화와 현물 롱-온리 제약, 하락장 최소분산(GMV) 자동 전환을 결합했습니다.",
+            "setup": [
+                "공분산 측정 기간(기본 120일): 최근 반년간 종목들이 얼마나 같이 흔들렸는지 계산합니다.",
+                "기대수익 기간(기본 60일): 최근 분기 상승 힘을 기대수익 추정치로 사용합니다.",
+                "단일 종목 최대 비중(기본 45%): 한 종목에 지나치게 쏠리지 않도록 상한을 강제합니다."
+            ],
+            "execution": [
+                "매월 초 리지 정규화된 공분산 역행렬과 기대수익으로 최적 비중을 산출합니다.",
+                "모든 종목이 하락세면 자동으로 최소분산(변동성이 가장 낮은 채권·금 위주) 비중으로 방어합니다."
+            ],
+            "caution": "패닉 급락장에서는 자산 간 상관관계가 일시적으로 1에 수렴할 수 있으므로 주식·채권·금처럼 성격이 다른 자산을 함께 담으세요."
+        }),
+    },
 ];
 
 pub fn get_model(id: &str) -> Option<&'static PortfolioModelSpec> {
@@ -1580,4 +1774,44 @@ pub fn run_portfolio_backtest(
         "period": { "start": seg_times[0], "end": seg_times[seg_times.len() - 1] },
         "warnings": warnings,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cov_max_sharpe_respects_long_only_cap_and_gmv_bear_fallback() {
+        let assets = vec![
+            AssetItem { symbol: "STK".into(), name: "Stock".into(), role: "offensive".into(), weight: 33.0 },
+            AssetItem { symbol: "TECH".into(), name: "Tech".into(), role: "offensive".into(), weight: 33.0 },
+            AssetItem { symbol: "BOND".into(), name: "Bond".into(), role: "defensive".into(), weight: 34.0 },
+        ];
+        let n = 160usize;
+        // Bull case: STK & TECH rally with higher vol, BOND steady low vol
+        let mut bull = HashMap::new();
+        bull.insert("STK".into(), (0..n).map(|i| 100.0 + 0.45 * i as f64 + 3.0 * (i as f64 * 0.4).sin()).collect());
+        bull.insert("TECH".into(), (0..n).map(|i| 100.0 + 0.65 * i as f64 + 6.0 * (i as f64 * 0.45).sin()).collect());
+        bull.insert("BOND".into(), (0..n).map(|i| 100.0 + 0.05 * i as f64 + 0.2 * (i as f64 * 0.2).cos()).collect());
+        let p = resolve_params(COV_SHARPE_PARAMS, &json!({"cov_window": 120, "mom_days": 60, "max_weight_pct": 45})).unwrap();
+        let w_bull = cov_max_sharpe_weights(&bull, n - 1, &assets, &p);
+        let sum_b: f64 = w_bull.values().sum();
+        assert!((sum_b - 1.0).abs() < 1e-9, "bull weights sum != 1: {sum_b}");
+        for (k, &v) in &w_bull {
+            assert!(v >= 0.0 && v <= 0.45 + 1e-6, "bull weight {k}={v} out of [0, 0.45]");
+        }
+
+        // Bear case: ALL assets down -> falls back to GMV (lowest-vol BOND hits cap 0.45)
+        let mut bear = HashMap::new();
+        bear.insert("STK".into(), (0..n).map(|i| 200.0 - 0.5 * i as f64 + 5.0 * (i as f64 * 0.5).sin()).collect());
+        bear.insert("TECH".into(), (0..n).map(|i| 200.0 - 0.8 * i as f64 + 8.0 * (i as f64 * 0.6).sin()).collect());
+        bear.insert("BOND".into(), (0..n).map(|i| 100.0 - 0.02 * i as f64 + 0.1 * (i as f64 * 0.2).cos()).collect());
+        let w_bear = cov_max_sharpe_weights(&bear, n - 1, &assets, &p);
+        let sum_r: f64 = w_bear.values().sum();
+        assert!((sum_r - 1.0).abs() < 1e-9, "bear weights sum != 1: {sum_r}");
+        assert!(
+            w_bear["BOND"] >= w_bear["TECH"],
+            "GMV bear fallback should favor low-vol BOND over high-vol TECH: {w_bear:?}"
+        );
+    }
 }

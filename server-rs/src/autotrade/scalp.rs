@@ -319,9 +319,13 @@ async fn score_candidates(state: &AppState, bot: &Value, cfg: &ScalpCfg) -> ApiR
         let strength = compute_strength_from_trades(&trades_vec, cand.strength_hint);
         let (spread_pct, bid_ask_ratio) = compute_orderbook_metrics(&book_val);
 
-        // 3. Intraday VWAP check via 5m candles
+        // 3. Intraday VWAP check via 5m candles + Stale Data Guard
+        let mut stale_msg: Option<String> = None;
         let vwap = match market::get_candles(state, uid, market, &cand.symbol, Interval::M5, 60).await {
-            Ok((_, cs)) if !cs.is_empty() => {
+            Ok((prov, cs)) if !cs.is_empty() => {
+                if let Err(msg) = protections::check_candle_freshness(&cs, Interval::M5, Utc::now(), prov == "mock") {
+                    stale_msg = Some(msg);
+                }
                 let times: Vec<i64> = cs.iter().map(|c| c.time).collect();
                 let highs: Vec<f64> = cs.iter().map(|c| c.high).collect();
                 let lows: Vec<f64> = cs.iter().map(|c| c.low).collect();
@@ -338,7 +342,9 @@ async fn score_candidates(state: &AppState, bot: &Value, cfg: &ScalpCfg) -> ApiR
         let above_vwap = vwap.is_none_or(|vw| price >= vw * 0.998);
 
         let mut reject: Option<String> = None;
-        if strength < cfg.min_strength {
+        if let Some(msg) = stale_msg {
+            reject = Some(msg);
+        } else if strength < cfg.min_strength {
             reject = Some(format!("체결강도 부족 ({strength:.0}% < {:.0}%)", cfg.min_strength));
         } else if change_pct < cfg.min_gain_pct {
             reject = Some(format!("상승 탄력 약함 ({change_pct:+.1}% < +{:.1}%)", cfg.min_gain_pct));

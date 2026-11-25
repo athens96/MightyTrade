@@ -10,6 +10,7 @@ import { DOWN, UP, sanitize } from '../../indicators/registry'
 import { investingUrl } from '../../lib/externalLinks'
 import EquityChart from './EquityChart'
 import MetricsTable from './MetricsTable'
+import RiskAuditCard from './RiskAuditCard'
 import TradesTable from './TradesTable'
 
 export const day = (t: number | null) => (t ? new Date(t * 1000).toISOString().slice(0, 10) : '-')
@@ -72,6 +73,7 @@ export default function BacktestView({ result, title }: { result: BacktestResult
         <MetricsTable strategy={result.metrics} benchmark={result.benchmark} market={result.market} interval={result.interval} />
         <EquityChart points={result.equity} market={result.market} />
       </div>
+      <RiskAuditCard audit={result.risk_audit} />
       <ChartDiagnosis
         candles={result.candles}
         market={result.market}

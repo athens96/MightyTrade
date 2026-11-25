@@ -119,6 +119,24 @@ export interface BacktestRequest {
   slippage_pct: number
 }
 
+export interface RiskAuditGate {
+  id: string
+  title: string
+  status: 'pass' | 'warn' | 'fail'
+  value: string
+  detail: string
+}
+
+export interface RiskAudit {
+  verdict: 'PASS' | 'CAUTION' | 'FAIL'
+  verdict_label: string
+  summary: string
+  passed: number
+  warned: number
+  failed: number
+  gates: RiskAuditGate[]
+}
+
 export interface BacktestResult {
   market: Market
   symbol: string
@@ -134,6 +152,7 @@ export interface BacktestResult {
   candles: Candle[]
   chart_indicators: IndicatorConfig[]
   warnings: string[]
+  risk_audit?: RiskAudit
   equity: EquityPoint[]
   metrics: Metrics
   benchmark: Metrics
@@ -319,6 +338,7 @@ export interface PortfolioBacktestResult {
   currency: string
   period: { start: number; end: number }
   warnings: string[]
+  risk_audit?: RiskAudit
   equity: EquityPoint[]
   metrics: Metrics & { rebalances: number }
   benchmark: Metrics
