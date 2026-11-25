@@ -1,6 +1,6 @@
 [package]
 name = "mighty-trade-server"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 description = "MightyTrade async Rust backend server (Axum + Tokio + SQLite)"
 

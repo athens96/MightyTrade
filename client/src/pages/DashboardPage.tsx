@@ -403,6 +403,7 @@ export default function DashboardPage() {
                 title={`${w.name} (${w.symbol}) 차트와 실시간 호가 열기`}
                 onClick={() => setSelected(w)}
               >
+                <WatchCandle q={rowQuote} market={market} />
                 <div className="wl-left">
                   <span className="wl-name">{w.name}</span>
                   <span className="muted small">
@@ -419,7 +420,6 @@ export default function DashboardPage() {
                     </button>
                   </span>
                 </div>
-                <WatchCandle q={rowQuote} market={market} />
                 <WatchPrice q={rowQuote} market={market} />
               </li>
             )
